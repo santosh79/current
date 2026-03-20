@@ -1,34 +1,26 @@
-# Intent
+# What is an Intent?
 
-## Definition
+An Intent is:
 
-An **Intent** is:
+> **A declarative, typed proposal for a state change or observation, produced by an agent, that has not yet been executed.**
 
-> a **declarative, typed proposal for a state change or observation**, produced by an agent, that has **not yet been executed**
-
-It represents what *should* happen — not what *has* happened.
+Let's break that down carefully.
 
 ---
 
-## Core Properties
+## 1. "Declarative"
 
-### 1. Declarative
+It says *what* should happen, not *how* to do it.
 
-An intent describes **what should happen**, not how to do it.
+❌ Not: `"open file, write this string, close file"`
 
-❌ Not:
-
-> “open file, write this string, close file”
-
-✅ But:
-
-> “the file at `auth.ex` should be updated with this patch”
+✅ But: `"the file at auth.ex should be updated with this patch"`
 
 ---
 
-### 2. Typed
+## 2. "Typed"
 
-An intent belongs to a **finite, well-defined set of operations**.
+It belongs to a finite set of allowed operations.
 
 Examples:
 
@@ -38,237 +30,184 @@ Examples:
 - `:claim`
 - `:report`
 
-This forms the system’s **algebra of effects**.
+This is your **algebra of effects**.
 
 ---
 
-### 3. Proposal (Not Authority)
+## 3. "Proposal"
 
-An intent is a **suggestion, not an action**.
+This is the most important word.
 
-It has:
+An intent is a **suggestion, not an action**. It has:
 
 - no authority
 - no side effects
 - no guarantees
 
-It is **advisory**.
+It is advisory.
 
 ---
 
-### 4. State Change or Observation
+## 4. "State change or observation"
 
-Intents fall into two broad categories:
+There are two broad categories:
 
-#### A. Mutations (proposed changes)
+**A. Mutations** (proposed changes)
 
 - write file
 - delete file
 - run command
 
-#### B. Observations (requests or assertions)
+**B. Observations** (requests or claims)
 
 - read file
 - run test
-- declare a claim (e.g. “this invariant holds”)
+- "this invariant holds"
 
 ---
 
-### 5. Not Yet Executed
+## 5. "Not yet executed"
 
-An intent is always **pre-execution**.
+This is the core shift.
 
-**Traditional systems:**
+Without intents:
 
+```
 agent → executes
+```
 
-**Current:**
+With intents:
 
+```
 agent → proposes → runtime decides → maybe executes
+```
 
 ---
 
-## Mental Model
+## The simplest way to think about it
 
 > **An intent is a transaction that has not been committed.**
 
 ---
 
-## Examples
+## Concrete Examples
 
-### File Change
+**Example 1 — File change**
 
-```code
+```elixir
 {:file_patch, "lib/auth.ex", diff}
 ```
 
-Means:
+Means: *"I propose this patch be applied to this file"* — not *"I have applied this patch."*
 
-“I propose this patch be applied to this file”
+**Example 2 — Command**
 
-Not:
-
-“I have applied this patch”
-
-⸻
-Command Execution
-
-```code
+```elixir
 {:run_command, ["mix", "test"]}
 ```
 
-Means:
+Means: *"Tests should be run"* — not *"Tests have been run."*
 
-“Tests should be run”
+**Example 3 — Claim**
 
-Not:
-
-“Tests have been run”
-
-⸻
-
-Claim
-
-```code
+```elixir
 {:claim, "signup rejects invalid email"}
 ```
 
-Means:
+Means: *"I assert this is true"* — not *"This is verified truth."*
 
-“I assert this is true”
+**Example 4 — Read request**
 
-Not:
-
-“This is verified truth”
-
-⸻
-
-Read Request
-
-```code
+```elixir
 {:read_file, "lib/user.ex"}
 ```
 
-Means:
+Means: *"I need this data to proceed."*
 
-“I need this data to proceed”
+---
 
-⸻
+## The Deeper Structure
 
-Structure
+Every intent has:
 
-Every intent consists of:
-	1.	Type
-What kind of effect is being proposed
-	2.	Payload
-The data required to interpret or execute it
-	3.	Context
-The originating step, agent, or task
-	4.	(Optional) Justification
-Why the intent exists
+1. **Type** — what kind of effect
+2. **Payload** — data needed to execute it
+3. **Context** — which step / agent / task it belongs to
+4. **Justification** *(optional)* — why it exists
 
-⸻
+---
 
-Role in the System
+## Where Intents Sit in the System
 
+```
 Agent → Intent → Validation → Interpreter → Effect → Event → State
+```
 
-The intent is:
+Intent is the **boundary between AI and reality**.
 
-the boundary between AI and reality
+---
 
-⸻
+## Why This Abstraction is Powerful
 
-Separation of Concerns
+It lets you separate concerns cleanly:
 
-Intents enable a clean separation of responsibilities:
+| Concern | Layer |
+|---|---|
+| "What should happen?" | Agent |
+| "Is this allowed?" | Validator |
+| "How to do it?" | Interpreter |
+| "What actually happened?" | Event |
+| "What is the system state?" | Reducer |
 
-Concern	Layer
-What should happen?	Agent
-Is this allowed?	Validator
-How is it executed?	Interpreter
-What actually happened?	Event
-What is current state?	Reducer
+---
 
-Why Intents Matter
+## The Key Insight
 
 Without intents:
 
-AI directly mutates the world
+> AI directly mutates the world.
 
 With intents:
 
-AI proposes changes → system governs execution
+> AI describes desired mutations → the system governs them.
 
-This reduces risk and increases:
-	•	auditability
-	•	reproducibility
-	•	control
-	•	debuggability
+---
 
-⸻
+## What an Intent is NOT
 
-What an Intent is NOT
+❌ **Not a command** — commands execute immediately.
 
-Not a Command
+❌ **Not an event** — events represent what *happened*; intents represent what is *proposed*.
 
-Commands execute immediately.
-Intents do not.
+❌ **Not a log** — logs are passive; intents are actionable proposals.
 
-⸻
+---
 
-Not an Event
+## A Better Analogy
 
-Events represent what happened.
-Intents represent what is proposed.
+Think of an intent like a **Git patch before `git apply`**:
 
-⸻
+- it describes a change
+- it can be reviewed
+- it can be rejected
+- it can be modified
+- it can be applied later
 
-Not a Log
+---
 
-Logs are passive records.
-Intents are actionable proposals.
+## Minimal Mental Model
 
-⸻
+> **Intent = Proposed effect, expressed as data, before execution.**
 
-Analogy
+---
 
-An intent is like:
+## The Mistake to Avoid
 
-a Git patch before git apply
+Do not let intents become arbitrary blobs, untyped JSON chaos, or a pass-through for whatever the LLM returns. Keep them **small, finite, and strongly typed**.
 
-It:
-	•	describes a change
-	•	can be reviewed
-	•	can be rejected
-	•	can be modified
-	•	can be applied later
+---
 
-⸻
+## The System in One Sentence
 
-Minimal Model
-
-If you remember one thing:
-
-Intent = Proposed effect, expressed as data, before execution
-
-⸻
-
-Constraints
-
-To keep the system reliable, intents must be:
-	•	small
-	•	finite
-	•	strongly typed
-
-Avoid:
-	•	arbitrary blobs
-	•	untyped JSON
-	•	free-form agent outputs
-
-⸻
-
-System Summary
-
-Agents emit intents. The runtime decides which ones become reality.
+> *"Agents emit intents. The runtime decides which ones become reality."*
 
