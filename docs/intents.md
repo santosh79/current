@@ -56,14 +56,14 @@ Example:
 ```
 
 Minimum required fields:
-	•	type — atom identifying the intent kind
-	•	payload — structured data required for execution
-	•	context — origin metadata
+- `type` — atom identifying the intent kind
+- `payload` — structured data required for execution
+- `context` — origin metadata
 
 Optional fields:
-	•	justification
-	•	claims
-	•	dependencies
+- `justification`
+- `claims`
+- `dependencies`
 
 ---
 
