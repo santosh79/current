@@ -7,7 +7,7 @@ An Intent is:
 
 ---
 
-## Invariants
+## Invariants (Must Always Hold)
 
 The following must always hold for any valid intent:
 
@@ -31,6 +31,39 @@ The following must always hold for any valid intent:
 
 6. **Pre-Execution Only**
    - An intent must never claim that an effect has already occurred.
+
+---
+
+## Canonical Representation
+
+An intent should be representable as a structured value.
+
+Example:
+
+```elixir
+%Intent{
+  type: :file_patch,
+  payload: %{
+    path: "lib/auth.ex",
+    diff: "...unified diff..."
+  },
+  context: %{
+    step_id: "implement_auth",
+    task_id: "task_123"
+  },
+  justification: "Add email validation"
+}
+```
+
+Minimum required fields:
+	•	type — atom identifying the intent kind
+	•	payload — structured data required for execution
+	•	context — origin metadata
+
+Optional fields:
+	•	justification
+	•	claims
+	•	dependencies
 
 ---
 
