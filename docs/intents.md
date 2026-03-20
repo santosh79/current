@@ -100,7 +100,7 @@ agent → proposes → runtime decides → maybe executes
 
 ```code
 {:file_patch, "lib/auth.ex", diff}
-```code
+```
 
 Means:
 
@@ -115,7 +115,7 @@ Command Execution
 
 ```code
 {:run_command, ["mix", "test"]}
-```code
+```
 
 Means:
 
@@ -131,7 +131,7 @@ Claim
 
 ```code
 {:claim, "signup rejects invalid email"}
-```code
+```
 
 Means:
 
@@ -147,7 +147,7 @@ Read Request
 
 ```code
 {:read_file, "lib/user.ex"}
-```code
+```
 
 Means:
 
