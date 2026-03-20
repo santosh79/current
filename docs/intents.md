@@ -1,8 +1,38 @@
 # What is an Intent?
 
+## Definition
 An Intent is:
 
 > **A declarative, typed proposal for a state change or observation, produced by an agent, that has not yet been executed.**
+
+---
+
+## Invariants
+
+The following must always hold for any valid intent:
+
+1. **No Side Effects**
+   - An intent must not directly cause any mutation.
+   - It is purely descriptive.
+
+2. **Serializable**
+   - An intent must be representable as data (e.g. JSON, Erlang term).
+   - It must not contain executable code.
+
+3. **Deterministic Interpretation**
+   - Given the same intent and environment, the interpreter should behave deterministically.
+
+4. **Finite Type Set**
+   - All intents must belong to a predefined, closed set of types.
+   - Arbitrary or free-form intent types are not allowed.
+
+5. **Context-Bound**
+   - Every intent must be attributable to a specific step and task.
+
+6. **Pre-Execution Only**
+   - An intent must never claim that an effect has already occurred.
+
+---
 
 Let's break that down carefully.
 
@@ -44,7 +74,7 @@ An intent is a **suggestion, not an action**. It has:
 - no side effects
 - no guarantees
 
-It is advisory.
+It is advisory and must be explicitly accepted by the runtime before any effect occurs.
 
 ---
 
