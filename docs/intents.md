@@ -201,12 +201,6 @@ Think of an intent like a **Git patch before `git apply`**:
 
 ---
 
-## The Mistake to Avoid
-
-Do not let intents become arbitrary blobs, untyped JSON chaos, or a pass-through for whatever the LLM returns. Keep them **small, finite, and strongly typed**.
-
----
-
 ## The System in One Sentence
 
 > *"Agents emit intents. The runtime decides which ones become reality."*
