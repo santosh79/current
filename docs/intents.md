@@ -93,7 +93,7 @@ Examples:
 - `:claim`
 - `:report`
 
-This is your **algebra of effects**.
+This is produces an **algebra of effects**.
 
 ---
 
