@@ -117,15 +117,19 @@ There are two broad categories:
 
 **A. Mutations** (proposed changes)
 
+```
 - write file
 - delete file
 - run command
+```
 
 **B. Observations** (requests or claims)
 
+```
 - read file
 - run test
 - "this invariant holds"
+```
 
 ---
 
