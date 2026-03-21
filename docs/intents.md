@@ -34,7 +34,7 @@ The following must always hold for any valid intent:
 
 ---
 
-## Canonical Representation
+## Canonical Representation (System Form)
 
 An intent should be representable as a structured value.
 
