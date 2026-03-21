@@ -71,7 +71,7 @@ Let's break that down carefully.
 
 ---
 
-## 1. "Declarative"
+## 1. Declarative
 
 It says *what* should happen, not *how* to do it.
 
@@ -81,7 +81,7 @@ It says *what* should happen, not *how* to do it.
 
 ---
 
-## 2. "Typed"
+## 2. Typed
 
 It belongs to a finite set of allowed operations.
 
@@ -97,7 +97,7 @@ This is produces an **algebra of effects**.
 
 ---
 
-## 3. "Proposal"
+## 3. Proposal
 
 This is the most important word.
 
@@ -111,7 +111,7 @@ It is advisory and must be explicitly accepted by the runtime before any effect 
 
 ---
 
-## 4. "State change or observation"
+## 4. State change or observation
 
 There are two broad categories:
 
@@ -133,7 +133,7 @@ There are two broad categories:
 
 ---
 
-## 5. "Not yet executed"
+## 5. Not yet executed
 
 This is the core shift.
 
