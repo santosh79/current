@@ -41,7 +41,7 @@ An intent should be representable as a structured value.
 Example:
 
 ```elixir
-%Intent{
+%Current.Intent{
   type: :file_patch,
   payload: %{
     path: "lib/auth.ex",
@@ -54,17 +54,127 @@ Example:
   justification: "Add email validation"
 }
 ```
+---
+
+### Struct Definition
+```elixir
+defmodule Current.Intent do
+  @enforce_keys [:type, :payload, :context]
+  defstruct [
+    :type,
+    :payload,
+    :context,
+    :justification,
+    :claims,
+    :dependencies
+  ]
+
+  @type type ::
+          :file_patch
+          | :write_file
+          | :delete_file
+          | :run_command
+          | :read_file
+          | :glob
+          | :grep
+          | :claim
+          | :report
+
+  @type t :: %__MODULE__{
+          type: type(),
+          payload: map(),
+          context: %{
+            step_id: String.t(),
+            task_id: String.t()
+          },
+          justification: String.t() | nil,
+          claims: [String.t()] | nil,
+          dependencies: [String.t()] | nil
+        }
+end
+```
+
+---
+
+### Validation Rules
+Every intent must pass validation before it can be accepted by the runtime.
+
+```elixir
+defmodule Current.Intent.Validator do
+  alias Current.Intent
+
+  @valid_types [
+    :file_patch,
+    :write_file,
+    :delete_file,
+    :run_command,
+    :read_file,
+    :glob,
+    :grep,
+    :claim,
+    :report
+  ]
+
+  def validate(%Intent{} = intent) do
+    with :ok <- validate_type(intent.type),
+         :ok <- validate_payload(intent),
+         :ok <- validate_context(intent.context) do
+      :ok
+    end
+  end
+
+  defp validate_type(type) when type in @valid_types, do: :ok
+  defp validate_type(_), do: {:error, :invalid_type}
+
+  defp validate_context(%{step_id: s, task_id: t})
+       when is_binary(s) and is_binary(t),
+       do: :ok
+
+  defp validate_context(_), do: {:error, :invalid_context}
+
+  defp validate_payload(%Intent{type: :file_patch, payload: %{path: p, diff: d}})
+       when is_binary(p) and is_binary(d),
+       do: :ok
+
+  defp validate_payload(%Intent{type: :run_command, payload: %{cmd: cmd}})
+       when is_list(cmd),
+       do: :ok
+
+  defp validate_payload(%Intent{type: :read_file, payload: %{path: p}})
+       when is_binary(p),
+       do: :ok
+
+  defp validate_payload(%Intent{type: :claim, payload: %{value: v}})
+       when is_binary(v),
+       do: :ok
+
+  defp validate_payload(%Intent{type: :report, payload: %{data: _}}),
+       do: :ok
+
+  # fallback
+  defp validate_payload(_), do: {:error, :invalid_payload}
+end
+```
+Validation enforces:
+- type must be from a closed set
+- payload must match the type
+- context must be present and well-formed
+
+If validation fails, the intent must be rejected and must not proceed to interpretation
+
+---
 
 Minimum required fields:
-- `type` — atom identifying the intent kind
-- `payload` — structured data required for execution
-- `context` — origin metadata
+- type — atom identifying the intent kind
+- payload — structured data required for execution
+- context — origin metadata
+
 
 Optional fields:
-- `justification`
-- `claims`
-- `dependencies`
-
+- justification
+- claims
+- dependencies
+        
 ---
 
 Let's break that down carefully.
