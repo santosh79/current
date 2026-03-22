@@ -8,48 +8,33 @@ An **Event** is:
 
 If an intent is a proposal, an event is a fact.
 
-An event does not describe what *should* happen.  
-It records what *did* happen.
+An event does not describe what *should* happen. It records what *did* happen.
 
 ---
 
-## Invariants (Must Always Hold)
+## Invariants
 
 The following must always hold for any valid event:
 
-1. **Immutable**
-   - An event must never be modified after it is recorded.
-   - Corrections must be expressed as new events, not edits to old ones.
+1. **Immutable** — An event must never be modified after it is recorded. Corrections must be expressed as new events, not edits to old ones.
 
-2. **Serializable**
-   - An event must be representable as data (e.g. JSON, Erlang term).
-   - It must not contain executable code.
+2. **Serializable** — An event must be representable as data (e.g. JSON, Erlang term). It must not contain executable code.
 
-3. **Typed**
-   - Every event must belong to a predefined, closed set of event types.
-   - Arbitrary or free-form event types are not allowed.
+3. **Typed** — Every event must belong to a predefined, closed set of event types. Arbitrary or free-form event types are not allowed.
 
-4. **Past-Tense Only**
-   - An event must describe something that has already occurred.
-   - It must never describe a proposed or hypothetical action.
+4. **Past-tense only** — An event must describe something that has already occurred. It must never describe a proposed or hypothetical action.
 
-5. **Context-Bound**
-   - Every event must be attributable to a specific task, step, or runtime action.
+5. **Context-bound** — Every event must be attributable to a specific task, step, or runtime action.
 
-6. **Append-Only**
-   - Events are only added to the log.
-   - Existing events must never be deleted or rewritten.
+6. **Append-only** — Events are only added to the log. Existing events must never be deleted or rewritten.
 
-7. **Replayable**
-   - Events must contain enough information to support deterministic state reconstruction.
+7. **Replayable** — Events must contain enough information to support deterministic state reconstruction.
 
 ---
 
-## Canonical Representation (System Form)
+## Canonical Representation
 
 An event should be representable as a structured value.
-
-Example:
 
 ```elixir
 %Current.Event{
@@ -66,8 +51,6 @@ Example:
   timestamp: ~U[2026-03-21 15:00:00Z]
 }
 ```
-
----
 
 ### Struct Definition
 
@@ -107,9 +90,6 @@ defmodule Current.Event do
         }
 end
 ```
-
----
-
 
 ### Validation Rules
 
@@ -208,6 +188,7 @@ end
 ```
 
 Validation enforces:
+
 - type must be from a closed set
 - data must match the event type
 - context must be present and well-formed
@@ -215,26 +196,20 @@ Validation enforces:
 
 If validation fails, the event must not be appended to the event log.
 
----
+**Minimum required fields:**
 
-Minimum required fields:
-- type — atom identifying the intent kind
-- payload — structured data required for execution
-- context — origin metadata
-- timestamp — when the event occurred
-
+- `type` — atom identifying the event kind
+- `data` — structured payload for the event
+- `context` — origin metadata
+- `timestamp` — when the event occurred
 
 ---
 
-Let’s break that down carefully.
+## Breaking It Down
 
----
+### 1. Immutable
 
-## 1. Immutable
-
-An event is a permanent fact in the system.
-
-Once recorded, it must not change.
+An event is a permanent fact in the system. Once recorded, it must not change.
 
 If the runtime makes a mistake, the fix is not:
 
@@ -246,9 +221,7 @@ The fix is:
 
 This is the foundation of auditability and replay.
 
----
-
-## 2. Typed
+### 2. Typed
 
 An event belongs to a finite set of allowed event types.
 
@@ -260,61 +233,33 @@ Examples:
 - `:effect_applied`
 - `:step_completed`
 
-This forms the runtime’s **algebra of facts**.
+This forms the runtime's **algebra of facts**.
 
----
+### 3. Record of the Past
 
-## 3. Record of the Past
-This is the most important distinction.
-
-An event is not a request or a plan.
-
-It is a record that something has already happened.
+This is the most important distinction. An event is not a request or a plan — it is a record that something has already happened.
 
 ❌ Not:
+
 > "run tests"
 
 ✅ But:
+
 > "tests were run and produced this result"
 
----
+### 4. Append-Only
 
-## 4. Append-Only
-Events are never updated in place.
+Events are never updated in place. The log grows by appending new events. This gives the system history, traceability, replayability, and time-travel inspection.
 
-The log grows by appending new events.
+### 5. Context-Bound
 
-This gives the system:
-- history
-- traceability
-- replayability
-- time-travel inspection
+Every event must belong to a specific runtime context. At minimum, that means a `task_id` and a `run_id` — and often a `step_id`. Without context, an event is not useful for reconstruction.
 
----
+### 6. Replayable
 
-## 5. Context-Bound
-Every event must belong to a specific runtime context.
+Events are not just audit records. They are the raw material from which state is derived. The runtime must be able to do this:
 
-At minimum, that means:
-- a task_id
-- a run_id
-
-And often:
-- a step_id
-
-Without context, an event is not useful for reconstruction.
-
----
-
-## 6. Replayable
-
-Events are not just audit records.
-
-They are the raw material from which state is derived.
-
-That means the runtime should be able to do this:
-
-```text
+```
 initial_state + event_log -> current_state
 ```
 
@@ -322,7 +267,7 @@ If replay is impossible, the event model is incomplete.
 
 ---
 
-## The simplest way to think about it
+## The Simplest Way to Think About It
 
 > **An event is a committed fact in the system log.**
 
@@ -330,7 +275,7 @@ If replay is impossible, the event model is incomplete.
 
 ## Concrete Examples
 
-### Example 1 — Task submitted
+**Example 1 — Task submitted**
 
 ```elixir
 %Current.Event{
@@ -341,12 +286,11 @@ If replay is impossible, the event model is incomplete.
 }
 ```
 
-Means:
-> "The runtime received this task."
+Means: *"The runtime received this task."*
 
 ---
 
-### Example 2 — Intent proposed
+**Example 2 — Intent proposed**
 
 ```elixir
 %Current.Event{
@@ -357,12 +301,11 @@ Means:
 }
 ```
 
-Means:
-> "This step produced these intents."
+Means: *"This step produced these intents."*
 
 ---
 
-### Example 3 — Intent rejected
+**Example 3 — Intent rejected**
 
 ```elixir
 %Current.Event{
@@ -373,12 +316,11 @@ Means:
 }
 ```
 
-Means:
-> "This intent was not accepted by the runtime."
+Means: *"This intent was not accepted by the runtime."*
 
 ---
 
-### Example 4 — Effect applied
+**Example 4 — Effect applied**
 
 ```elixir
 %Current.Event{
@@ -389,8 +331,7 @@ Means:
 }
 ```
 
-Means:
-> "The interpreter applied the approved intent."
+Means: *"The interpreter applied the approved intent."*
 
 ---
 
@@ -407,14 +348,11 @@ Every event has:
 
 ## Where Events Sit in the System
 
-```text
+```
 Intent → Validation → Interpreter → Effect → Event → State
 ```
 
-Events sit **after reality has moved.**
-
-An intent is a proposal.
-An event is the durable record of what followed.
+Events sit **after reality has moved**. An intent is a proposal; an event is the durable record of what followed.
 
 ---
 
@@ -433,6 +371,7 @@ It lets you separate concerns cleanly:
 ---
 
 ## The Key Insight
+
 Without events:
 
 > the system only knows what it is doing right now
@@ -441,32 +380,23 @@ With events:
 
 > the system knows what happened, in what order, and can reconstruct state from first principles
 
-This is what makes:
-- replay possible
-- debugging tractable
-- state derivation deterministic
-- audits meaningful
+This is what makes replay possible, debugging tractable, state derivation deterministic, and audits meaningful.
 
 ---
 
 ## What an Event is NOT
 
-❌ Not an intent — intents describe what is proposed; events describe what occurred.
+❌ **Not an intent** — intents describe what is proposed; events describe what occurred.
 
-❌ Not mutable state — state is derived from events; it is not the same thing as the event log.
+❌ **Not mutable state** — state is derived from events; it is not the same thing as the event log.
 
-❌ Not a log line — log lines are for humans; events are structured runtime facts.
+❌ **Not a log line** — log lines are for humans; events are structured runtime facts.
 
 ---
 
 ## A Better Analogy
-Think of an event like a **committed database transaction record.**
 
-It:
-- represents something that actually happened
-- becomes part of the permanent history
-- can be replayed to reconstruct state
-- cannot be silently edited away
+Think of an event like a **committed database transaction record**. It represents something that actually happened, becomes part of the permanent history, can be replayed to reconstruct state, and cannot be silently edited away.
 
 ---
 
@@ -477,19 +407,16 @@ It:
 ---
 
 ## Relationship to Intents
+
 The distinction is fundamental.
 
-### Intent
+**Intent** — a proposal before execution.
 
-A proposal before execution.
-
-### Event
-
-A fact after execution or runtime decision.
+**Event** — a fact after execution or runtime decision.
 
 Example flow:
 
-```text
+```
 Agent emits intent
 → Runtime validates intent
 → Interpreter applies effect
@@ -498,6 +425,7 @@ Agent emits intent
 ```
 
 The runtime boundary is crossed here:
+
 - **Intents** are how AI speaks to the system
 - **Events** are how the system remembers what happened
 
@@ -513,4 +441,4 @@ If this is not true, the event model is incomplete.
 
 ## The System in One Sentence
 
-> Intents propose change. Events record fact. State is derived from the event log.
+> *Intents propose change. Events record fact. State is derived from the event log.*
