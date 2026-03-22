@@ -115,6 +115,7 @@ end
 
 Every event must pass validation before it can be appended to the event log.
 
+```elixir
 defmodule Current.Event.Validator do
   alias Current.Event
 
