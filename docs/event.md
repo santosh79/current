@@ -238,14 +238,10 @@ Once recorded, it must not change.
 
 If the runtime makes a mistake, the fix is not:
 
-```
-"edit the old event"
-```
+> "edit the old event"
 
 The fix is:
 
-```
-"append a new event that corrects or supersedes it"
-```
+> "append a new event that corrects or supersedes it"
 
 This is the foundation of auditability and replay.
