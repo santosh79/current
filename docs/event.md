@@ -433,7 +433,7 @@ The runtime boundary is crossed here:
 
 ## Design Constraint
 
-> The current state of the runtime must be derivable entirely from the event log.
+> The current state of the runtime must be derivable from the event log and any immutable artifacts it references.
 
 If this is not true, the event model is incomplete.
 
