@@ -404,3 +404,113 @@ Every event has:
 4. **Timestamp** — when the fact occurred
 
 ---
+
+## Where Events Sit in the System
+
+```text
+Intent → Validation → Interpreter → Effect → Event → State
+```
+
+Events sit **after reality has moved.**
+
+An intent is a proposal.
+An event is the durable record of what followed.
+
+---
+
+## Why This Abstraction is Powerful
+
+It lets you separate concerns cleanly:
+
+| Concern | Layer |
+|---|---|
+| "What is proposed?" | Agent |
+| "What is allowed?" | Validator |
+| "What is executed?" | Interpreter |
+| "What happened?" | Event |
+| "What is currently true?" | Reducer/Projection |
+
+---
+
+## The Key Insight
+Without events:
+
+> the system only knows what it is doing right now
+
+With events:
+
+> the system knows what happened, in what order, and can reconstruct state from first principles
+
+This is what makes:
+- replay possible
+- debugging tractable
+- state derivation deterministic
+- audits meaningful
+
+---
+
+## What an Event is NOT
+
+❌ Not an intent — intents describe what is proposed; events describe what occurred.
+
+❌ Not mutable state — state is derived from events; it is not the same thing as the event log.
+
+❌ Not a log line — log lines are for humans; events are structured runtime facts.
+
+---
+
+## A Better Analogy
+Think of an event like a **committed database transaction record.**
+
+It:
+- represents something that actually happened
+- becomes part of the permanent history
+- can be replayed to reconstruct state
+- cannot be silently edited away
+
+---
+
+## Minimal Mental Model
+
+> **Event = Fact, expressed as data, after execution or decision.**
+
+---
+
+## Relationship to Intents
+The distinction is fundamental.
+
+### Intent
+
+A proposal before execution.
+
+### Event
+
+A fact after execution or runtime decision.
+
+Example flow:
+
+```text
+Agent emits intent
+→ Runtime validates intent
+→ Interpreter applies effect
+→ Runtime records event
+→ Reducer derives new state
+```
+
+The runtime boundary is crossed here:
+- **Intents** are how AI speaks to the system
+- **Events** are how the system remembers what happened
+
+---
+
+## Design Constraint
+
+> The current state of the runtime must be derivable entirely from the event log.
+
+If this is not true, the event model is incomplete.
+
+---
+
+## The System in One Sentence
+
+> Intents propose change. Events record fact. State is derived from the event log.
