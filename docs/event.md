@@ -314,7 +314,7 @@ They are the raw material from which state is derived.
 
 That means the runtime should be able to do this:
 
-```
+```text
 initial_state + event_log -> current_state
 ```
 
