@@ -1,44 +1,34 @@
 # What is an Intent?
 
 ## Definition
+
 An Intent is:
 
 > **A declarative, typed proposal for a state change or observation, produced by an agent, that has not yet been executed.**
 
 ---
 
-## Invariants (Must Always Hold)
+## Invariants
 
 The following must always hold for any valid intent:
 
-1. **No Side Effects**
-   - An intent must not directly cause any mutation.
-   - It is purely descriptive.
+1. **No side effects** — An intent must not directly cause any mutation. It is purely descriptive.
 
-2. **Serializable**
-   - An intent must be representable as data (e.g. JSON, Erlang term).
-   - It must not contain executable code.
+2. **Serializable** — An intent must be representable as data (e.g. JSON, Erlang term). It must not contain executable code.
 
-3. **Deterministic Interpretation**
-   - Given the same intent and environment, the interpreter should behave deterministically.
+3. **Deterministic interpretation** — Given the same intent and environment, the interpreter should behave deterministically.
 
-4. **Finite Type Set**
-   - All intents must belong to a predefined, closed set of types.
-   - Arbitrary or free-form intent types are not allowed.
+4. **Finite type set** — All intents must belong to a predefined, closed set of types. Arbitrary or free-form intent types are not allowed.
 
-5. **Context-Bound**
-   - Every intent must be attributable to a specific step and task.
+5. **Context-bound** — Every intent must be attributable to a specific step and task.
 
-6. **Pre-Execution Only**
-   - An intent must never claim that an effect has already occurred.
+6. **Pre-execution only** — An intent must never claim that an effect has already occurred.
 
 ---
 
-## Canonical Representation (System Form)
+## Canonical Representation
 
 An intent should be representable as a structured value.
-
-Example:
 
 ```elixir
 %Current.Intent{
@@ -54,9 +44,9 @@ Example:
   justification: "Add email validation"
 }
 ```
----
 
 ### Struct Definition
+
 ```elixir
 defmodule Current.Intent do
   @enforce_keys [:type, :payload, :context]
@@ -94,9 +84,8 @@ defmodule Current.Intent do
 end
 ```
 
----
-
 ### Validation Rules
+
 Every intent must pass validation before it can be accepted by the runtime.
 
 ```elixir
@@ -151,37 +140,31 @@ defmodule Current.Intent.Validator do
   defp validate_payload(%Intent{type: :report, payload: %{data: _}}),
        do: :ok
 
-  # fallback
   defp validate_payload(_), do: {:error, :invalid_payload}
 end
 ```
+
 Validation enforces:
+
 - type must be from a closed set
 - payload must match the type
 - context must be present and well-formed
 
-If validation fails, the intent must be rejected and must not proceed to interpretation
+If validation fails, the intent must be rejected and must not proceed to interpretation.
+
+**Minimum required fields:**
+
+- `type` — atom identifying the intent kind
+- `payload` — structured data required for execution
+- `context` — origin metadata
+
+**Optional fields:** `justification`, `claims`, `dependencies`
 
 ---
 
-Minimum required fields:
-- type — atom identifying the intent kind
-- payload — structured data required for execution
-- context — origin metadata
+## Breaking It Down
 
-
-Optional fields:
-- justification
-- claims
-- dependencies
-        
----
-
-Let's break that down carefully.
-
----
-
-## 1. Declarative
+### 1. Declarative
 
 It says *what* should happen, not *how* to do it.
 
@@ -189,9 +172,7 @@ It says *what* should happen, not *how* to do it.
 
 ✅ But: `"the file at auth.ex should be updated with this patch"`
 
----
-
-## 2. Typed
+### 2. Typed
 
 It belongs to a finite set of allowed operations.
 
@@ -203,11 +184,9 @@ Examples:
 - `:claim`
 - `:report`
 
-This is produces an **algebra of effects**.
+This produces an **algebra of effects**.
 
----
-
-## 3. Proposal
+### 3. Proposal
 
 This is the most important word.
 
@@ -219,31 +198,23 @@ An intent is a **suggestion, not an action**. It has:
 
 It is advisory and must be explicitly accepted by the runtime before any effect occurs.
 
----
-
-## 4. State change or observation
+### 4. State Change or Observation
 
 There are two broad categories:
 
 **A. Mutations** (proposed changes)
 
-```
 - write file
 - delete file
 - run command
-```
 
 **B. Observations** (requests or claims)
 
-```
 - read file
 - run test
 - "this invariant holds"
-```
 
----
-
-## 5. Not yet executed
+### 5. Not Yet Executed
 
 This is the core shift.
 
@@ -261,7 +232,7 @@ agent → proposes → runtime decides → maybe executes
 
 ---
 
-## The simplest way to think about it
+## The Simplest Way to Think About It
 
 > **An intent is a transaction that has not been committed.**
 
@@ -277,6 +248,8 @@ agent → proposes → runtime decides → maybe executes
 
 Means: *"I propose this patch be applied to this file"* — not *"I have applied this patch."*
 
+---
+
 **Example 2 — Command**
 
 ```elixir
@@ -285,6 +258,8 @@ Means: *"I propose this patch be applied to this file"* — not *"I have applied
 
 Means: *"Tests should be run"* — not *"Tests have been run."*
 
+---
+
 **Example 3 — Claim**
 
 ```elixir
@@ -292,6 +267,8 @@ Means: *"Tests should be run"* — not *"Tests have been run."*
 ```
 
 Means: *"I assert this is true"* — not *"This is verified truth."*
+
+---
 
 **Example 4 — Read request**
 
