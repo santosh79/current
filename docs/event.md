@@ -245,3 +245,162 @@ The fix is:
 > "append a new event that corrects or supersedes it"
 
 This is the foundation of auditability and replay.
+
+---
+
+## 2. Typed
+
+An event belongs to a finite set of allowed event types.
+
+Examples:
+
+- `:task_submitted`
+- `:intent_proposed`
+- `:intent_validated`
+- `:effect_applied`
+- `:step_completed`
+
+This forms the runtime’s **algebra of facts**.
+
+---
+
+## 3. Record of the Past
+This is the most important distinction.
+
+An event is not a request or a plan.
+
+It is a record that something has already happened.
+
+❌ Not:
+> "run tests"
+
+✅ But:
+> "tests were run and produced this result"
+
+---
+
+## 4. Append-Only
+Events are never updated in place.
+
+The log grows by appending new events.
+
+This gives the system:
+- history
+- traceability
+- replayability
+- time-travel inspection
+
+---
+
+## 5. Context-Bound
+Every event must belong to a specific runtime context.
+
+At minimum, that means:
+- a task_id
+- a run_id
+
+And often:
+- a step_id
+
+Without context, an event is not useful for reconstruction.
+
+---
+
+## 6. Replayable
+
+Events are not just audit records.
+
+They are the raw material from which state is derived.
+
+That means the runtime should be able to do this:
+
+```
+initial_state + event_log -> current_state
+```
+
+If replay is impossible, the event model is incomplete.
+
+---
+
+## The simplest way to think about it
+
+> **An event is a committed fact in the system log.**
+
+---
+
+## Concrete Examples
+
+### Example 1 — Task submitted
+
+```elixir
+%Current.Event{
+  type: :task_submitted,
+  data: %{task: "add email validation to signup flow"},
+  context: %{task_id: "task_123", step_id: nil, run_id: "run_456"},
+  timestamp: ~U[2026-03-21 15:00:00Z]
+}
+```
+
+Means:
+> "The runtime received this task."
+
+---
+
+### Example 2 — Intent proposed
+
+```elixir
+%Current.Event{
+  type: :intent_proposed,
+  data: %{intent_ids: ["intent_1", "intent_2"]},
+  context: %{task_id: "task_123", step_id: "implement", run_id: "run_456"},
+  timestamp: ~U[2026-03-21 15:00:05Z]
+}
+```
+
+Means:
+> "This step produced these intents."
+
+---
+
+### Example 3 — Intent rejected
+
+```elixir
+%Current.Event{
+  type: :intent_rejected,
+  data: %{intent_id: "intent_2", reason: "invalid payload"},
+  context: %{task_id: "task_123", step_id: "implement", run_id: "run_456"},
+  timestamp: ~U[2026-03-21 15:00:06Z]
+}
+```
+
+Means:
+> "This intent was not accepted by the runtime."
+
+---
+
+### Example 4 — Effect applied
+
+```elixir
+%Current.Event{
+  type: :effect_applied,
+  data: %{intent_id: "intent_1", result: %{status: :ok}},
+  context: %{task_id: "task_123", step_id: "implement", run_id: "run_456"},
+  timestamp: ~U[2026-03-21 15:00:07Z]
+}
+```
+
+Means:
+> "The interpreter applied the approved intent."
+
+---
+
+## The Deeper Structure
+
+Every event has:
+
+1. **Type** — what kind of fact is being recorded
+2. **Data** — the structured payload for that fact
+3. **Context** — where in the runtime the fact occurred
+4. **Timestamp** — when the fact occurred
+
+---
