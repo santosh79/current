@@ -71,6 +71,7 @@ Example:
 
 ### Struct Definition
 
+```elixir
 defmodule Current.Event do
   @enforce_keys [:type, :data, :context, :timestamp]
   defstruct [
