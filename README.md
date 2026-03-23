@@ -1,40 +1,23 @@
 # Current
 
-**A pure-functional orchestration runtime for AI workflows.**
+**A runtime for AI workflows where agents propose changes instead of performing them directly.**
 
-Current is an open-source runtime for building AI systems that propose changes instead of performing them directly.
+Agents do not write files, run shell commands, or mutate the world on their own. They describe what should happen. The system decides what actually happens.
 
-Agents do not write files, run shell commands, or mutate the world on their own. They return **structured intents** — patches, command requests, claims, and handoff artifacts — which are validated, recorded, and optionally interpreted by a trusted runtime.
+Most systems let the agent edit files, run commands, and mutate the world directly. This is convenient. It also puts side effects inside a probabilistic system.
 
-Think of it as:
+Current separates the two.
 
 > **AI workflows as pure state transitions, with effects at the edge.**
 
 ---
 
-## Why Current?
-
-Most agent orchestration systems give LLMs tool access and then try to contain the blast radius with prompts, permissions, and sandboxes.
-
-That helps, but it still puts side effects too close to a probabilistic core.
-
-Current takes a different approach:
-
-- **Agents propose**
-- **Runtime validates**
-- **Interpreter applies**
-- **Event log remembers everything**
-
-The result is a system that is easier to audit, replay, test, simulate, compose, and trust.
-
----
-
-## Core Idea
+## The Idea
 
 Instead of this:
 
 ```
-Agent -> shell/file/git/network -> changed world
+Agent -> shell / files / network -> changed world
 ```
 
 Current works like this:
@@ -42,27 +25,46 @@ Current works like this:
 ```
 Agent -> Intent
 Intent -> Validation
-Validation -> Runtime decision
-Runtime -> Optional effect interpreter
-Interpreter -> Applied result
-Applied result -> Event log -> New workflow state
+Validation -> Decision
+Decision -> Optional effect
+Effect -> Recorded event -> New state
 ```
 
-Agents describe what should happen. The runtime decides what actually happens.
+The agent describes. The system decides.
 
 ---
 
-## What is an Intent?
+## Why This Exists
 
-An intent is a typed proposal emitted by an agent step.
+If you let an agent act directly, you have to trust it. If you make it propose, you can reason about it.
 
-Examples:
+You can:
 
-- a patch to apply to a file
-- a request to run tests
-- a claim that must be verified
-- a structured handoff to another step
-- a request to fetch or inspect project state
+- validate before execution
+- simulate without side effects
+- require approval
+- replay everything
+- inspect every decision
+
+The model is still non-deterministic. The system around it does not have to be.
+
+---
+
+## The Shape of the System
+
+There are three primitives:
+
+- **Intents** — what is proposed
+- **Artifacts** — what was produced
+- **Events** — what happened
+
+Everything else is derived. State is not stored — it is computed from the event log and the artifacts it references.
+
+---
+
+## Intents
+
+An intent is a typed proposal. It says what should happen, not how to do it. A patch. A command. A claim. A request.
 
 ```json
 {
@@ -75,18 +77,17 @@ Examples:
     },
     {
       "type": "run_command",
-      "command": ["mix", "test", "test/auth_test.exs"],
-      "reason": "verify authentication behavior"
+      "command": ["mix", "test", "test/auth_test.exs"]
     }
   ],
   "claims": [
-    "adds email validation to signup flow",
-    "does not change existing login semantics"
+    "adds email validation",
+    "does not change login behavior"
   ]
 }
 ```
 
-This data can be validated, simulated, reviewed, or applied.
+This can be validated, rejected, simulated, or applied. Nothing happens until the system allows it.
 
 ---
 
@@ -94,25 +95,15 @@ This data can be validated, simulated, reviewed, or applied.
 
 **1. Pure core, impure edge**
 
-Workflow logic should be modeled as pure state transitions over immutable data. Effects belong in a small, trusted interpreter layer.
+Workflow logic is modeled as pure state transitions over immutable data. Effects belong in a small, trusted interpreter layer.
 
 **2. Intents over actions**
 
-Agents should describe intended mutations, not execute them directly.
+Agents describe intended mutations. They do not execute them.
 
 **3. Event sourcing by default**
 
-Everything important becomes an event:
-
-- task submitted
-- step scheduled
-- intent proposed
-- validation passed
-- effect applied
-- effect rejected
-- pipeline completed
-
-The current state of the system is derived from the event log.
+Everything important becomes an event: task submitted, step scheduled, intent proposed, validation passed, effect applied, effect rejected, pipeline completed. State is derived from the event log.
 
 **4. Deterministic orchestration around non-deterministic models**
 
@@ -120,7 +111,7 @@ LLMs remain probabilistic. The scheduler, validator, interpreter, and state redu
 
 **5. Simulation before mutation**
 
-Every pipeline should support: plan, dry run, sandbox apply, and real apply.
+Every pipeline supports: plan, dry run, sandbox apply, and real apply.
 
 **6. Minimal trusted surface**
 
@@ -142,53 +133,28 @@ The most security-sensitive part of the system should be small, explicit, and te
 
 ---
 
-## Example Workflow
+## A Workflow
 
-A typical feature pipeline might look like this:
+A workflow is a graph of steps. Each step produces data, not effects.
 
 ```
 navigate -> specify -> implement -> verify -> summarize
 ```
 
-But each step produces data, not direct side effects.
-
-**Navigate** returns:
-- affected files
-- project map
-- risk notes
-
-**Specify** returns:
-- acceptance criteria
-- invariants
-- expected contracts
-
-**Implement** returns:
-- proposed patches
-- requested test runs
-- claims about behavior
-
-**Verify** returns:
-- verdict
-- failed invariants
-- approval or rejection intents
-
-**Summarize** returns:
-- final report
-- changelog
-- artifact manifest
+One step proposes a patch. Another asks to run tests. Another decides whether the result is acceptable. The runtime coordinates this. Effects are optional. Control is explicit.
 
 ---
 
 ## Execution Modes
 
-Current supports multiple modes for the same workflow:
+The same workflow can run in different modes. The workflow does not change — only the interpreter does.
 
 | Mode | Behavior |
 |---|---|
-| `plan` | Only produce intents. No effects are executed. |
-| `simulate` | Apply intents in an isolated temporary workspace. |
-| `review` | Require human or policy approval before selected effects. |
-| `apply` | Allow trusted interpreters to apply approved effects. |
+| `plan` | Produce intents only. No effects are executed. |
+| `simulate` | Apply intents in a temporary workspace. |
+| `review` | Require approval before effects. |
+| `apply` | Perform real effects through trusted interpreters. |
 
 ---
 
@@ -214,7 +180,7 @@ Current supports multiple modes for the same workflow:
   ],
   "claims": [
     "invalid emails are rejected",
-    "existing successful signup flow remains unchanged"
+    "existing behavior is unchanged"
   ]
 }
 ```
@@ -223,12 +189,14 @@ Current supports multiple modes for the same workflow:
 
 1. Validate the schema
 2. Check policy
-3. Optionally apply patch in sandbox
-4. Run requested test command via interpreter
+3. Optionally apply the patch in a sandbox
+4. Run tests through an interpreter
 5. Capture results
-6. Emit events
-7. Reduce new workflow state
-8. Schedule next step
+6. Record events
+7. Derive new state
+8. Schedule the next step
+
+Nothing is implicit. Everything is visible.
 
 ---
 
@@ -283,21 +251,34 @@ Current supports multiple modes for the same workflow:
 
 **Step** — A unit of work assigned to an agent role.
 
-**Intent** — A typed proposal describing a desired effect or artifact.
+**Intent** — A typed proposal describing a desired effect or observation.
 
-**Interpreter** — A trusted component that can turn approved intents into actual effects.
+**Artifact** — An immutable output produced by a step and stored by the runtime.
 
 **Event** — An immutable record of what happened.
 
-**Projection** — A derived read model of workflow state, run history, artifacts, approvals, and outcomes.
+**Projection** — A derived read model of workflow state, run history, artifacts, and outcomes.
+
+---
+
+## What This Is Not
+
+This is not a shell wrapper.
+It is not a chat interface.
+It is not an autonomous agent.
+
+It does not try to make the model correct.
+
+It describes change.
+It controls when change is allowed.
 
 ---
 
 ## Intent Types
 
-Current starts with a deliberately small algebra of effects.
+The system starts with a deliberately small algebra of effects.
 
-**Read-only intents**
+**Read**
 
 - `read_file`
 - `glob`
@@ -305,32 +286,32 @@ Current starts with a deliberately small algebra of effects.
 - `git_diff`
 - `git_log`
 
-**Mutating intents**
+**Mutate**
 
 - `file_patch`
 - `write_file`
 - `delete_file`
 
-**Execution intents**
+**Execute**
 
 - `run_command`
 - `run_test`
 - `run_formatter`
 
-**Control intents**
+**Control**
 
 - `request_approval`
 - `reject_step`
 - `retry_step`
 - `handoff`
 
-**Reporting intents**
+**Report**
 
 - `report`
 - `claim`
 - `artifact`
 
-Each intent is validated before interpretation.
+Each intent is typed and validated before interpretation.
 
 ---
 
@@ -352,23 +333,22 @@ All durable state is derived from these events.
 
 ---
 
-## Why Event Sourcing?
+## Determinism
 
-Event sourcing gives Current several important properties:
+The model may vary. The runtime should not.
 
-- full audit trail
-- deterministic replay
-- easy debugging
-- time-travel inspection
-- reproducible projections
-- approval history
-- clean separation between command and read models
+- scheduling is deterministic
+- validation is deterministic
+- policy is deterministic
+- interpretation is controlled
+- events are append-only
+- state is derived
 
-For AI workflows, this matters because it lets us inspect not just the final result, but the exact chain of decisions and validations that led there.
+If something changes, you can see exactly where and why.
 
 ---
 
-## Safety Model
+## Safety
 
 Current is designed around defense in depth:
 
@@ -378,67 +358,27 @@ Current is designed around defense in depth:
 4. Interpreters run in controlled environments
 5. Every transition is recorded
 
-This does not make LLMs deterministic or correct. It does reduce blast radius and make failures observable.
-
----
-
-## Determinism
-
-Current does not make model output deterministic. It does make the surrounding system more deterministic:
-
-- workflow scheduling
-- schema validation
-- policy checks
-- intent interpretation
-- event recording
-- state projection
-
-The model may vary. The runtime should not.
+This does not eliminate failure. It makes failure visible.
 
 ---
 
 ## Use Cases
 
-Current is a good fit for:
+Current is a good fit anywhere you want to plan first, apply later, and understand everything:
 
 - code generation with approval gates
-- large repo maintenance
+- repository maintenance
 - refactoring pipelines
 - documentation generation
 - migration planning
 - CI-assist workflows
 - security review flows
-- "plan first, apply later" agent systems
-
-It is especially useful where auditability matters.
-
----
-
-## Non-Goals
-
-Current is not trying to be:
-
-- a general chat interface
-- an autonomous shell robot
-- a replacement for CI/CD
-- a magical correctness engine
-- a framework for unconstrained agent swarms
-
-It is a runtime for bounded, inspectable, typed AI workflows.
 
 ---
 
 ## Why Pure Functional?
 
-Because pure systems make good boundaries.
-
-A pure core gives us:
-
-- testable reducers
-- replayable state
-- explicit effects
-- easier reasoning
-- fewer hidden mutations
+Because pure systems are easier to reason about. If everything is input → output, you can test it, replay it, debug it, and trust it. Side effects still exist — they just happen in one controlled place.
 
 Current borrows from event sourcing, CQRS, typed effect systems, workflow engines, functional architecture, and actor-style orchestration.
 
@@ -458,7 +398,7 @@ Current borrows from event sourcing, CQRS, typed effect systems, workflow engine
 **Phase 2**
 
 - approval policies
-- sandbox workspaces
+- sandbox environments
 - artifact browser
 - replay and time-travel inspection
 - branch/worktree support
@@ -482,19 +422,17 @@ Current borrows from event sourcing, CQRS, typed effect systems, workflow engine
 
 ## Status
 
-Current is early.
+This is early. The goal is simple:
 
-The initial goal is to prove a simple but powerful loop:
-
-1. define workflow
-2. produce intents
-3. validate intents
-4. optionally interpret effects
-5. record events
-6. project state
+1. take a task
+2. turn it into intents
+3. validate them
+4. optionally apply them
+5. record everything
+6. derive state
 7. repeat
 
-If that loop is solid, everything else can grow from it.
+If that loop is solid, the rest follows.
 
 ---
 
@@ -514,9 +452,9 @@ current events tail
 
 ## Inspiration
 
-Current is inspired by the gap between powerful agent systems and trustworthy production systems.
+Agent systems are powerful. Production systems need to be trustworthy. The two are not the same.
 
-It takes seriously the idea that AI workflows should be designed more like databases, compilers, and distributed systems — and less like shell scripts with better branding.
+Current takes ideas from event sourcing, CQRS, functional programming, workflow engines, and distributed systems — and applies them to AI workflows. It takes seriously the idea that AI systems should be designed more like databases, compilers, and distributed systems, and less like shell scripts with better branding.
 
 ---
 
