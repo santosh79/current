@@ -16,7 +16,7 @@ The following must always hold for any valid intent:
 
 2. **Serializable** — An intent must be representable as data (e.g. JSON, Erlang term). It must not contain executable code.
 
-3. **Deterministic interpretation** — Given the same intent and environment, the interpreter should behave deterministically.
+3. **Deterministic interpretation** — Interpretation should be as deterministic as the interpreter and execution environment allow. Any material environmental dependency must be made explicit or captured in resulting events.
 
 4. **Finite type set** — All intents must belong to a predefined, closed set of types. Arbitrary or free-form intent types are not allowed.
 
