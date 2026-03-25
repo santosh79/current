@@ -14,23 +14,21 @@ Current separates the two.
 
 ## The Idea
 
-Instead of this:
+### Old model
 
-```
-Agent -> shell / files / network -> changed world
-```
+Human asks the AI to do a task
+→ AI mutates the world directly
 
-Current works like this:
+#### Safer model
 
-```
-Agent -> Intent
-Intent -> Validation
-Validation -> Decision
-Decision -> Optional effect
-Effect -> Recorded event -> New state
-```
+Human asks the system to do a task
+→ Agent produces a proposal from the task and context
+→ Runtime validates the proposal
+→ If accepted, an interpreter may apply the effect
+→ Events are recorded throughout
+→ State is derived from the event log and referenced artifacts
 
-The agent describes. The system decides.
+The log is the canonical source of truth for how the system evolved.
 
 ---
 
@@ -50,44 +48,82 @@ The model is still non-deterministic. The system around it does not have to be.
 
 ---
 
-## The Shape of the System
+## System Flow
 
-There are three primitives:
+```text
+Human Request
+    ↓
+Task
+    ↓
+Workflow is created
+    ↓
+Proposal
+    ↓
+Intents
+    ↓
+Artifacts
+    ↓
+WorkflowArtifact
 
-- **Intents** — what is proposed
-- **Artifacts** — what was produced
-- **Events** — what happened
+Events are emitted throughout and form the canonical system record.
+```
 
-Everything else is derived. State is not stored — it is computed from the event log and the artifacts it references.
+## Lifecycle
+
+```
+Task submitted
+→ Workflow created (:created → :planning)
+
+→ Proposal produced (:planning)
+→ Proposal validated (:validating)
+
+→ If approval required → waiting_for_approval
+→ If approved → :approved
+
+→ Intents applied (:applying)
+→ Artifacts produced
+
+→ WorkflowArtifact assembled (:assembling_artifact)
+
+→ Workflow completes (:completed)
+   or is rejected (:rejected)
+   or fails (:failed)
+```
+
+Everything is recorded as events
+Nothing is implicit
 
 ---
 
-## Intents
+## Core Concepts
 
-An intent is a typed proposal. It says what should happen, not how to do it. A patch. A command. A claim. A request.
+### Task
+A task is the external ask submitted to the system.  
+It is the thing the workflow is trying to accomplish.
 
-```json
-{
-  "step_id": "implement_auth",
-  "intents": [
-    {
-      "type": "file_patch",
-      "path": "lib/auth.ex",
-      "patch": "...unified diff..."
-    },
-    {
-      "type": "run_command",
-      "command": ["mix", "test", "test/auth_test.exs"]
-    }
-  ],
-  "claims": [
-    "adds email validation",
-    "does not change login behavior"
-  ]
-}
-```
+### Workflow
+A workflow is the system process created to carry a task from submission to outcome.  
+It owns the proposal, the lifecycle events, and the final workflow artifact.
 
-This can be validated, rejected, simulated, or applied. Nothing happens until the system allows it.
+### Proposal
+A proposal is a candidate response to a task, produced within a workflow.  
+It groups one or more intents into a coherent unit of suggested work.
+
+### Intent
+An intent is the smallest unit of proposed work the runtime can evaluate independently.  
+It describes one desired effect or observation.
+
+### Artifact
+An artifact is an immutable stored result produced by a step or runtime stage.  
+It is what later steps, projections, and replay operate on.
+
+### Event
+An event is an immutable record of something that happened in the runtime.  
+The event log is the canonical record of system evolution.
+
+### State
+State is a derived view computed from the event log and the immutable artifacts it references.  
+It is not the primary source of truth.
 
 ---
 
@@ -103,7 +139,9 @@ Agents describe intended mutations. They do not execute them.
 
 **3. Event sourcing by default**
 
-Everything important becomes an event: task submitted, step scheduled, intent proposed, validation passed, effect applied, effect rejected, pipeline completed. State is derived from the event log.
+Everything important becomes an event: task submitted, workflow created, proposal produced, intents validated, effects applied, artifacts produced, workflow completed.
+
+State is derived from the event log.
 
 **4. Deterministic orchestration around non-deterministic models**
 
@@ -133,131 +171,42 @@ The most security-sensitive part of the system should be small, explicit, and te
 
 ---
 
-## A Workflow
-
-A workflow is a graph of steps. Each step produces data, not effects.
-
-```
-navigate -> specify -> implement -> verify -> summarize
-```
-
-One step proposes a patch. Another asks to run tests. Another decides whether the result is acceptable. The runtime coordinates this. Effects are optional. Control is explicit.
-
----
-
 ## Execution Modes
 
-The same workflow can run in different modes. The workflow does not change — only the interpreter does.
+The same workflow can run in different modes.
+
+The workflow structure remains the same, but the runtime controls:
+- whether effects are applied
+- whether approval is required
+- whether artifacts are persisted
 
 | Mode | Behavior |
 |---|---|
-| `plan` | Produce intents only. No effects are executed. |
-| `simulate` | Apply intents in a temporary workspace. |
-| `review` | Require approval before effects. |
-| `apply` | Perform real effects through trusted interpreters. |
+| `plan` | Produce a proposal and intents only. No effects are applied. |
+| `simulate` | Apply intents in a temporary environment. Artifacts are not persisted. |
+| `review` | Validate intents and pause for approval before applying effects. |
+| `apply` | Execute accepted intents through trusted interpreters and persist artifacts. |
 
 ---
 
 ## Example
 
-**Task:** `add email validation to signup flow`
+Task: add email validation to signup flow
 
-**Agent output:**
+```text
+→ A workflow is created  
+→ The agent produces a proposal  
+→ The proposal contains intents:
+  - update signup logic
+  - run tests
 
-```json
-{
-  "step": "implement",
-  "intents": [
-    {
-      "type": "file_patch",
-      "path": "lib/my_app/signup.ex",
-      "patch": "...diff..."
-    },
-    {
-      "type": "run_command",
-      "command": ["mix", "test", "test/my_app/signup_test.exs"]
-    }
-  ],
-  "claims": [
-    "invalid emails are rejected",
-    "existing behavior is unchanged"
-  ]
-}
+→ The runtime validates each intent  
+→ Accepted intents are applied  
+→ Artifacts are produced (patch result, test output)  
+→ A workflow artifact is assembled  
 ```
 
-**Runtime behavior:**
-
-1. Validate the schema
-2. Check policy
-3. Optionally apply the patch in a sandbox
-4. Run tests through an interpreter
-5. Capture results
-6. Record events
-7. Derive new state
-8. Schedule the next step
-
-Nothing is implicit. Everything is visible.
-
----
-
-## Architecture
-
-```
-            +----------------------+
-            |      Workflow        |
-            |      Definition      |
-            +----------+-----------+
-                       |
-                       v
-            +----------------------+
-            |      Scheduler        |
-            |   deterministic DAG   |
-            +----------+-----------+
-                       |
-                       v
-            +----------------------+
-            |        Agent          |
-            |   returns intents     |
-            +----------+-----------+
-                       |
-                       v
-            +----------------------+
-            |      Validator        |
-            | schema/policy/checks  |
-            +----------+-----------+
-                       |
-                +------+------+
-                |             |
-                v             v
-      +----------------+   +------------------+
-      | Event Store    |   | Effect Interpreter |
-      | append-only    |   | file/shell/git/etc |
-      +--------+-------+   +---------+--------+
-               |                     |
-               +----------+----------+
-                          |
-                          v
-                +----------------------+
-                |   State Projection    |
-                | pipeline/run/artifacts|
-                +----------------------+
-```
-
----
-
-## Core Concepts
-
-**Workflow** — A graph of steps with dependencies, contracts, and policies.
-
-**Step** — A unit of work assigned to an agent role.
-
-**Intent** — A typed proposal describing a desired effect or observation.
-
-**Artifact** — An immutable output produced by a step and stored by the runtime.
-
-**Event** — An immutable record of what happened.
-
-**Projection** — A derived read model of workflow state, run history, artifacts, and outcomes.
+Everything is recorded as events.
 
 ---
 
@@ -271,65 +220,6 @@ It does not try to make the model correct.
 
 It describes change.
 It controls when change is allowed.
-
----
-
-## Intent Types
-
-The system starts with a deliberately small algebra of effects.
-
-**Read**
-
-- `read_file`
-- `glob`
-- `grep`
-- `git_diff`
-- `git_log`
-
-**Mutate**
-
-- `file_patch`
-- `write_file`
-- `delete_file`
-
-**Execute**
-
-- `run_command`
-- `run_test`
-- `run_formatter`
-
-**Control**
-
-- `request_approval`
-- `reject_step`
-- `retry_step`
-- `handoff`
-
-**Report**
-
-- `report`
-- `claim`
-- `artifact`
-
-Each intent is typed and validated before interpretation.
-
----
-
-## Event Model
-
-- `TaskSubmitted`
-- `StepScheduled`
-- `StepStarted`
-- `IntentProposed`
-- `IntentValidated`
-- `IntentRejected`
-- `EffectApplied`
-- `EffectFailed`
-- `ClaimVerified`
-- `StepCompleted`
-- `PipelineCompleted`
-
-All durable state is derived from these events.
 
 ---
 
