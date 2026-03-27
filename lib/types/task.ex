@@ -15,4 +15,8 @@ defmodule Current.Task do
           workflow_id: Current.Id.t() | nil,
           submitted_at: DateTime.t()
         }
+
+  @spec get(Current.Id.t()) ::
+          {:ok, Current.Task.t()} | {:error, :not_found}
+  def get(id), do: Current.TaskStore.get(id)
 end

@@ -3,6 +3,7 @@ defmodule Current.Id do
   @sha256_prefix "sha256:"
   @sha256_hex_length 64
 
+  @spec generate() :: t()
   def generate() do
     "sha256:" <>
       (:crypto.strong_rand_bytes(32)

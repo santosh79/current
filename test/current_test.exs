@@ -2,15 +2,13 @@ defmodule CurrentTest do
   use ExUnit.Case
   doctest Current
 
+  alias Current.TaskStore
   alias Current.Task
   alias Current.Request
   alias Current.Workflow
-  alias Current.Event
 
   describe "workflow creation" do
     test "submitting a task creates a workflow" do
-      submitted_at = ~U[2026-03-27 12:00:00Z]
-
       req = %Request{
         input: "add email validation to signup flow",
         context: %{}
