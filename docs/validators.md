@@ -10,7 +10,7 @@ defmodule Current.Proposal.Validator do
 
   def validate(%Proposal{} = proposal) do
     with :ok <- Current.Id.validate(proposal.id),
-         :ok <- validate_context(proposal.context),
+         :ok <- Current.Id.validate(proposal.workflow_id),
          :ok <- validate_intents(proposal.intents),
          :ok <- validate_justification(proposal.justification),
          :ok <- validate_claims(proposal.claims),
@@ -18,12 +18,6 @@ defmodule Current.Proposal.Validator do
       :ok
     end
   end
-
-  defp validate_context(%{step_id: s, task_id: t, run_id: r})
-       when is_binary(s) and is_binary(t) and is_binary(r),
-       do: :ok
-
-  defp validate_context(_), do: {:error, :invalid_context}
 
   defp validate_intents(intents) when is_list(intents) and length(intents) > 0 do
     if Enum.all?(intents, &match?(%Intent{}, &1)) do
@@ -50,27 +44,20 @@ defmodule Current.Proposal.Validator do
 
   defp validate_claims(nil), do: :ok
   defp validate_claims(claims) when is_list(claims) do
-    if Enum.all?(claims, &is_binary/1) do
-      :ok
-    else
-      {:error, :invalid_claims}
-    end
+    if Enum.all?(claims, &is_binary/1), do: :ok, else: {:error, :invalid_claims}
   end
   defp validate_claims(_), do: {:error, :invalid_claims}
 
   defp validate_dependencies(nil), do: :ok
   defp validate_dependencies(deps) when is_list(deps) do
-    if Enum.all?(deps, &is_binary/1) do
-      :ok
-    else
-      {:error, :invalid_dependencies}
-    end
+    if Enum.all?(deps, &is_binary/1), do: :ok, else: {:error, :invalid_dependencies}
   end
   defp validate_dependencies(_), do: {:error, :invalid_dependencies}
 end
 ```
 
 #### Intent
+
 ```elixir
 defmodule Current.Intent.Validator do
   alias Current.Intent
@@ -89,6 +76,7 @@ defmodule Current.Intent.Validator do
 
   def validate(%Intent{} = intent) do
     with :ok <- Current.Id.validate(intent.id),
+         :ok <- Current.Id.validate(intent.proposal_id),
          :ok <- validate_type(intent.type),
          :ok <- validate_payload(intent) do
       :ok
@@ -154,77 +142,77 @@ defmodule Current.Artifact.Validator do
   ]
 
   def validate(%Artifact{} = artifact) do
-    with :ok <- validate_type(artifact.type),
+    with :ok <- Current.Id.validate(artifact.id),
+         :ok <- Current.Id.validate(artifact.workflow_id),
+         :ok <- validate_type(artifact.type),
          :ok <- validate_name(artifact.name),
-         :ok <- Current.Id.validate(artifact.id),
          :ok <- validate_storage(artifact.storage),
-         :ok <- validate_context(artifact.context),
-         :ok <- validate_timestamp(artifact.timestamp),
-         :ok <- validate_metadata(artifact.metadata) do
+         :ok <- validate_metadata(artifact.metadata),
+         :ok <- validate_timestamp(artifact.timestamp) do
       :ok
     end
   end
-  
-  defp validate_name(nil), do: :ok
-  defp validate_name(name) when is_atom(name), do: :ok
-  defp validate_name(_), do: {:error, :invalid_name}
 
   defp validate_type(type) when type in @valid_types, do: :ok
   defp validate_type(_), do: {:error, :invalid_type}
 
+  defp validate_name(nil), do: :ok
+  defp validate_name(name) when is_atom(name), do: :ok
+  defp validate_name(_), do: {:error, :invalid_name}
+
   defp validate_storage(%{backend: :filesystem, path: p})
-     when is_binary(p) and byte_size(p) > 0,
-     do: :ok
-  defp validate_storage(_), do: {:error, :invalid_storage}
-
-  defp validate_context(%{step_id: s, task_id: t, run_id: r})
-       when is_binary(s) and is_binary(t) and is_binary(r),
+       when is_binary(p) and byte_size(p) > 0,
        do: :ok
-
-  defp validate_context(_), do: {:error, :invalid_context}
-
-  defp validate_timestamp(%DateTime{}), do: :ok
-  defp validate_timestamp(_), do: {:error, :invalid_timestamp}
+  defp validate_storage(_), do: {:error, :invalid_storage}
 
   defp validate_metadata(metadata) when is_map(metadata) do
     case metadata do
-        %{bytes: bytes} when not is_integer(bytes) or bytes < 0 ->
-            {:error, :invalid_metadata}
-        %{content_type: ct} when not is_binary(ct) ->
-            {:error, :invalid_metadata}
-        _ -> :ok
+      %{bytes: bytes} when not is_integer(bytes) or bytes < 0 ->
+        {:error, :invalid_metadata}
+      %{content_type: ct} when not is_binary(ct) ->
+        {:error, :invalid_metadata}
+      _ ->
+        :ok
     end
   end
   defp validate_metadata(_), do: {:error, :invalid_metadata}
+
+  defp validate_timestamp(%DateTime{}), do: :ok
+  defp validate_timestamp(_), do: {:error, :invalid_timestamp}
 end
 ```
 
 #### Event
+
 ```elixir
 defmodule Current.Event.Validator do
   alias Current.Event
 
   @valid_types [
     :task_submitted,
-    :step_scheduled,
-    :step_started,
+    :workflow_created,
+    :workflow_started,
     :proposal_produced,
+    :approval_requested,
+    :proposal_accepted,
     :proposal_rejected,
     :intent_proposed,
     :intent_validated,
     :intent_rejected,
     :effect_applied,
     :effect_failed,
+    :artifact_produced,
     :claim_verified,
-    :step_completed,
-    :step_failed,
-    :pipeline_completed
+    :workflow_artifact_assembled,
+    :workflow_completed,
+    :workflow_failed
   ]
 
   def validate(%Event{} = event) do
-    with :ok <- validate_type(event.type),
+    with :ok <- Current.Id.validate(event.id),
+         :ok <- Current.Id.validate(event.workflow_id),
+         :ok <- validate_type(event.type),
          :ok <- validate_data(event),
-         :ok <- validate_context(event.context),
          :ok <- validate_timestamp(event.timestamp) do
       :ok
     end
@@ -233,12 +221,6 @@ defmodule Current.Event.Validator do
   defp validate_type(type) when type in @valid_types, do: :ok
   defp validate_type(_), do: {:error, :invalid_type}
 
-  defp validate_context(%{task_id: task_id, run_id: run_id})
-       when is_binary(task_id) and is_binary(run_id),
-       do: :ok
-
-  defp validate_context(_), do: {:error, :invalid_context}
-
   defp validate_timestamp(%DateTime{}), do: :ok
   defp validate_timestamp(_), do: {:error, :invalid_timestamp}
 
@@ -246,12 +228,28 @@ defmodule Current.Event.Validator do
        when is_binary(task),
        do: :ok
 
-  defp validate_data(%Event{type: :step_scheduled, data: %{step_id: step_id}})
-       when is_binary(step_id),
+  defp validate_data(%Event{type: :workflow_created, data: %{workflow_id: id}})
+       when is_binary(id),
        do: :ok
 
-  defp validate_data(%Event{type: :step_started, data: %{step_id: step_id}})
-       when is_binary(step_id),
+  defp validate_data(%Event{type: :workflow_started, data: %{workflow_id: id}})
+       when is_binary(id),
+       do: :ok
+
+  defp validate_data(%Event{type: :proposal_produced, data: %{proposal_id: id}})
+       when is_binary(id),
+       do: :ok
+
+  defp validate_data(%Event{type: :approval_requested, data: %{proposal_id: id}})
+       when is_binary(id),
+       do: :ok
+
+  defp validate_data(%Event{type: :proposal_accepted, data: %{proposal_id: id}})
+       when is_binary(id),
+       do: :ok
+
+  defp validate_data(%Event{type: :proposal_rejected, data: %{proposal_id: id, reason: reason}})
+       when is_binary(id) and is_binary(reason),
        do: :ok
 
   defp validate_data(%Event{type: :intent_proposed, data: %{intent_ids: ids}})
@@ -274,20 +272,24 @@ defmodule Current.Event.Validator do
        when is_binary(id) and is_binary(reason),
        do: :ok
 
+  defp validate_data(%Event{type: :artifact_produced, data: %{artifact_id: id}})
+       when is_binary(id),
+       do: :ok
+
   defp validate_data(%Event{type: :claim_verified, data: %{claim: claim, result: result}})
        when is_binary(claim) and result in [:ok, :error],
        do: :ok
 
-  defp validate_data(%Event{type: :step_completed, data: %{step_id: step_id}})
-       when is_binary(step_id),
+  defp validate_data(%Event{type: :workflow_artifact_assembled, data: %{workflow_artifact_id: id}})
+       when is_binary(id),
        do: :ok
 
-  defp validate_data(%Event{type: :step_failed, data: %{step_id: step_id, reason: reason}})
-       when is_binary(step_id) and is_binary(reason),
+  defp validate_data(%Event{type: :workflow_completed, data: %{workflow_id: id}})
+       when is_binary(id),
        do: :ok
 
-  defp validate_data(%Event{type: :pipeline_completed, data: %{run_id: run_id}})
-       when is_binary(run_id),
+  defp validate_data(%Event{type: :workflow_failed, data: %{workflow_id: id, reason: reason}})
+       when is_binary(id) and is_binary(reason),
        do: :ok
 
   defp validate_data(_), do: {:error, :invalid_data}
