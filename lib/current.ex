@@ -1,18 +1,9 @@
 defmodule Current do
-  @moduledoc """
-  Documentation for `Current`.
-  """
+  alias Current.{Request, Id}
 
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> Current.hello()
-      :world
-
-  """
-  def hello do
-    :world
+  def submit_task(%Request{} = req, caller_pid)
+      when is_pid(caller_pid) do
+    task_id = Id.generate()
+    {:ok, task_id}
   end
 end
