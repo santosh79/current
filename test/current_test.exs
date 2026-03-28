@@ -58,5 +58,31 @@ defmodule CurrentTest do
           flunk("did not receive workflow")
       end
     end
+
+    test "get_status returns the workflow status for a submitted task" do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      receive do
+        {:workflow_created, ^task_id, workflow} ->
+          assert {:ok, status} = Current.get_status(task_id)
+          assert status == workflow.status
+          assert status in [:created, :planning]
+      after
+        1_000 ->
+          flunk("did not receive workflow")
+      end
+    end
+
+    test "get_status returns not_found for an unknown task id" do
+      unknown_task_id =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+      assert {:error, :not_found} = Current.get_status(unknown_task_id)
+    end
   end
 end

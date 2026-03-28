@@ -24,6 +24,12 @@ defmodule Current do
     GenServer.call(__MODULE__, {:get_workflow, task_id})
   end
 
+  @spec get_status(Current.Id.t()) ::
+          {:ok, Current.Workflow.status()} | {:error, :not_found}
+  def get_status(task_id) do
+    GenServer.call(__MODULE__, {:get_status, task_id})
+  end
+
   ## Server callbacks
 
   @impl true
@@ -43,6 +49,11 @@ defmodule Current do
     end)
 
     {:reply, {:ok, task_id}, state}
+  end
+
+  @impl true
+  def handle_call({:get_status, task_id}, _from, state) do
+    {:reply, WorkflowStore.get_status_by_task_id(task_id), state}
   end
 
   defp create_workflow(task_id, %Request{} = req, caller_pid) do

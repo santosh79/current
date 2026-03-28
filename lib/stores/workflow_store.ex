@@ -35,4 +35,13 @@ defmodule Current.WorkflowStore do
       end
     end)
   end
+
+  @spec get_status_by_task_id(Current.Id.t()) ::
+          {:ok, Current.Workflow.status()} | {:error, :not_found}
+  def get_status_by_task_id(task_id) do
+    case get_by_task_id(task_id) do
+      {:ok, workflow} -> {:ok, workflow.status}
+      {:error, :not_found} -> {:error, :not_found}
+    end
+  end
 end
