@@ -28,35 +28,40 @@ defmodule Current do
     task_id = Id.generate()
 
     spawn_link(fn ->
-      workflow_id = Id.generate()
-      now = DateTime.utc_now()
-
-      task = %Task{
-        id: task_id,
-        input: req.input,
-        context: req.context,
-        workflow_id: workflow_id,
-        submitted_at: now
-      }
-
-      workflow = %Workflow{
-        id: workflow_id,
-        task_id: task_id,
-        status: :created,
-        proposal: nil,
-        workflow_artifact: nil,
-        events: [],
-        started_at: nil,
-        created_at: now,
-        completed_at: nil,
-        updated_at: now,
-        error: nil
-      }
-
-      :ok = TaskStore.put(task)
-      send(caller_pid, {:workflow_created, task_id, workflow})
+      :ok = create_workflow(task_id, req, caller_pid)
     end)
 
     {:reply, {:ok, task_id}, state}
+  end
+
+  defp create_workflow(task_id, %Request{} = req, caller_pid) do
+    workflow_id = Id.generate()
+    now = DateTime.utc_now()
+
+    task = %Task{
+      id: task_id,
+      input: req.input,
+      context: req.context,
+      workflow_id: workflow_id,
+      submitted_at: now
+    }
+
+    workflow = %Workflow{
+      id: workflow_id,
+      task_id: task_id,
+      status: :created,
+      proposal: nil,
+      workflow_artifact: nil,
+      events: [],
+      started_at: nil,
+      created_at: now,
+      completed_at: nil,
+      updated_at: now,
+      error: nil
+    }
+
+    :ok = TaskStore.put(task)
+    send(caller_pid, {:workflow_created, task_id, workflow})
+    :ok
   end
 end
