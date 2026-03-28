@@ -1,7 +1,7 @@
 defmodule Current do
   use GenServer
 
-  alias Current.{Request, Id, Workflow, TaskStore, Task}
+  alias Current.{Request, Id, Workflow, WorkflowStore, TaskStore, Task}
 
   @type state :: %{}
 
@@ -18,10 +18,21 @@ defmodule Current do
     GenServer.call(__MODULE__, {:submit_task, req, caller_pid})
   end
 
+  @spec get_workflow(Current.Id.t()) ::
+          {:ok, Current.Workflow.t()} | {:error, :not_found}
+  def get_workflow(task_id) do
+    GenServer.call(__MODULE__, {:get_workflow, task_id})
+  end
+
   ## Server callbacks
 
   @impl true
   def init(state), do: {:ok, state}
+
+  @impl true
+  def handle_call({:get_workflow, task_id}, _from, state) do
+    {:reply, WorkflowStore.get_by_task_id(task_id), state}
+  end
 
   @impl true
   def handle_call({:submit_task, %Request{} = req, caller_pid}, _from, state) do
@@ -61,6 +72,7 @@ defmodule Current do
     }
 
     :ok = TaskStore.put(task)
+    :ok = WorkflowStore.put(workflow)
     send(caller_pid, {:workflow_created, task_id, workflow})
     :ok
   end

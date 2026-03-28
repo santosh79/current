@@ -35,5 +35,25 @@ defmodule CurrentTest do
           flunk("did not receive workflow")
       end
     end
+
+
+    test "get_workflow returns the workflow for a submitted task" do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      receive do
+        {:workflow_created, ^task_id, created_workflow} ->
+          assert {:ok, fetched_workflow} = Current.get_workflow(task_id)
+          assert fetched_workflow.id == created_workflow.id
+          assert fetched_workflow.task_id == task_id
+      after
+        1_000 ->
+          flunk("did not receive workflow")
+      end
+    end
   end
 end
