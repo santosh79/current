@@ -2,7 +2,6 @@ defmodule CurrentTest do
   use ExUnit.Case
   doctest Current
 
-  alias Current.TaskStore
   alias Current.Task
   alias Current.Request
   alias Current.Workflow
