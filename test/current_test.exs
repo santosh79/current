@@ -36,7 +36,6 @@ defmodule CurrentTest do
       end
     end
 
-
     test "get_workflow returns the workflow for a submitted task" do
       req = %Request{
         input: "add email validation to signup flow",
@@ -50,6 +49,10 @@ defmodule CurrentTest do
           assert {:ok, fetched_workflow} = Current.get_workflow(task_id)
           assert fetched_workflow.id == created_workflow.id
           assert fetched_workflow.task_id == task_id
+
+          assert fetched_workflow.status == created_workflow.status
+          assert fetched_workflow.proposal == nil
+          assert fetched_workflow.workflow_artifact == nil
       after
         1_000 ->
           flunk("did not receive workflow")
