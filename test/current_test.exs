@@ -93,8 +93,8 @@ defmodule CurrentTest do
         end
 
       receive do
-        {:proposal_produced, ^task_id, workflow_id, proposal} ->
-          assert workflow_id == workflow.id
+        {:proposal_produced, ^task_id, updated_workflow, proposal} ->
+          assert updated_workflow.id == workflow.id
 
           assert %Proposal{} = proposal
           assert :ok = Current.Id.validate(proposal.id)
@@ -107,7 +107,6 @@ defmodule CurrentTest do
           assert is_list(proposal.claims) or is_nil(proposal.claims)
           assert is_list(proposal.dependencies) or is_nil(proposal.dependencies)
 
-          {:ok, updated_workflow} = Current.get_workflow(task_id)
           assert updated_workflow.id == workflow.id
           assert updated_workflow.proposal.id == proposal.id
           assert updated_workflow.status == :validating
@@ -115,6 +114,47 @@ defmodule CurrentTest do
         1_000 ->
           flunk("did not receive proposal_produced")
       end
+    end
+  end
+
+  ## Request submitted
+  ## → workflow created (:created)
+  ## → workflow starts planning (:planning)
+  ## → proposal produced
+  ## → workflow becomes :validating
+  test "workflow emits planning before proposal production" do
+    req = %Request{
+      input: "add email validation to signup flow",
+      context: %{}
+    }
+
+    {:ok, task_id} = Current.submit_task(req, self())
+
+    workflow_id =
+      receive do
+        {:workflow_created, ^task_id, workflow} ->
+          assert workflow.status == :created
+          workflow.id
+      after
+        1_000 ->
+          flunk("did not receive workflow_created")
+      end
+
+    receive do
+      {:workflow_planning, ^task_id, workflow} ->
+        assert workflow.id == workflow_id
+        assert workflow.status == :planning
+    after
+      1_000 ->
+        flunk("did not receive workflow_planning")
+    end
+
+    receive do
+      {:proposal_produced, ^task_id, workflow, _proposal} ->
+        assert workflow.status == :validating
+    after
+      1_000 ->
+        flunk("did not receive proposal_produced")
     end
   end
 end

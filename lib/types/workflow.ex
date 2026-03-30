@@ -68,7 +68,7 @@ defmodule Current.Workflow do
 
   @spec create(Current.Id.t(), Request.t(), pid()) :: GenServer.on_start()
   def create(task_id, %Request{} = req, orchestrator_pid)
-  when is_pid(orchestrator_pid) do
+      when is_pid(orchestrator_pid) do
     workflow_id = Id.generate()
 
     start_link(
@@ -119,7 +119,8 @@ defmodule Current.Workflow do
     :ok = TaskStore.put(task)
     :ok = WorkflowStore.put(workflow)
 
-    :ok = WorkflowOrchestrator.notify_workflow_created(orchestrator_pid, self(), task_id, workflow)
+    :ok =
+      WorkflowOrchestrator.notify_workflow_created(orchestrator_pid, self(), task_id, workflow)
 
     state = %{
       workflow: workflow,
@@ -133,8 +134,8 @@ defmodule Current.Workflow do
   @impl true
   def handle_cast(
         :produce_proposal,
-    %{workflow: workflow, request: req, orchestrator_pid: orchestrator_pid} = state
-  ) do
+        %{workflow: workflow, request: req, orchestrator_pid: orchestrator_pid} = state
+      ) do
     proposal = build_proposal(req, workflow.id)
 
     updated_workflow = %{
@@ -151,8 +152,33 @@ defmodule Current.Workflow do
         orchestrator_pid,
         self(),
         workflow.task_id,
-        workflow.id,
+        updated_workflow,
         proposal
+      )
+
+    {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  @impl true
+  def handle_cast(
+        :start_planning,
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    updated_workflow = %{
+      workflow
+      | status: :planning,
+        started_at: DateTime.utc_now(),
+        updated_at: DateTime.utc_now()
+    }
+
+    :ok = WorkflowStore.put(updated_workflow)
+
+    :ok =
+      WorkflowOrchestrator.notify_workflow_planning(
+        orchestrator_pid,
+        self(),
+        workflow.task_id,
+        updated_workflow
       )
 
     {:noreply, %{state | workflow: updated_workflow}}
