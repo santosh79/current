@@ -14,9 +14,9 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   @spec notify_workflow_created(pid(), pid(), Current.Id.t(), Current.Workflow.t()) :: :ok
-  def notify_workflow_created(shepherd_pid, workflow_pid, task_id, workflow)
-      when is_pid(shepherd_pid) and is_pid(workflow_pid) do
-    send(shepherd_pid, {:workflow_created, workflow_pid, task_id, workflow})
+  def notify_workflow_created(orchestrator_pid, workflow_pid, task_id, workflow)
+      when is_pid(orchestrator_pid) and is_pid(workflow_pid) do
+    send(orchestrator_pid, {:workflow_created, workflow_pid, task_id, workflow})
     :ok
   end
 
@@ -27,9 +27,9 @@ defmodule Current.WorkflowOrchestrator do
           Current.Id.t(),
           Current.Proposal.t()
         ) :: :ok
-  def notify_proposal_produced(shepherd_pid, workflow_pid, task_id, workflow_id, proposal)
-      when is_pid(shepherd_pid) and is_pid(workflow_pid) do
-    send(shepherd_pid, {:proposal_produced, workflow_pid, task_id, workflow_id, proposal})
+  def notify_proposal_produced(orchestrator_pid, workflow_pid, task_id, workflow_id, proposal)
+      when is_pid(orchestrator_pid) and is_pid(workflow_pid) do
+    send(orchestrator_pid, {:proposal_produced, workflow_pid, task_id, workflow_id, proposal})
     :ok
   end
 
