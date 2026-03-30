@@ -6,7 +6,7 @@ defmodule CurrentTest do
   alias Current.Workflow
   alias Current.Proposal
 
-  describe "workflow creation" do
+  describe "workflow lifecycle" do
     test "get_status returns the workflow status for a submitted task" do
       req = %Request{
         input: "add email validation to signup flow",
