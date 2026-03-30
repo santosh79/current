@@ -6,7 +6,6 @@ defmodule Current.Workflow do
     Proposal,
     Intent,
     WorkflowStore,
-    WorkflowOrchestrator,
     TaskStore,
     Task,
     Request
@@ -59,6 +58,14 @@ defmodule Current.Workflow do
           orchestrator_pid: pid()
         }
 
+  @type workflow_event ::
+          {:workflow_created, pid(), t()}
+          | {:workflow_planning, pid(), t()}
+          | {:proposal_produced, pid(), t()}
+
+  @type workflow_command ::
+          :start_planning
+          | :produce_proposal
   ## Client API
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -119,8 +126,7 @@ defmodule Current.Workflow do
     :ok = TaskStore.put(task)
     :ok = WorkflowStore.put(workflow)
 
-    :ok =
-      WorkflowOrchestrator.notify_workflow_created(orchestrator_pid, self(), task_id, workflow)
+    send(orchestrator_pid, {:workflow_created, self(), workflow})
 
     state = %{
       workflow: workflow,
@@ -147,14 +153,10 @@ defmodule Current.Workflow do
 
     :ok = WorkflowStore.put(updated_workflow)
 
-    :ok =
-      WorkflowOrchestrator.notify_proposal_produced(
-        orchestrator_pid,
-        self(),
-        workflow.task_id,
-        updated_workflow,
-        proposal
-      )
+    send(
+      orchestrator_pid,
+      {:proposal_produced, self(), updated_workflow}
+    )
 
     {:noreply, %{state | workflow: updated_workflow}}
   end
@@ -173,13 +175,7 @@ defmodule Current.Workflow do
 
     :ok = WorkflowStore.put(updated_workflow)
 
-    :ok =
-      WorkflowOrchestrator.notify_workflow_planning(
-        orchestrator_pid,
-        self(),
-        workflow.task_id,
-        updated_workflow
-      )
+    send(orchestrator_pid, {:workflow_planning, self(), updated_workflow})
 
     {:noreply, %{state | workflow: updated_workflow}}
   end

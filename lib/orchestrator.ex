@@ -13,54 +13,33 @@ defmodule Current.WorkflowOrchestrator do
     GenServer.start_link(__MODULE__, %{listeners: listeners})
   end
 
-  @spec notify_workflow_created(pid(), pid(), Current.Id.t(), Current.Workflow.t()) :: :ok
-  def notify_workflow_created(orchestrator_pid, workflow_pid, task_id, workflow)
-      when is_pid(orchestrator_pid) and is_pid(workflow_pid) do
-    send(orchestrator_pid, {:workflow_created, workflow_pid, task_id, workflow})
-    :ok
-  end
-
-  @spec notify_workflow_planning(pid(), pid(), Current.Id.t(), Current.Workflow.t()) :: :ok
-  def notify_workflow_planning(orchestrator_pid, workflow_pid, task_id, workflow)
-      when is_pid(orchestrator_pid) and is_pid(workflow_pid) do
-    send(orchestrator_pid, {:workflow_planning, workflow_pid, task_id, workflow})
-    :ok
-  end
-
-  @spec notify_proposal_produced(
-          pid(),
-          pid(),
-          Current.Id.t(),
-          Current.Workflow.t(),
-          Current.Proposal.t()
-        ) :: :ok
-  def notify_proposal_produced(orchestrator_pid, workflow_pid, task_id, workflow, proposal)
-      when is_pid(orchestrator_pid) do
-    send(orchestrator_pid, {:proposal_produced, workflow_pid, task_id, workflow, proposal})
-    :ok
-  end
-
   ## Server callbacks
 
   @impl true
   def init(state), do: {:ok, state}
 
   @impl true
-  def handle_info({:workflow_created, workflow_pid, task_id, workflow}, state) do
-    notify_listeners(state.listeners, {:workflow_created, task_id, workflow})
+  def handle_info({:workflow_created, workflow_pid, workflow}, state)
+      when is_pid(workflow_pid) do
+    notify_listeners(state.listeners, {:workflow_created, workflow.task_id, workflow})
     GenServer.cast(workflow_pid, :start_planning)
     {:noreply, state}
   end
 
   @impl true
-  def handle_info({:proposal_produced, _workflow_pid, task_id, workflow, proposal}, state) do
-    notify_listeners(state.listeners, {:proposal_produced, task_id, workflow, proposal})
+  def handle_info({:proposal_produced, _workflow_pid, workflow}, state) do
+    notify_listeners(
+      state.listeners,
+      {:proposal_produced, workflow.task_id, workflow, workflow.proposal}
+    )
+
     {:noreply, state}
   end
 
   @impl true
-  def handle_info({:workflow_planning, workflow_pid, task_id, workflow}, state) do
-    notify_listeners(state.listeners, {:workflow_planning, task_id, workflow})
+  def handle_info({:workflow_planning, workflow_pid, workflow}, state)
+      when is_pid(workflow_pid) do
+    notify_listeners(state.listeners, {:workflow_planning, workflow.task_id, workflow})
     GenServer.cast(workflow_pid, :produce_proposal)
     {:noreply, state}
   end
