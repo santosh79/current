@@ -66,6 +66,8 @@ defmodule Current.Workflow do
   @type workflow_command ::
           :start_planning
           | :produce_proposal
+          | {:review_proposal, Current.Id.t(), Current.decision()}
+
   ## Client API
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -73,17 +75,21 @@ defmodule Current.Workflow do
     GenServer.start_link(__MODULE__, opts)
   end
 
-  @spec create(Current.Id.t(), Request.t(), pid()) :: GenServer.on_start()
+  @spec create(Current.Id.t(), Request.t(), pid()) ::
+          {:ok, pid(), Current.Id.t()} | {:error, term()}
   def create(task_id, %Request{} = req, orchestrator_pid)
       when is_pid(orchestrator_pid) do
     workflow_id = Id.generate()
 
-    start_link(
-      task_id: task_id,
-      workflow_id: workflow_id,
-      request: req,
-      orchestrator_pid: orchestrator_pid
-    )
+    {:ok, pid} =
+      start_link(
+        task_id: task_id,
+        workflow_id: workflow_id,
+        request: req,
+        orchestrator_pid: orchestrator_pid
+      )
+
+    {:ok, pid, workflow_id}
   end
 
   @spec produce_proposal(pid()) :: :ok
@@ -178,6 +184,52 @@ defmodule Current.Workflow do
     send(orchestrator_pid, {:workflow_planning, self(), updated_workflow})
 
     {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  @impl true
+  def handle_cast(
+        {:review_proposal, proposal_id, {:approve, _metadata}},
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    case workflow.proposal do
+      %Proposal{id: ^proposal_id} ->
+        updated_workflow = %{
+          workflow
+          | status: :approved,
+            updated_at: DateTime.utc_now()
+        }
+
+        :ok = WorkflowStore.put(updated_workflow)
+        send(orchestrator_pid, {:proposal_approved, self(), updated_workflow})
+
+        {:noreply, %{state | workflow: updated_workflow}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_cast(
+        {:review_proposal, proposal_id, {:reject, _metadata}},
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    case workflow.proposal do
+      %Proposal{id: ^proposal_id} ->
+        updated_workflow = %{
+          workflow
+          | status: :rejected,
+            updated_at: DateTime.utc_now()
+        }
+
+        :ok = WorkflowStore.put(updated_workflow)
+        send(orchestrator_pid, {:proposal_rejected, self(), updated_workflow})
+
+        {:noreply, %{state | workflow: updated_workflow}}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   defp build_proposal(%Request{} = req, workflow_id) do

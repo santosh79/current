@@ -44,6 +44,24 @@ defmodule Current.WorkflowOrchestrator do
     {:noreply, state}
   end
 
+  @impl true
+  def handle_info({:review_proposal, workflow_pid, proposal_id, decision}, state) do
+    GenServer.cast(workflow_pid, {:review_proposal, proposal_id, decision})
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:proposal_approved, _workflow_pid, workflow}, state) do
+    notify_listeners(state.listeners, {:proposal_approved, workflow.task_id, workflow})
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:proposal_rejected, _workflow_pid, workflow}, state) do
+    notify_listeners(state.listeners, {:proposal_rejected, workflow.task_id, workflow})
+    {:noreply, state}
+  end
+
   defp notify_listeners(listeners, message) do
     Enum.each(listeners, fn pid ->
       send(pid, message)

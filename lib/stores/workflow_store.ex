@@ -44,4 +44,20 @@ defmodule Current.WorkflowStore do
       {:error, :not_found} -> {:error, :not_found}
     end
   end
+
+  @spec get_by_proposal_id(Current.Id.t()) ::
+          {:ok, Current.Workflow.t()} | {:error, :not_found}
+  def get_by_proposal_id(proposal_id) do
+    Agent.get(__MODULE__, fn state ->
+      state
+      |> Map.values()
+      |> Enum.find(fn workflow ->
+        match?(%Current.Proposal{id: ^proposal_id}, workflow.proposal)
+      end)
+      |> case do
+        nil -> {:error, :not_found}
+        workflow -> {:ok, workflow}
+      end
+    end)
+  end
 end

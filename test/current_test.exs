@@ -98,5 +98,107 @@ defmodule CurrentTest do
           flunk("did not receive proposal_produced")
       end
     end
+
+    test "reviewing and approving" do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow =
+        receive do
+          {:workflow_created, ^task_id, workflow} ->
+            workflow
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
+
+      receive do
+        {:workflow_planning, ^task_id, _workflow} ->
+          :ok
+      after
+        1_000 ->
+          flunk("did not receive workflow_planning")
+      end
+
+      receive do
+        {:proposal_produced, ^task_id, produced_workflow, proposal} ->
+          assert produced_workflow.status == :validating
+
+          :ok =
+            Current.review_proposal(
+              proposal.id,
+              {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+            )
+
+          receive do
+            {:proposal_approved, ^task_id, approved_workflow} ->
+              assert approved_workflow.id == workflow.id
+              assert approved_workflow.status == :approved
+              assert approved_workflow.proposal.id == proposal.id
+          after
+            1_000 ->
+              flunk("did not receive proposal_approved")
+          end
+      after
+        1_000 ->
+          flunk("did not receive proposal_produced")
+      end
+    end
+
+
+
+    test "reviewing and rejecting" do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow =
+        receive do
+        {:workflow_created, ^task_id, workflow} ->
+          workflow
+      after
+        1_000 ->
+          flunk("did not receive workflow_created")
+      end
+
+      receive do
+        {:workflow_planning, ^task_id, _workflow} ->
+          :ok
+      after
+        1_000 ->
+          flunk("did not receive workflow_planning")
+      end
+
+      receive do
+        {:proposal_produced, ^task_id, produced_workflow, proposal} ->
+          assert produced_workflow.status == :validating
+
+          :ok =
+            Current.review_proposal(
+              proposal.id,
+              {:reject, %{reviewed_by: :test_user, note: "does NOT look good"}}
+            )
+
+          receive do
+            {:proposal_rejected, ^task_id, rejected_workflow} ->
+              assert rejected_workflow.id == workflow.id
+              assert rejected_workflow.status == :rejected
+              assert rejected_workflow.proposal.id == proposal.id
+          after
+            1_000 ->
+              flunk("did not receive proposal_rejected")
+          end
+      after
+        1_000 ->
+          flunk("did not receive proposal_produced")
+      end
+    end
   end
 end

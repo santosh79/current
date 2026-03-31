@@ -1,7 +1,11 @@
 defmodule Current do
   use GenServer
 
-  alias Current.{Request, Id, Workflow, WorkflowOrchestrator, WorkflowStore}
+  alias Current.{Request, Id, Workflow, WorkflowOrchestrator, WorkflowStore, RuntimeRegistry}
+
+  @type decision ::
+          {:approve, metadata :: map()}
+          | {:reject, metadata :: map()}
 
   @type state :: %{}
 
@@ -30,6 +34,21 @@ defmodule Current do
     GenServer.call(__MODULE__, {:get_status, task_id})
   end
 
+  @spec review_proposal(Current.Id.t(), decision()) ::
+          :ok | {:error, :not_found}
+  def review_proposal(proposal_id, decision) do
+    {:ok, workflow} = WorkflowStore.get_by_proposal_id(proposal_id)
+
+    case RuntimeRegistry.get(workflow.id) do
+      {:ok, %{workflow_pid: w_pid, orchestrator_pid: o_pid}} ->
+        send(o_pid, {:review_proposal, w_pid, proposal_id, decision})
+        :ok
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
   ## Server callbacks
 
   @impl true
@@ -41,7 +60,13 @@ defmodule Current do
 
     spawn_link(fn ->
       {:ok, orchestrator_pid} = WorkflowOrchestrator.start_link(listeners: [caller_pid])
-      {:ok, _workflow_pid} = Workflow.create(task_id, req, orchestrator_pid)
+      {:ok, workflow_pid, workflow_id} = Workflow.create(task_id, req, orchestrator_pid)
+
+      :ok =
+        RuntimeRegistry.put(workflow_id, %{
+          workflow_pid: workflow_pid,
+          orchestrator_pid: orchestrator_pid
+        })
     end)
 
     {:reply, {:ok, task_id}, state}
