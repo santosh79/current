@@ -149,8 +149,6 @@ defmodule CurrentTest do
       end
     end
 
-
-
     test "reviewing and rejecting" do
       req = %Request{
         input: "add email validation to signup flow",
@@ -161,12 +159,12 @@ defmodule CurrentTest do
 
       workflow =
         receive do
-        {:workflow_created, ^task_id, workflow} ->
-          workflow
-      after
-        1_000 ->
-          flunk("did not receive workflow_created")
-      end
+          {:workflow_created, ^task_id, workflow} ->
+            workflow
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
 
       receive do
         {:workflow_planning, ^task_id, _workflow} ->
@@ -199,6 +197,14 @@ defmodule CurrentTest do
         1_000 ->
           flunk("did not receive proposal_produced")
       end
+    end
+
+    test "reviewing an unknown proposal returns not_found" do
+      unknown_proposal_id =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+      {:error, :not_found} =
+        Current.review_proposal(unknown_proposal_id, {:approve, %{reviewed_by: :test_user}})
     end
   end
 end
