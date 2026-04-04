@@ -64,7 +64,7 @@ defmodule CurrentTest do
 
       planning_workflow =
         receive do
-          {:workflow_planning, ^task_id, workflow} ->
+          {:proposal_production_started, ^task_id, workflow} ->
             assert %Workflow{} = workflow
             assert workflow.id == created_workflow.id
             assert workflow.task_id == task_id
@@ -74,7 +74,7 @@ defmodule CurrentTest do
             workflow
         after
           1_000 ->
-            flunk("did not receive workflow_planning")
+            flunk("did not receive proposal_production_started")
         end
 
       receive do
@@ -117,11 +117,11 @@ defmodule CurrentTest do
         end
 
       receive do
-        {:workflow_planning, ^task_id, _workflow} ->
+        {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
         1_000 ->
-          flunk("did not receive workflow_planning")
+          flunk("did not receive proposal_production_started")
       end
 
       receive do
@@ -167,11 +167,11 @@ defmodule CurrentTest do
         end
 
       receive do
-        {:workflow_planning, ^task_id, _workflow} ->
+        {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
         1_000 ->
-          flunk("did not receive workflow_planning")
+          flunk("did not receive proposal_production_started")
       end
 
       receive do
@@ -205,6 +205,46 @@ defmodule CurrentTest do
 
       {:error, :not_found} =
         Current.review_proposal(unknown_proposal_id, {:approve, %{reviewed_by: :test_user}})
+    end
+
+    test "orchestrator logs workflow lifecycle events in order" do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow_id =
+        receive do
+          {:workflow_created, ^task_id, workflow} ->
+            workflow.id
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
+
+      receive do
+        {:proposal_production_started, ^task_id, _workflow} -> :ok
+      after
+        1_000 ->
+          flunk("did not receive proposal_production_started")
+      end
+
+      receive do
+        {:proposal_produced, ^task_id, _workflow, _proposal} -> :ok
+      after
+        1_000 ->
+          flunk("did not receive proposal_produced")
+      end
+
+      events = Current.EventStore.list_by_workflow_id(workflow_id)
+
+      assert Enum.map(events, & &1.type) == [
+               :workflow_created,
+               :proposal_production_started,
+               :proposal_produced
+             ]
     end
   end
 end

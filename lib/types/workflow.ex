@@ -181,7 +181,7 @@ defmodule Current.Workflow do
 
     :ok = WorkflowStore.put(updated_workflow)
 
-    send(orchestrator_pid, {:workflow_planning, self(), updated_workflow})
+    send(orchestrator_pid, {:proposal_production_started, self(), updated_workflow})
 
     {:noreply, %{state | workflow: updated_workflow}}
   end
@@ -212,7 +212,7 @@ defmodule Current.Workflow do
   @impl true
   def handle_cast(
         {:review_proposal, proposal_id, {:reject, _metadata}},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+        %{workflow: %Current.Workflow{} = workflow, orchestrator_pid: orchestrator_pid} = state
       ) do
     case workflow.proposal do
       %Proposal{id: ^proposal_id} ->

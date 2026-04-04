@@ -24,3 +24,5 @@ current-*.tar
 
 # ignore the concatenated docs file if need be
 combined.md
+
+combined_code.txt

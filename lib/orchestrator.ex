@@ -2,8 +2,8 @@ defmodule Current.WorkflowOrchestrator do
   use GenServer
 
   @type state :: %{
-          listeners: [pid()]
-        }
+    listeners: [pid()]
+  }
 
   ## Client API
 
@@ -19,15 +19,18 @@ defmodule Current.WorkflowOrchestrator do
   def init(state), do: {:ok, state}
 
   @impl true
-  def handle_info({:workflow_created, workflow_pid, workflow}, state)
-      when is_pid(workflow_pid) do
+  def handle_info({:workflow_created, workflow_pid, %Current.Workflow{} = workflow}, state)
+  when is_pid(workflow_pid) do
+    :ok = create_event(:workflow_created, workflow)
     notify_listeners(state.listeners, {:workflow_created, workflow.task_id, workflow})
     GenServer.cast(workflow_pid, :start_planning)
     {:noreply, state}
   end
 
   @impl true
-  def handle_info({:proposal_produced, _workflow_pid, workflow}, state) do
+  def handle_info({:proposal_produced, _workflow_pid, %Current.Workflow{} = workflow}, state) do
+    :ok = create_event(:proposal_produced, workflow)
+
     notify_listeners(
       state.listeners,
       {:proposal_produced, workflow.task_id, workflow, workflow.proposal}
@@ -37,9 +40,11 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   @impl true
-  def handle_info({:workflow_planning, workflow_pid, workflow}, state)
-      when is_pid(workflow_pid) do
-    notify_listeners(state.listeners, {:workflow_planning, workflow.task_id, workflow})
+  def handle_info({:proposal_production_started, workflow_pid, %Current.Workflow{} = workflow}, state)
+  when is_pid(workflow_pid) do
+    :ok = create_event(:proposal_production_started, workflow)
+
+    notify_listeners(state.listeners, {:proposal_production_started, workflow.task_id, workflow})
     GenServer.cast(workflow_pid, :produce_proposal)
     {:noreply, state}
   end
@@ -51,13 +56,17 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   @impl true
-  def handle_info({:proposal_approved, _workflow_pid, workflow}, state) do
+  def handle_info({:proposal_approved, _workflow_pid, %Current.Workflow{} = workflow}, state) do
+    :ok = create_event(:proposal_approved, workflow)
+
     notify_listeners(state.listeners, {:proposal_approved, workflow.task_id, workflow})
     {:noreply, state}
   end
 
   @impl true
-  def handle_info({:proposal_rejected, _workflow_pid, workflow}, state) do
+  def handle_info({:proposal_rejected, _workflow_pid, %Current.Workflow{} = workflow}, state) do
+    :ok = create_event(:proposal_rejected, workflow)
+
     notify_listeners(state.listeners, {:proposal_rejected, workflow.task_id, workflow})
     {:noreply, state}
   end
@@ -67,6 +76,22 @@ defmodule Current.WorkflowOrchestrator do
       send(pid, message)
     end)
 
+    :ok
+  end
+
+  defp create_event(event_type, %Current.Workflow{} = workflow) do
+    event = %Current.Event{
+      id: Current.Id.generate(),
+      workflow_id: workflow.id,
+      type: event_type,
+      data: %{
+        task_id: workflow.task_id,
+        workflow: workflow
+      },
+      timestamp: DateTime.utc_now()
+    }
+
+    :ok = Current.EventStore.append(event)
     :ok
   end
 end
