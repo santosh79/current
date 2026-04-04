@@ -232,6 +232,7 @@ defmodule Current.Workflow do
     end
   end
 
+  # SantoshTODO: Stop Hardcoding
   defp build_proposal(%Request{} = req, workflow_id) do
     proposal_id = Id.generate()
 
