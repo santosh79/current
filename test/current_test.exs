@@ -242,5 +242,170 @@ defmodule CurrentTest do
     end
 
 
+    test "event log entries carry the correct workflow snapshot at each stage" do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow_id =
+        receive do
+        {:workflow_created, ^task_id, workflow} ->
+          workflow.id
+      after
+        1_000 ->
+          flunk("did not receive workflow_created")
+      end
+
+      receive do
+        {:proposal_production_started, ^task_id, _workflow} ->
+          :ok
+      after
+        1_000 ->
+          flunk("did not receive proposal_production_started")
+      end
+
+      proposal_id =
+        receive do
+        {:proposal_produced, ^task_id, workflow, proposal} ->
+          assert workflow.status == :validating
+          proposal.id
+      after
+        1_000 ->
+          flunk("did not receive proposal_produced")
+      end
+
+      assert :ok =
+        Current.review_proposal(
+          proposal_id,
+          {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+        )
+
+      receive do
+        {:proposal_approved, ^task_id, workflow} ->
+          assert workflow.status == :approved
+      after
+        1_000 ->
+          flunk("did not receive proposal_approved")
+      end
+
+      events = Current.EventStore.list_by_workflow_id(workflow_id)
+
+      assert length(events) == 4
+
+      [created, production_started, produced, approved] = events
+
+      assert created.type == :workflow_created
+      assert created.data.workflow.id == workflow_id
+      assert created.data.workflow.task_id == task_id
+      assert created.data.workflow.status == :created
+      assert created.data.workflow.proposal == nil
+
+      assert production_started.type == :proposal_production_started
+      assert production_started.data.workflow.id == workflow_id
+      assert production_started.data.workflow.task_id == task_id
+      assert production_started.data.workflow.status == :planning
+      assert production_started.data.workflow.proposal == nil
+      assert production_started.data.workflow.started_at != nil
+
+      assert produced.type == :proposal_produced
+      assert produced.data.workflow.id == workflow_id
+      assert produced.data.workflow.task_id == task_id
+      assert produced.data.workflow.status == :validating
+      assert produced.data.workflow.proposal != nil
+      assert produced.data.workflow.proposal.id == proposal_id
+
+      assert approved.type == :proposal_approved
+      assert approved.data.workflow.id == workflow_id
+      assert approved.data.workflow.task_id == task_id
+      assert approved.data.workflow.status == :approved
+      assert approved.data.workflow.proposal != nil
+      assert approved.data.workflow.proposal.id == proposal_id
+    end
+
+    test "rejection event log entries carry the correct workflow snapshot at each stage" do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow_id =
+        receive do
+        {:workflow_created, ^task_id, workflow} ->
+          workflow.id
+      after
+        1_000 ->
+          flunk("did not receive workflow_created")
+      end
+
+      receive do
+        {:proposal_production_started, ^task_id, _workflow} ->
+          :ok
+      after
+        1_000 ->
+          flunk("did not receive proposal_production_started")
+      end
+
+      proposal_id =
+        receive do
+        {:proposal_produced, ^task_id, workflow, proposal} ->
+          assert workflow.status == :validating
+          proposal.id
+      after
+        1_000 ->
+          flunk("did not receive proposal_produced")
+      end
+
+      assert :ok =
+        Current.review_proposal(
+          proposal_id,
+          {:reject, %{reviewed_by: :test_user, note: "proposal is not acceptable"}}
+        )
+
+      receive do
+        {:proposal_rejected, ^task_id, workflow} ->
+          assert workflow.status == :rejected
+      after
+        1_000 ->
+          flunk("did not receive proposal_rejected")
+      end
+
+      events = Current.EventStore.list_by_workflow_id(workflow_id)
+
+      assert length(events) == 4
+
+      [created, production_started, produced, rejected] = events
+
+      assert created.type == :workflow_created
+      assert created.data.workflow.id == workflow_id
+      assert created.data.workflow.task_id == task_id
+      assert created.data.workflow.status == :created
+      assert created.data.workflow.proposal == nil
+
+      assert production_started.type == :proposal_production_started
+      assert production_started.data.workflow.id == workflow_id
+      assert production_started.data.workflow.task_id == task_id
+      assert production_started.data.workflow.status == :planning
+      assert production_started.data.workflow.proposal == nil
+      assert production_started.data.workflow.started_at != nil
+
+      assert produced.type == :proposal_produced
+      assert produced.data.workflow.id == workflow_id
+      assert produced.data.workflow.task_id == task_id
+      assert produced.data.workflow.status == :validating
+      assert produced.data.workflow.proposal != nil
+      assert produced.data.workflow.proposal.id == proposal_id
+
+      assert rejected.type == :proposal_rejected
+      assert rejected.data.workflow.id == workflow_id
+      assert rejected.data.workflow.task_id == task_id
+      assert rejected.data.workflow.status == :rejected
+      assert rejected.data.workflow.proposal != nil
+      assert rejected.data.workflow.proposal.id == proposal_id
+    end
   end
 end
