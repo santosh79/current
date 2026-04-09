@@ -7,7 +7,7 @@ defmodule CurrentTest do
   alias Current.Proposal
 
   describe "workflow lifecycle" do
-    test "get_status returns the workflow status for a submitted task" do
+    test "request submission" do
       req = %Request{
         input: "add email validation to signup flow",
         context: %{}
@@ -115,7 +115,7 @@ defmodule CurrentTest do
     # receive proposal_approved
     # fetch event log and assert ordered event types
 
-    test "orchestrator logs approval lifecycle events in order" do
+    test "approving a proposal" do
       req = %Request{
         input: "add email validation to signup flow",
         context: %{}
@@ -181,7 +181,7 @@ defmodule CurrentTest do
     # call Current.review_proposal/2 with reject
     # receive proposal_rejected
     # fetch event log and assert ordered event types
-    test "orchestrator logs rejection lifecycle events in order" do
+    test "rejecting a proposal" do
       req = %Request{
         input: "add email validation to signup flow",
         context: %{}
