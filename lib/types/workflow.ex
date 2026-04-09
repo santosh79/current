@@ -167,7 +167,7 @@ defmodule Current.Workflow do
 
     :ok = WorkflowStore.put(updated_workflow)
 
-    send(orchestrator_pid, {:proposal_production_started, self(), updated_workflow})
+    send(orchestrator_pid, {:proposal_production_started, updated_workflow})
 
     updated_workflow = produce_proposal(state, updated_workflow)
 
@@ -176,7 +176,7 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-        {:review_proposal, proposal_id, {:approve, _metadata}},
+        {:record_proposal_decision, proposal_id, {:approve, _metadata} = decision},
         %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
       ) do
     case workflow.proposal do
@@ -188,7 +188,7 @@ defmodule Current.Workflow do
         }
 
         :ok = WorkflowStore.put(updated_workflow)
-        send(orchestrator_pid, {:proposal_approved, self(), updated_workflow})
+        send(orchestrator_pid, {:proposal_decision_recorded, decision, updated_workflow})
 
         {:noreply, %{state | workflow: updated_workflow}}
 
@@ -199,8 +199,8 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-        {:review_proposal, proposal_id, {:reject, _metadata}},
-        %{workflow: %Current.Workflow{} = workflow, orchestrator_pid: orchestrator_pid} = state
+    {:record_proposal_decision, proposal_id, {:reject, _metadata} = decision},
+    %{workflow: %Current.Workflow{} = workflow, orchestrator_pid: orchestrator_pid} = state
       ) do
     case workflow.proposal do
       %Proposal{id: ^proposal_id} ->
@@ -211,7 +211,7 @@ defmodule Current.Workflow do
         }
 
         :ok = WorkflowStore.put(updated_workflow)
-        send(orchestrator_pid, {:proposal_rejected, self(), updated_workflow})
+        send(orchestrator_pid, {:proposal_decision_recorded, decision, updated_workflow})
 
         {:noreply, %{state | workflow: updated_workflow}}
 
@@ -227,7 +227,7 @@ defmodule Current.Workflow do
       ) do
     updated_workflow = %{workflow | status: :applying, updated_at: DateTime.utc_now()}
     :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:effect_applied, self(), updated_workflow})
+    send(orchestrator_pid, {:effect_applied, updated_workflow})
     {:noreply, %{state | workflow: updated_workflow}}
   end
 
@@ -237,7 +237,7 @@ defmodule Current.Workflow do
         %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
       ) do
     artifact = build_artifact(workflow)
-    send(orchestrator_pid, {:artifact_produced, self(), workflow, artifact})
+    send(orchestrator_pid, {:artifact_produced, workflow, artifact})
     {:noreply, state}
   end
 
@@ -256,7 +256,7 @@ defmodule Current.Workflow do
     }
 
     :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:workflow_result_assembled, self(), updated_workflow, result})
+    send(orchestrator_pid, {:workflow_result_assembled, updated_workflow, result})
     {:noreply, %{state | workflow: updated_workflow}}
   end
 
@@ -270,7 +270,7 @@ defmodule Current.Workflow do
     }
 
     :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:workflow_completed, self(), updated_workflow})
+    send(orchestrator_pid, {:workflow_completed, updated_workflow})
     {:noreply, %{state | workflow: updated_workflow}}
   end
 
@@ -291,7 +291,7 @@ defmodule Current.Workflow do
 
     send(
       orchestrator_pid,
-      {:proposal_produced, self(), updated_workflow}
+      {:proposal_produced, updated_workflow}
     )
 
     updated_workflow

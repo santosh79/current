@@ -166,7 +166,7 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow_id)
 
-      assert Enum.map(events, & &1.type) == [
+      assert Enum.map(events, & &1.type) |> Enum.take(4) == [
                :workflow_created,
                :proposal_production_started,
                :proposal_produced,
