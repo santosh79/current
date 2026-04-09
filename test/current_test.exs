@@ -50,32 +50,32 @@ defmodule CurrentTest do
 
       created_workflow =
         receive do
-        {:workflow_created, ^task_id, workflow} ->
-          assert %Workflow{} = workflow
-          assert :ok = Current.Id.validate(workflow.id)
-          assert workflow.task_id == task_id
-          assert workflow.status == :created
-          assert workflow.proposal == nil
-          workflow
-      after
-        1_000 ->
-          flunk("did not receive workflow_created")
-      end
+          {:workflow_created, ^task_id, workflow} ->
+            assert %Workflow{} = workflow
+            assert :ok = Current.Id.validate(workflow.id)
+            assert workflow.task_id == task_id
+            assert workflow.status == :created
+            assert workflow.proposal == nil
+            workflow
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
 
       planning_workflow =
         receive do
-        {:proposal_production_started, ^task_id, workflow} ->
-          assert %Workflow{} = workflow
-          assert workflow.id == created_workflow.id
-          assert workflow.task_id == task_id
-          assert workflow.status == :planning
-          assert workflow.proposal == nil
-          assert workflow.started_at != nil
-          workflow
-      after
-        1_000 ->
-          flunk("did not receive proposal_production_started")
-      end
+          {:proposal_production_started, ^task_id, workflow} ->
+            assert %Workflow{} = workflow
+            assert workflow.id == created_workflow.id
+            assert workflow.task_id == task_id
+            assert workflow.status == :planning
+            assert workflow.proposal == nil
+            assert workflow.started_at != nil
+            workflow
+        after
+          1_000 ->
+            flunk("did not receive proposal_production_started")
+        end
 
       receive do
         {:proposal_produced, ^task_id, workflow, proposal} ->
@@ -125,12 +125,12 @@ defmodule CurrentTest do
 
       workflow_id =
         receive do
-        {:workflow_created, ^task_id, workflow} ->
-          workflow.id
-      after
-        1_000 ->
-          flunk("did not receive workflow_created")
-      end
+          {:workflow_created, ^task_id, workflow} ->
+            workflow.id
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -142,19 +142,19 @@ defmodule CurrentTest do
 
       proposal_id =
         receive do
-        {:proposal_produced, ^task_id, workflow, proposal} ->
-          assert workflow.status == :validating
-          proposal.id
-      after
-        1_000 ->
-          flunk("did not receive proposal_produced")
-      end
+          {:proposal_produced, ^task_id, workflow, proposal} ->
+            assert workflow.status == :validating
+            proposal.id
+        after
+          1_000 ->
+            flunk("did not receive proposal_produced")
+        end
 
       assert :ok =
-        Current.review_proposal(
-          proposal_id,
-          {:approve, %{reviewed_by: :test_user, note: "looks good"}}
-        )
+               Current.review_proposal(
+                 proposal_id,
+                 {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+               )
 
       receive do
         {:proposal_approved, ^task_id, workflow} ->
@@ -167,13 +167,12 @@ defmodule CurrentTest do
       events = Current.EventStore.list_by_workflow_id(workflow_id)
 
       assert Enum.map(events, & &1.type) == [
-        :workflow_created,
-        :proposal_production_started,
-        :proposal_produced,
-        :proposal_approved
-      ]
+               :workflow_created,
+               :proposal_production_started,
+               :proposal_produced,
+               :proposal_approved
+             ]
     end
-
 
     # submit task
     # receive workflow_created
@@ -192,12 +191,12 @@ defmodule CurrentTest do
 
       workflow_id =
         receive do
-        {:workflow_created, ^task_id, workflow} ->
-          workflow.id
-      after
-        1_000 ->
-          flunk("did not receive workflow_created")
-      end
+          {:workflow_created, ^task_id, workflow} ->
+            workflow.id
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -209,19 +208,19 @@ defmodule CurrentTest do
 
       proposal_id =
         receive do
-        {:proposal_produced, ^task_id, workflow, proposal} ->
-          assert workflow.status == :validating
-          proposal.id
-      after
-        1_000 ->
-          flunk("did not receive proposal_produced")
-      end
+          {:proposal_produced, ^task_id, workflow, proposal} ->
+            assert workflow.status == :validating
+            proposal.id
+        after
+          1_000 ->
+            flunk("did not receive proposal_produced")
+        end
 
       assert :ok =
-        Current.review_proposal(
-          proposal_id,
-          {:reject, %{reviewed_by: :test_user, note: "proposal is not acceptable"}}
-        )
+               Current.review_proposal(
+                 proposal_id,
+                 {:reject, %{reviewed_by: :test_user, note: "proposal is not acceptable"}}
+               )
 
       receive do
         {:proposal_rejected, ^task_id, workflow} ->
@@ -234,13 +233,12 @@ defmodule CurrentTest do
       events = Current.EventStore.list_by_workflow_id(workflow_id)
 
       assert Enum.map(events, & &1.type) == [
-        :workflow_created,
-        :proposal_production_started,
-        :proposal_produced,
-        :proposal_rejected
-      ]
+               :workflow_created,
+               :proposal_production_started,
+               :proposal_produced,
+               :proposal_rejected
+             ]
     end
-
 
     test "event log entries carry the correct workflow snapshot at each stage" do
       req = %Request{
@@ -252,12 +250,12 @@ defmodule CurrentTest do
 
       workflow_id =
         receive do
-        {:workflow_created, ^task_id, workflow} ->
-          workflow.id
-      after
-        1_000 ->
-          flunk("did not receive workflow_created")
-      end
+          {:workflow_created, ^task_id, workflow} ->
+            workflow.id
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -269,19 +267,19 @@ defmodule CurrentTest do
 
       proposal_id =
         receive do
-        {:proposal_produced, ^task_id, workflow, proposal} ->
-          assert workflow.status == :validating
-          proposal.id
-      after
-        1_000 ->
-          flunk("did not receive proposal_produced")
-      end
+          {:proposal_produced, ^task_id, workflow, proposal} ->
+            assert workflow.status == :validating
+            proposal.id
+        after
+          1_000 ->
+            flunk("did not receive proposal_produced")
+        end
 
       assert :ok =
-        Current.review_proposal(
-          proposal_id,
-          {:approve, %{reviewed_by: :test_user, note: "looks good"}}
-        )
+               Current.review_proposal(
+                 proposal_id,
+                 {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+               )
 
       receive do
         {:proposal_approved, ^task_id, workflow} ->
@@ -335,12 +333,12 @@ defmodule CurrentTest do
 
       workflow_id =
         receive do
-        {:workflow_created, ^task_id, workflow} ->
-          workflow.id
-      after
-        1_000 ->
-          flunk("did not receive workflow_created")
-      end
+          {:workflow_created, ^task_id, workflow} ->
+            workflow.id
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -352,19 +350,19 @@ defmodule CurrentTest do
 
       proposal_id =
         receive do
-        {:proposal_produced, ^task_id, workflow, proposal} ->
-          assert workflow.status == :validating
-          proposal.id
-      after
-        1_000 ->
-          flunk("did not receive proposal_produced")
-      end
+          {:proposal_produced, ^task_id, workflow, proposal} ->
+            assert workflow.status == :validating
+            proposal.id
+        after
+          1_000 ->
+            flunk("did not receive proposal_produced")
+        end
 
       assert :ok =
-        Current.review_proposal(
-          proposal_id,
-          {:reject, %{reviewed_by: :test_user, note: "proposal is not acceptable"}}
-        )
+               Current.review_proposal(
+                 proposal_id,
+                 {:reject, %{reviewed_by: :test_user, note: "proposal is not acceptable"}}
+               )
 
       receive do
         {:proposal_rejected, ^task_id, workflow} ->
@@ -406,6 +404,140 @@ defmodule CurrentTest do
       assert rejected.data.workflow.status == :rejected
       assert rejected.data.workflow.proposal != nil
       assert rejected.data.workflow.proposal.id == proposal_id
+    end
+
+    test "approved proposal advances through effect application, artifact production, assembly, and completion" do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow =
+        receive do
+          {:workflow_created, ^task_id, workflow} ->
+            workflow
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
+
+      receive do
+        {:proposal_production_started, ^task_id, planning_workflow} ->
+          assert planning_workflow.id == workflow.id
+          assert planning_workflow.status == :planning
+          assert planning_workflow.proposal == nil
+      after
+        1_000 ->
+          flunk("did not receive proposal_production_started")
+      end
+
+      proposal =
+        receive do
+          {:proposal_produced, ^task_id, produced_workflow, proposal} ->
+            assert produced_workflow.id == workflow.id
+            assert produced_workflow.status == :validating
+            assert produced_workflow.proposal.id == proposal.id
+            assert length(proposal.intents) > 0
+            proposal
+        after
+          1_000 ->
+            flunk("did not receive proposal_produced")
+        end
+
+      assert :ok =
+               Current.review_proposal(
+                 proposal.id,
+                 {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+               )
+
+      receive do
+        {:proposal_approved, ^task_id, approved_workflow} ->
+          assert approved_workflow.id == workflow.id
+          assert approved_workflow.status == :approved
+          assert approved_workflow.proposal.id == proposal.id
+      after
+        1_000 ->
+          flunk("did not receive proposal_approved")
+      end
+
+      receive do
+        {:effect_applied, ^task_id, effect_workflow} ->
+          assert effect_workflow.id == workflow.id
+          assert effect_workflow.status == :applying
+          assert effect_workflow.proposal.id == proposal.id
+      after
+        1_000 ->
+          flunk("did not receive effect_applied")
+      end
+
+      _artifact =
+        receive do
+          {:artifact_produced, ^task_id, artifact_workflow, artifact} ->
+            assert artifact_workflow.id == workflow.id
+            assert artifact_workflow.status in [:applying, :assembling_result]
+            assert artifact_workflow.proposal.id == proposal.id
+
+            assert %Current.Artifact{} = artifact
+            assert :ok = Current.Id.validate(artifact.id)
+            assert artifact.workflow_id == workflow.id
+
+            artifact
+        after
+          1_000 ->
+            flunk("did not receive artifact_produced")
+        end
+
+      workflow_result =
+        receive do
+          {:workflow_result_assembled, ^task_id, assembled_workflow, workflow_result} ->
+            assert assembled_workflow.id == workflow.id
+            assert assembled_workflow.status in [:assembling_result, :completed]
+            assert assembled_workflow.proposal.id == proposal.id
+
+            assert %Current.WorkflowResult{} = workflow_result
+            assert :ok = Current.Id.validate(workflow_result.id)
+            assert workflow_result.workflow_id == workflow.id
+            assert length(workflow_result.artifacts) > 0
+
+            workflow_result
+        after
+          1_000 ->
+            flunk("did not receive workflow_result_assembled")
+        end
+
+      receive do
+        {:workflow_completed, ^task_id, completed_workflow} ->
+          assert completed_workflow.id == workflow.id
+          assert completed_workflow.status == :completed
+          assert completed_workflow.proposal.id == proposal.id
+          assert completed_workflow.result != nil
+          assert completed_workflow.result.id == workflow_result.id
+      after
+        1_000 ->
+          flunk("did not receive workflow_completed")
+      end
+
+      {:ok, final_workflow} = Current.get_workflow(task_id)
+      assert final_workflow.id == workflow.id
+      assert final_workflow.status == :completed
+      assert final_workflow.proposal.id == proposal.id
+      assert final_workflow.result != nil
+      assert final_workflow.result.id == workflow_result.id
+
+      events = Current.EventStore.list_by_workflow_id(workflow.id)
+
+      assert Enum.map(events, & &1.type) == [
+               :workflow_created,
+               :proposal_production_started,
+               :proposal_produced,
+               :proposal_approved,
+               :effect_applied,
+               :artifact_produced,
+               :workflow_result_assembled,
+               :workflow_completed
+             ]
     end
   end
 end

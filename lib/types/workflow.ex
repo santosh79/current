@@ -17,7 +17,7 @@ defmodule Current.Workflow do
     :task_id,
     :status,
     :proposal,
-    :workflow_artifact,
+    :result,
     :events,
     :started_at,
     :created_at,
@@ -33,7 +33,7 @@ defmodule Current.Workflow do
           | :waiting_for_approval
           | :approved
           | :applying
-          | :assembling_artifact
+          | :assembling_result
           | :completed
           | :rejected
           | :failed
@@ -43,7 +43,7 @@ defmodule Current.Workflow do
           task_id: Current.Id.t(),
           status: status(),
           proposal: Current.Proposal.t() | nil,
-          workflow_artifact: Current.WorkflowArtifact.t() | nil,
+          result: Current.WorkflowResult.t() | nil,
           events: [Current.Event.t()],
           created_at: DateTime.t(),
           started_at: DateTime.t() | nil,
@@ -60,13 +60,23 @@ defmodule Current.Workflow do
 
   @type workflow_event ::
           {:workflow_created, pid(), t()}
-          | {:workflow_planning, pid(), t()}
+          | {:proposal_production_started, pid(), t()}
           | {:proposal_produced, pid(), t()}
+          | {:proposal_approved, pid(), t()}
+          | {:proposal_rejected, pid(), t()}
+          | {:effect_applied, pid(), t()}
+          | {:artifact_produced, pid(), t(), Current.Artifact.t()}
+          | {:workflow_result_assembled, pid(), t(), Current.WorkflowResult.t()}
+          | {:workflow_completed, pid(), t()}
 
   @type workflow_command ::
           :start_planning
           | :produce_proposal
           | {:review_proposal, Current.Id.t(), Current.decision()}
+          | :apply_effects
+          | :produce_artifact
+          | {:assemble_result, [Current.Artifact.t()]}
+          | :complete
 
   ## Client API
 
@@ -120,7 +130,7 @@ defmodule Current.Workflow do
       task_id: task_id,
       status: :created,
       proposal: nil,
-      workflow_artifact: nil,
+      result: nil,
       events: [],
       started_at: nil,
       created_at: now,
@@ -145,30 +155,6 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-        :produce_proposal,
-        %{workflow: workflow, request: req, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    proposal = build_proposal(req, workflow.id)
-
-    updated_workflow = %{
-      workflow
-      | proposal: proposal,
-        status: :validating,
-        updated_at: DateTime.utc_now()
-    }
-
-    :ok = WorkflowStore.put(updated_workflow)
-
-    send(
-      orchestrator_pid,
-      {:proposal_produced, self(), updated_workflow}
-    )
-
-    {:noreply, %{state | workflow: updated_workflow}}
-  end
-
-  @impl true
-  def handle_cast(
         :start_planning,
         %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
       ) do
@@ -182,6 +168,8 @@ defmodule Current.Workflow do
     :ok = WorkflowStore.put(updated_workflow)
 
     send(orchestrator_pid, {:proposal_production_started, self(), updated_workflow})
+
+    updated_workflow = produce_proposal(state, updated_workflow)
 
     {:noreply, %{state | workflow: updated_workflow}}
   end
@@ -230,6 +218,109 @@ defmodule Current.Workflow do
       _ ->
         {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_cast(
+        :apply_effects,
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    updated_workflow = %{workflow | status: :applying, updated_at: DateTime.utc_now()}
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:effect_applied, self(), updated_workflow})
+    {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  @impl true
+  def handle_cast(
+        :produce_artifact,
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    artifact = build_artifact(workflow)
+    send(orchestrator_pid, {:artifact_produced, self(), workflow, artifact})
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast(
+        {:assemble_result, artifacts},
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    result = build_workflow_result(workflow, artifacts)
+
+    updated_workflow = %{
+      workflow
+      | status: :assembling_result,
+        result: result,
+        updated_at: DateTime.utc_now()
+    }
+
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:workflow_result_assembled, self(), updated_workflow, result})
+    {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  @impl true
+  def handle_cast(:complete, %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state) do
+    updated_workflow = %{
+      workflow
+      | status: :completed,
+        completed_at: DateTime.utc_now(),
+        updated_at: DateTime.utc_now()
+    }
+
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:workflow_completed, self(), updated_workflow})
+    {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  defp produce_proposal(
+         %{request: req, orchestrator_pid: orchestrator_pid},
+         %Current.Workflow{} = workflow
+       ) do
+    proposal = build_proposal(req, workflow.id)
+
+    updated_workflow = %{
+      workflow
+      | proposal: proposal,
+        status: :validating,
+        updated_at: DateTime.utc_now()
+    }
+
+    :ok = WorkflowStore.put(updated_workflow)
+
+    send(
+      orchestrator_pid,
+      {:proposal_produced, self(), updated_workflow}
+    )
+
+    updated_workflow
+  end
+
+  # SantoshTODO: Stop Hardcoding
+  defp build_workflow_result(workflow, artifacts) do
+    %Current.WorkflowResult{
+      id: Id.generate(),
+      workflow_id: workflow.id,
+      type: :result_bundle,
+      artifacts: Enum.map(artifacts, & &1.id),
+      summary: nil,
+      metadata: %{},
+      created_at: DateTime.utc_now()
+    }
+  end
+
+  # SantoshTODO: Stop Hardcoding
+  defp build_artifact(workflow) do
+    %Current.Artifact{
+      id: Id.generate(),
+      workflow_id: workflow.id,
+      name: :file_patch_result,
+      type: :file_patch_result,
+      storage: %{backend: :filesystem, path: "/tmp/stub"},
+      metadata: %{},
+      timestamp: DateTime.utc_now()
+    }
   end
 
   # SantoshTODO: Stop Hardcoding

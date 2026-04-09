@@ -11,7 +11,6 @@ defmodule Current.Event do
   @valid_types [
     :task_submitted,
     :workflow_created,
-    :workflow_started,
     :proposal_production_started,
     :proposal_produced,
     :approval_requested,
@@ -24,7 +23,7 @@ defmodule Current.Event do
     :effect_failed,
     :artifact_produced,
     :claim_verified,
-    :workflow_artifact_assembled,
+    :workflow_result_assembled,
     :workflow_completed,
     :workflow_failed,
   ]

@@ -73,7 +73,7 @@ defmodule Current.Workflow do
           task_id: Current.Id.t(),
           status: status(),
           proposal: Current.Proposal.t() | nil,
-          workflow_artifact: Current.WorkflowArtifact.t() | nil,
+          result: Current.WorkflowResult.t() | nil,
           events: [Current.Event.t()],
           created_at: DateTime.t(),
           started_at: DateTime.t() | nil,
@@ -209,27 +209,6 @@ defmodule Current.Artifact do
 end
 ```
 
-#### ArtifactRef
-
-```elixir
-defmodule Current.ArtifactRef do
-  @enforce_keys [:id, :workflow_id]
-  defstruct [
-    :id,
-    :name,
-    :workflow_id,
-    :type
-  ]
-
-  @type t :: %__MODULE__{
-          id: Current.Id.t(),
-          workflow_id: Current.Id.t(),
-          name: atom() | nil,
-          type: Current.Artifact.type() | nil
-        }
-end
-```
-
 ### Event
 
 ```elixir
@@ -272,10 +251,10 @@ defmodule Current.Event do
 end
 ```
 
-### WorkflowArtifact
+### WorkflowResult
 
 ```elixir
-defmodule Current.WorkflowArtifact do
+defmodule Current.WorkflowResult do
   @enforce_keys [:id, :workflow_id, :type, :artifacts, :created_at]
   defstruct [
     :id,
@@ -298,7 +277,7 @@ defmodule Current.WorkflowArtifact do
           id: Current.Id.t(),
           workflow_id: Current.Id.t(),
           type: type(),
-          artifacts: [Current.ArtifactRef.t()],
+          artifacts: [Current.Id.t()],
           summary: String.t() | nil,
           metadata: map() | nil,
           created_at: DateTime.t()

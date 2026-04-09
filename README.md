@@ -63,7 +63,7 @@ Intents
     ↓
 Artifacts
     ↓
-WorkflowArtifact
+WorkflowResult
 
 Events are emitted throughout and form the canonical system record.
 ```
@@ -83,7 +83,7 @@ Task submitted
 → Intents applied (:applying)
 → Artifacts produced
 
-→ WorkflowArtifact assembled (:assembling_artifact)
+→ WorkflowResult assembled (:assembling_result)
 
 → Workflow completes (:completed)
    or is rejected (:rejected)
