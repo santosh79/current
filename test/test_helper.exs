@@ -1,4 +1,5 @@
 ExUnit.start()
+:ok = :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
 {:ok, _} = Current.RuntimeRegistry.start_link([])
 {:ok, _} = Current.TaskStore.start_link([])
 {:ok, _} = Current.WorkflowStore.start_link([])

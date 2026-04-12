@@ -1,5 +1,6 @@
 defmodule CurrentTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: false
+
   doctest Current
 
   alias Current.Request
@@ -694,6 +695,88 @@ defmodule CurrentTest do
           assert result_event.data.result.workflow_id == workflow_id
           assert result_event.data.result.type == assembled_result.type
           assert result_event.data.result.artifacts == assembled_result.artifacts
+    end
+
+    test "approved proposal can fail during execution and the workflow fails" do
+      :persistent_term.put(:proposal_builder, Current.FaultyProposalBuilder)
+      on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
+
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{force_effect_failure: true}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow =
+        receive do
+          {:workflow_created, ^task_id, workflow} -> workflow
+        after
+          1_000 -> flunk("did not receive workflow_created")
+        end
+
+      receive do
+        {:proposal_production_started, ^task_id, _workflow} -> :ok
+      after
+        1_000 -> flunk("did not receive proposal_production_started")
+      end
+
+      proposal =
+        receive do
+          {:proposal_produced, ^task_id, produced_workflow, proposal} ->
+            assert produced_workflow.status == :validating
+            proposal
+        after
+          1_000 -> flunk("did not receive proposal_produced")
+        end
+
+      assert :ok =
+        Current.review_proposal(
+          proposal.id,
+          {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+        )
+
+      receive do
+        {:proposal_approved, ^task_id, approved_workflow} ->
+          assert approved_workflow.id == workflow.id
+          assert approved_workflow.status == :approved
+      after
+        1_000 -> flunk("did not receive proposal_approved")
+      end
+
+      receive do
+        {:effect_failed, ^task_id, failed_workflow, _reason} ->
+          assert failed_workflow.id == workflow.id
+      after
+        1_000 -> flunk("did not receive effect_failed")
+      end
+
+      receive do
+        {:workflow_failed, ^task_id, failed_workflow} ->
+          assert failed_workflow.id == workflow.id
+          assert failed_workflow.status == :failed
+          assert failed_workflow.proposal.id == proposal.id
+          assert failed_workflow.result == nil
+          assert failed_workflow.error != nil
+      after
+        1_000 -> flunk("did not receive workflow_failed")
+      end
+
+      {:ok, final_workflow} = Current.get_workflow(task_id)
+      assert final_workflow.status == :failed
+      assert final_workflow.result == nil
+      assert final_workflow.error != nil
+
+      events = Current.EventStore.list_by_workflow_id(workflow.id)
+
+      assert Enum.map(events, & &1.type) == [
+        :workflow_created,
+        :proposal_production_started,
+        :proposal_produced,
+        :proposal_approved,
+        :effect_failed,
+        :workflow_failed
+      ]
     end
   end
 end

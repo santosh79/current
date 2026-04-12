@@ -4,7 +4,6 @@ defmodule Current.Workflow do
   alias Current.{
     Id,
     Proposal,
-    Intent,
     WorkflowStore,
     TaskStore,
     Task,
@@ -199,8 +198,8 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-    {:record_proposal_decision, proposal_id, {:reject, _metadata} = decision},
-    %{workflow: %Current.Workflow{} = workflow, orchestrator_pid: orchestrator_pid} = state
+        {:record_proposal_decision, proposal_id, {:reject, _metadata} = decision},
+        %{workflow: %Current.Workflow{} = workflow, orchestrator_pid: orchestrator_pid} = state
       ) do
     case workflow.proposal do
       %Proposal{id: ^proposal_id} ->
@@ -225,17 +224,38 @@ defmodule Current.Workflow do
         :apply_effects,
         %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
       ) do
-    updated_workflow = %{workflow | status: :applying, updated_at: DateTime.utc_now()}
+    case apply_intents(workflow.proposal.intents) do
+      {:ok, _results} ->
+        updated_workflow = %{workflow | status: :applying, updated_at: DateTime.utc_now()}
+        :ok = WorkflowStore.put(updated_workflow)
+        send(orchestrator_pid, {:effect_applied, updated_workflow})
+        {:noreply, %{state | workflow: updated_workflow}}
+
+      {:error, reason} ->
+        send(orchestrator_pid, {:effect_failed, workflow, reason})
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:fail, reason}, %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state) do
+    updated_workflow = %{
+      workflow
+      | status: :failed,
+      error: reason,
+      updated_at: DateTime.utc_now()
+    }
+
     :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:effect_applied, updated_workflow})
+    send(orchestrator_pid, {:workflow_failed, updated_workflow})
     {:noreply, %{state | workflow: updated_workflow}}
   end
 
   @impl true
   def handle_cast(
-        :produce_artifact,
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
+    :produce_artifact,
+    %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+  ) do
     artifact = build_artifact(workflow)
     send(orchestrator_pid, {:artifact_produced, workflow, artifact})
     {:noreply, state}
@@ -243,16 +263,16 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-        {:assemble_result, artifacts},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
+    {:assemble_result, artifacts},
+    %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+  ) do
     result = build_workflow_result(workflow, artifacts)
 
     updated_workflow = %{
       workflow
       | status: :assembling_result,
-        result: result,
-        updated_at: DateTime.utc_now()
+      result: result,
+      updated_at: DateTime.utc_now()
     }
 
     :ok = WorkflowStore.put(updated_workflow)
@@ -265,8 +285,8 @@ defmodule Current.Workflow do
     updated_workflow = %{
       workflow
       | status: :completed,
-        completed_at: DateTime.utc_now(),
-        updated_at: DateTime.utc_now()
+      completed_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
     }
 
     :ok = WorkflowStore.put(updated_workflow)
@@ -275,25 +295,21 @@ defmodule Current.Workflow do
   end
 
   defp produce_proposal(
-         %{request: req, orchestrator_pid: orchestrator_pid},
-         %Current.Workflow{} = workflow
-       ) do
-    proposal = build_proposal(req, workflow.id)
+    %{request: req, orchestrator_pid: orchestrator_pid},
+    %Current.Workflow{} = workflow
+  ) do
+    builder = :persistent_term.get(:proposal_builder, Current.ProposalBuilder)
+    {:ok, proposal} = builder.build(req, workflow.id)
 
     updated_workflow = %{
       workflow
       | proposal: proposal,
-        status: :validating,
-        updated_at: DateTime.utc_now()
+      status: :validating,
+      updated_at: DateTime.utc_now()
     }
 
     :ok = WorkflowStore.put(updated_workflow)
-
-    send(
-      orchestrator_pid,
-      {:proposal_produced, updated_workflow}
-    )
-
+    send(orchestrator_pid, {:proposal_produced, updated_workflow})
     updated_workflow
   end
 
@@ -323,30 +339,14 @@ defmodule Current.Workflow do
     }
   end
 
-  # SantoshTODO: Stop Hardcoding
-  defp build_proposal(%Request{} = req, workflow_id) do
-    proposal_id = Id.generate()
+  defp apply_intents(intents), do: apply_intents(intents, [])
 
-    intent = %Intent{
-      id: Id.generate(),
-      proposal_id: proposal_id,
-      type: :file_patch,
-      payload: %{
-        path: "lib/my_app/signup.ex",
-        diff: "...diff..."
-      }
-    }
+  defp apply_intents([], acc), do: {:ok, Enum.reverse(acc)}
 
-    %Proposal{
-      id: proposal_id,
-      workflow_id: workflow_id,
-      intents: [intent],
-      justification: "Proposed changes for request: #{inspect(req.input)}",
-      claims: [
-        "invalid emails are rejected",
-        "existing behavior is unchanged"
-      ],
-      dependencies: []
-    }
+  defp apply_intents([intent | rest], acc) do
+    case Current.EffectApplicator.apply(intent) do
+      {:ok, result} -> apply_intents(rest, [{intent.id, result} | acc])
+      {:error, reason} -> {:error, reason}
+    end
   end
 end
