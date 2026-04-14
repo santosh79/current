@@ -103,7 +103,7 @@ It is the thing the workflow is trying to accomplish.
 
 ### Workflow
 A workflow is the system process created to carry a task from submission to outcome.  
-It owns the proposal, the lifecycle events, and the final workflow artifact.
+It owns the proposal, the lifecycle events, and the final workflow result.
 
 ### Proposal
 A proposal is a candidate response to a task, produced within a workflow.  

@@ -703,7 +703,7 @@ defmodule CurrentTest do
 
       req = %Request{
         input: "add email validation to signup flow",
-        context: %{force_effect_failure: true}
+        context: %{}
       }
 
       {:ok, task_id} = Current.submit_task(req, self())
