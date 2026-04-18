@@ -86,17 +86,31 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   @impl true
-  def handle_info({:effect_applied, %Current.Workflow{} = workflow}, state)
+  def handle_info({:effect_application_started, %Current.Workflow{} = workflow}, state)
   when is_pid(state.workflow_pid) do
-    :ok = create_event(:effect_applied, workflow)
-    notify_listeners(state.listeners, {:effect_applied, workflow.task_id, workflow})
+    :ok = create_event(:effect_application_started, workflow)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:effect_applied, %Current.Workflow{} = workflow, %Current.Intent{} = intent, result}, state)
+  when is_pid(state.workflow_pid) do
+    :ok = create_event(:effect_applied, workflow, intent, result)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:effects_applied, %Current.Workflow{} = workflow, intent_results}, state)
+  when is_pid(state.workflow_pid) do
+    :ok = create_event(:effects_applied, workflow, intent_results)
+    notify_listeners(state.listeners, {:effects_applied, workflow.task_id, workflow, intent_results})
     GenServer.cast(state.workflow_pid, :produce_artifact)
     {:noreply, state}
   end
 
 
   @impl true
-  def handle_info({:effect_failed, %Current.Workflow{} = workflow, reason}, state)
+  def handle_info({:effect_failed, %Current.Workflow{} = workflow, %Current.Intent{} = _intent, reason}, state)
   when is_pid(state.workflow_pid) do
     :ok = create_event(:effect_failed, workflow)
     notify_listeners(state.listeners, {:effect_failed, workflow.task_id, workflow, reason})
@@ -161,14 +175,42 @@ defmodule Current.WorkflowOrchestrator do
     :ok
   end
 
-  defp create_event(event_type, %Current.Workflow{} = workflow) do
+  defp create_event(
+    :effect_applied,
+    %Current.Workflow{} = workflow,
+    %Current.Intent{} = intent,
+    result
+  ) do
     event = %Current.Event{
       id: Current.Id.generate(),
       workflow_id: workflow.id,
-      type: event_type,
+      type: :effect_applied,
       data: %{
         task_id: workflow.task_id,
-        workflow: workflow
+        workflow: workflow,
+        intent: intent,
+        result: result
+      },
+      timestamp: DateTime.utc_now()
+    }
+
+    :ok = Current.EventStore.append(event)
+    :ok
+  end
+
+  defp create_event(
+    :effects_applied,
+    %Current.Workflow{} = workflow,
+    intent_results
+  ) do
+    event = %Current.Event{
+      id: Current.Id.generate(),
+      workflow_id: workflow.id,
+      type: :effects_applied,
+      data: %{
+        task_id: workflow.task_id,
+        workflow: workflow,
+        intent_results: intent_results
       },
       timestamp: DateTime.utc_now()
     }
@@ -211,6 +253,22 @@ defmodule Current.WorkflowOrchestrator do
         task_id: workflow.task_id,
         workflow: workflow,
         result: result
+      },
+      timestamp: DateTime.utc_now()
+    }
+
+    :ok = Current.EventStore.append(event)
+    :ok
+  end
+
+  defp create_event(event_type, %Current.Workflow{} = workflow) do
+    event = %Current.Event{
+      id: Current.Id.generate(),
+      workflow_id: workflow.id,
+      type: event_type,
+      data: %{
+        task_id: workflow.task_id,
+        workflow: workflow
       },
       timestamp: DateTime.utc_now()
     }

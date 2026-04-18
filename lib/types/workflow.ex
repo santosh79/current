@@ -26,56 +26,57 @@ defmodule Current.Workflow do
   ]
 
   @type status ::
-          :created
-          | :planning
-          | :validating
-          | :waiting_for_approval
-          | :approved
-          | :applying
-          | :assembling_result
-          | :completed
-          | :rejected
-          | :failed
+  :created
+  | :planning
+  | :validating
+  | :waiting_for_approval
+  | :approved
+  | :applying
+  | :assembling_result
+  | :completed
+  | :rejected
+  | :failed
 
   @type t :: %__MODULE__{
-          id: Current.Id.t(),
-          task_id: Current.Id.t(),
-          status: status(),
-          proposal: Current.Proposal.t() | nil,
-          result: Current.WorkflowResult.t() | nil,
-          events: [Current.Event.t()],
-          created_at: DateTime.t(),
-          started_at: DateTime.t() | nil,
-          completed_at: DateTime.t() | nil,
-          updated_at: DateTime.t() | nil,
-          error: String.t() | nil
-        }
+    id: Current.Id.t(),
+    task_id: Current.Id.t(),
+    status: status(),
+    proposal: Current.Proposal.t() | nil,
+    result: Current.WorkflowResult.t() | nil,
+    events: [Current.Event.t()],
+    created_at: DateTime.t(),
+    started_at: DateTime.t() | nil,
+    completed_at: DateTime.t() | nil,
+    updated_at: DateTime.t() | nil,
+    error: String.t() | nil
+  }
 
   @type state :: %{
-          workflow: t(),
-          request: Request.t(),
-          orchestrator_pid: pid()
-        }
+    workflow: t(),
+    request: Request.t(),
+    orchestrator_pid: pid()
+  }
 
   @type workflow_event ::
-          {:workflow_created, pid(), t()}
-          | {:proposal_production_started, pid(), t()}
-          | {:proposal_produced, pid(), t()}
-          | {:proposal_approved, pid(), t()}
-          | {:proposal_rejected, pid(), t()}
-          | {:effect_applied, pid(), t()}
-          | {:artifact_produced, pid(), t(), Current.Artifact.t()}
-          | {:workflow_result_assembled, pid(), t(), Current.WorkflowResult.t()}
-          | {:workflow_completed, pid(), t()}
+  {:workflow_created, pid(), t()}
+  | {:proposal_production_started, t()}
+  | {:proposal_produced, t()}
+  | {:effect_application_started, t()}
+  | {:effect_applied, t(), Current.Intent.t(), map()}
+  | {:effects_applied, t(), [{Current.Intent.t(), map()}]}
+  | {:effect_failed, t(), Current.Intent.t(), String.t()}
+  | {:artifact_produced, t(), Current.Artifact.t()}
+  | {:workflow_result_assembled, t(), Current.WorkflowResult.t()}
+  | {:workflow_completed, t()}
 
   @type workflow_command ::
-          :start_planning
-          | :produce_proposal
-          | {:review_proposal, Current.Id.t(), Current.decision()}
-          | :apply_effects
-          | :produce_artifact
-          | {:assemble_result, [Current.Artifact.t()]}
-          | :complete
+  :start_planning
+  | :produce_proposal
+  | {:review_proposal, Current.Id.t(), Current.decision()}
+  | :apply_effects
+  | :produce_artifact
+  | {:assemble_result, [Current.Artifact.t()]}
+  | :complete
 
   ## Client API
 
@@ -85,9 +86,9 @@ defmodule Current.Workflow do
   end
 
   @spec create(Current.Id.t(), Request.t(), pid()) ::
-          {:ok, pid(), Current.Id.t()} | {:error, term()}
+  {:ok, pid(), Current.Id.t()} | {:error, term()}
   def create(task_id, %Request{} = req, orchestrator_pid)
-      when is_pid(orchestrator_pid) do
+  when is_pid(orchestrator_pid) do
     workflow_id = Id.generate()
 
     {:ok, pid} =
@@ -154,14 +155,14 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-        :start_planning,
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
+    :start_planning,
+    %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+  ) do
     updated_workflow = %{
       workflow
       | status: :planning,
-        started_at: DateTime.utc_now(),
-        updated_at: DateTime.utc_now()
+      started_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
     }
 
     :ok = WorkflowStore.put(updated_workflow)
@@ -175,16 +176,16 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-        {:record_proposal_decision, proposal_id, {:approve, _metadata} = decision},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
+    {:record_proposal_decision, proposal_id, {:approve, _metadata} = decision},
+    %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+  ) do
     case workflow.proposal do
       %Proposal{id: ^proposal_id} ->
         updated_workflow = %{
-          workflow
-          | status: :approved,
-            updated_at: DateTime.utc_now()
-        }
+        workflow
+        | status: :approved,
+        updated_at: DateTime.utc_now()
+      }
 
         :ok = WorkflowStore.put(updated_workflow)
         send(orchestrator_pid, {:proposal_decision_recorded, decision, updated_workflow})
@@ -198,16 +199,16 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-        {:record_proposal_decision, proposal_id, {:reject, _metadata} = decision},
-        %{workflow: %Current.Workflow{} = workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
+    {:record_proposal_decision, proposal_id, {:reject, _metadata} = decision},
+    %{workflow: %Current.Workflow{} = workflow, orchestrator_pid: orchestrator_pid} = state
+  ) do
     case workflow.proposal do
       %Proposal{id: ^proposal_id} ->
         updated_workflow = %{
-          workflow
-          | status: :rejected,
-            updated_at: DateTime.utc_now()
-        }
+        workflow
+        | status: :rejected,
+        updated_at: DateTime.utc_now()
+      }
 
         :ok = WorkflowStore.put(updated_workflow)
         send(orchestrator_pid, {:proposal_decision_recorded, decision, updated_workflow})
@@ -221,19 +222,22 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-        :apply_effects,
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    case apply_intents(workflow.proposal.intents) do
-      {:ok, _results} ->
-        updated_workflow = %{workflow | status: :applying, updated_at: DateTime.utc_now()}
-        :ok = WorkflowStore.put(updated_workflow)
-        send(orchestrator_pid, {:effect_applied, updated_workflow})
+    :apply_effects,
+    %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+  ) do
+
+    updated_workflow = %{workflow | status: :applying, updated_at: DateTime.utc_now()}
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:effect_application_started, updated_workflow})
+
+    case apply_intents_streaming(workflow.proposal.intents, orchestrator_pid, updated_workflow, []) do
+      {:ok, intent_results} ->
+        send(orchestrator_pid, {:effects_applied, updated_workflow, intent_results})
         {:noreply, %{state | workflow: updated_workflow}}
 
-      {:error, reason} ->
-        send(orchestrator_pid, {:effect_failed, workflow, reason})
-        {:noreply, state}
+      {:error, intent, reason} ->
+        send(orchestrator_pid, {:effect_failed, updated_workflow, intent, reason})
+        {:noreply, %{state | workflow: updated_workflow}}
     end
   end
 
@@ -339,14 +343,18 @@ defmodule Current.Workflow do
     }
   end
 
-  defp apply_intents(intents), do: apply_intents(intents, [])
+  defp apply_intents_streaming([], _orchestrator_pid, _workflow, acc) do
+    {:ok, acc |> :lists.reverse}
+  end
 
-  defp apply_intents([], acc), do: {:ok, Enum.reverse(acc)}
-
-  defp apply_intents([intent | rest], acc) do
+  defp apply_intents_streaming([intent | rest], orchestrator_pid, workflow, acc) do
     case Current.EffectApplicator.apply(intent) do
-      {:ok, result} -> apply_intents(rest, [{intent.id, result} | acc])
-      {:error, reason} -> {:error, reason}
+      {:ok, result} ->
+        send(orchestrator_pid, {:effect_applied, workflow, intent, result})
+        apply_intents_streaming(rest, orchestrator_pid, workflow, [{intent, result} | acc])
+
+      {:error, reason} ->
+        {:error, intent, reason}
     end
   end
 end

@@ -464,13 +464,13 @@ defmodule CurrentTest do
         end
 
         receive do
-          {:effect_applied, ^task_id, effect_workflow} ->
+          {:effects_applied, ^task_id, effect_workflow, _intent_results} ->
             assert effect_workflow.id == workflow.id
             assert effect_workflow.status == :applying
             assert effect_workflow.proposal.id == proposal.id
         after
           1_000 ->
-            flunk("did not receive effect_applied")
+            flunk("did not receive effects_applied")
         end
 
         _artifact =
@@ -534,7 +534,9 @@ defmodule CurrentTest do
               :proposal_production_started,
               :proposal_produced,
               :proposal_approved,
+              :effect_application_started,
               :effect_applied,
+              :effects_applied,
               :artifact_produced,
               :workflow_result_assembled,
               :workflow_completed
@@ -774,9 +776,125 @@ defmodule CurrentTest do
         :proposal_production_started,
         :proposal_produced,
         :proposal_approved,
+        :effect_application_started,
         :effect_failed,
         :workflow_failed
       ]
     end
+
+
+    # test "proposal with 3 intents produces 3 artifacts and completes" do
+    #   :persistent_term.put(:proposal_builder, Current.MultiIntentProposalBuilder)
+    #   on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
+
+    #   req = %Request{
+    #     input: "add email validation to signup flow",
+    #     context: %{}
+    #   }
+
+    #   {:ok, task_id} = Current.submit_task(req, self())
+
+    #   workflow =
+    #     receive do
+    #     {:workflow_created, ^task_id, workflow} -> workflow
+    #   after
+    #     1_000 -> flunk("did not receive workflow_created")
+    #   end
+
+    #   receive do
+    #     {:proposal_production_started, ^task_id, _workflow} -> :ok
+    #   after
+    #     1_000 -> flunk("did not receive proposal_production_started")
+    #   end
+
+    #   proposal =
+    #     receive do
+    #     {:proposal_produced, ^task_id, produced_workflow, proposal} ->
+    #       assert produced_workflow.status == :validating
+    #       assert length(proposal.intents) == 3
+    #       proposal
+    #   after
+    #     1_000 -> flunk("did not receive proposal_produced")
+    #   end
+
+    #   assert :ok =
+    #     Current.review_proposal(
+    #       proposal.id,
+    #       {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+    #     )
+
+    #   receive do
+    #     {:proposal_approved, ^task_id, approved_workflow} ->
+    #       assert approved_workflow.status == :approved
+    #   after
+    #     1_000 -> flunk("did not receive proposal_approved")
+    #   end
+
+    #   receive do
+    #     {:effects_applied, ^task_id, effect_workflow} ->
+    #       assert effect_workflow.status == :applying
+    #   after
+    #     1_000 -> flunk("did not receive effects_applied")
+    #   end
+
+    #   artifacts = 1..3 |> Enum.map(fn(_) ->
+    #     receive do
+    #       {:artifact_produced, ^task_id, artifact_workflow, %Current.Artifact{} = artifact} ->
+    #         assert artifact_workflow.id == workflow.id
+    #         assert artifact_workflow.proposal.id == proposal.id
+    #         :ok = Current.Id.validate(artifact.id)
+    #         assert artifact.workflow_id == workflow.id
+    #         artifact
+    #     after
+    #       1_000 -> flunk("did not receive artifact_produced")
+    #     end
+    #   end)
+
+    #   artifact_ids = Enum.map(artifacts, & &1.id)
+
+    #   workflow_result =
+    #     receive do
+    #     {:workflow_result_assembled, ^task_id, assembled_workflow, workflow_result} ->
+    #       assert assembled_workflow.id == workflow.id
+    #       assert %Current.WorkflowResult{} = workflow_result
+    #       assert length(workflow_result.artifacts) == 3
+    #       assert Enum.sort(workflow_result.artifacts) == Enum.sort(artifact_ids)
+    #       workflow_result
+    #   after
+    #     1_000 -> flunk("did not receive workflow_result_assembled")
+    #   end
+
+    #   receive do
+    #     {:workflow_completed, ^task_id, completed_workflow} ->
+    #       assert completed_workflow.status == :completed
+    #       assert completed_workflow.result.id == workflow_result.id
+    #   after
+    #     1_000 -> flunk("did not receive workflow_completed")
+    #   end
+
+    #   {:ok, final_workflow} = Current.get_workflow(task_id)
+    #   assert final_workflow.status == :completed
+    #   assert length(final_workflow.result.artifacts) == 3
+    #   assert Enum.sort(final_workflow.result.artifacts) == Enum.sort(artifact_ids)
+
+    #   events = Current.EventStore.list_by_workflow_id(workflow.id)
+
+    #   assert Enum.map(events, & &1.type) == [
+    #   :workflow_created,
+    #   :proposal_production_started,
+    #   :proposal_produced,
+    #   :proposal_approved,
+    #   :effect_application_started,
+    #   :effect_applied,
+    #   :effect_applied,
+    #   :effect_applied,
+    #   :effects_applied,
+    #   :artifact_produced,
+    #   :artifact_produced,
+    #   :artifact_produced,
+    #   :workflow_result_assembled,
+    #   :workflow_completed
+    # ]
+    # end
   end
 end
