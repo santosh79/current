@@ -24,6 +24,7 @@ defmodule Current.Event do
     :effect_failed,
     :effects_applied,
     :artifact_produced,
+    :artifacts_produced,
     :claim_verified,
     :workflow_result_assembled,
     :workflow_completed,

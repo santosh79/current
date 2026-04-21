@@ -1,8 +1,9 @@
 defmodule Current.Artifact do
-  @enforce_keys [:id, :workflow_id, :type, :storage, :metadata, :timestamp]
+  @enforce_keys [:id, :workflow_id, :intent_id, :type, :storage, :metadata, :timestamp]
   defstruct [
     :id,
     :workflow_id,
+    :intent_id,
     :name,
     :type,
     :storage,
@@ -32,6 +33,7 @@ defmodule Current.Artifact do
   @type t :: %__MODULE__{
     id: Current.Id.t(),
     workflow_id: Current.Id.t(),
+    intent_id: Current.Id.t(),
     name: atom() | nil,
     type: type(),
     storage: storage(),

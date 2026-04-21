@@ -104,7 +104,7 @@ defmodule Current.WorkflowOrchestrator do
   when is_pid(state.workflow_pid) do
     :ok = create_event(:effects_applied, workflow, intent_results)
     notify_listeners(state.listeners, {:effects_applied, workflow.task_id, workflow, intent_results})
-    GenServer.cast(state.workflow_pid, :produce_artifact)
+    GenServer.cast(state.workflow_pid, {:produce_artifacts, intent_results})
     {:noreply, state}
   end
 
@@ -126,17 +126,24 @@ defmodule Current.WorkflowOrchestrator do
     {:noreply, state}
   end
 
-  # SantoshTODO: How do I know when artifact production has completed
   @impl true
   def handle_info(
-    {:artifact_produced, %Current.Workflow{} = workflow, %Current.Artifact{} = artifact},
+    {:artifact_produced, %Current.Workflow{} = workflow, intent_result, %Current.Artifact{} = artifact},
     state
   )
   when is_pid(state.workflow_pid) do
-    :ok = create_event(:artifact_produced, workflow, artifact)
+    :ok = create_event(:artifact_produced, workflow, intent_result, artifact)
     notify_listeners(state.listeners, {:artifact_produced, workflow.task_id, workflow, artifact})
-    # SantoshTODO: Stop hard coding and write a test
-    artifacts = [artifact]
+    {:noreply, state}
+  end
+
+  def handle_info(
+    {:artifacts_produced, %Current.Workflow{} = workflow, [%Current.Artifact{} | _ ] = artifacts},
+    state
+  )
+  when is_pid(state.workflow_pid) do
+    :ok = create_event(:artifacts_produced, workflow, artifacts)
+    notify_listeners(state.listeners, {:artifacts_produced, workflow.task_id, workflow, artifacts})
     GenServer.cast(state.workflow_pid, {:assemble_result, artifacts})
     {:noreply, state}
   end
@@ -175,6 +182,22 @@ defmodule Current.WorkflowOrchestrator do
     :ok
   end
 
+  defp create_event(event_type, %Current.Workflow{} = workflow) do
+    event = %Current.Event{
+      id: Current.Id.generate(),
+      workflow_id: workflow.id,
+      type: event_type,
+      data: %{
+        task_id: workflow.task_id,
+        workflow: workflow
+      },
+      timestamp: DateTime.utc_now()
+    }
+
+    :ok = Current.EventStore.append(event)
+    :ok
+  end
+
   defp create_event(
     :effect_applied,
     %Current.Workflow{} = workflow,
@@ -190,6 +213,31 @@ defmodule Current.WorkflowOrchestrator do
         workflow: workflow,
         intent: intent,
         result: result
+      },
+      timestamp: DateTime.utc_now()
+    }
+
+    :ok = Current.EventStore.append(event)
+    :ok
+  end
+
+  defp create_event(
+    :artifact_produced,
+    %Current.Workflow{} = workflow,
+    intent_result,
+    %Current.Artifact{} = artifact
+  ) do
+    {%Current.Intent{} = intent, result} = intent_result
+    event = %Current.Event{
+      id: Current.Id.generate(),
+      workflow_id: workflow.id,
+      type: :artifact_produced,
+      data: %{
+        task_id: workflow.task_id,
+        workflow: workflow,
+        intent: intent,
+        result: result,
+        artifact: artifact
       },
       timestamp: DateTime.utc_now()
     }
@@ -220,18 +268,18 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   defp create_event(
-    :artifact_produced,
+    :artifacts_produced,
     %Current.Workflow{} = workflow,
-    %Current.Artifact{} = artifact
+    [%Current.Artifact{} | _ ] = artifacts
   ) do
     event = %Current.Event{
       id: Current.Id.generate(),
       workflow_id: workflow.id,
-      type: :artifact_produced,
+      type: :artifacts_produced,
       data: %{
         task_id: workflow.task_id,
         workflow: workflow,
-        artifact: artifact
+        artifacts: artifacts
       },
       timestamp: DateTime.utc_now()
     }
@@ -253,22 +301,6 @@ defmodule Current.WorkflowOrchestrator do
         task_id: workflow.task_id,
         workflow: workflow,
         result: result
-      },
-      timestamp: DateTime.utc_now()
-    }
-
-    :ok = Current.EventStore.append(event)
-    :ok
-  end
-
-  defp create_event(event_type, %Current.Workflow{} = workflow) do
-    event = %Current.Event{
-      id: Current.Id.generate(),
-      workflow_id: workflow.id,
-      type: event_type,
-      data: %{
-        task_id: workflow.task_id,
-        workflow: workflow
       },
       timestamp: DateTime.utc_now()
     }

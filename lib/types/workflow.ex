@@ -257,11 +257,16 @@ defmodule Current.Workflow do
 
   @impl true
   def handle_cast(
-    :produce_artifact,
+    {:produce_artifacts, intent_results},
     %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
   ) do
-    artifact = build_artifact(workflow)
-    send(orchestrator_pid, {:artifact_produced, workflow, artifact})
+    artifacts = intent_results |>
+    Enum.map(fn(ir) ->
+      {:ok, art} = build_artifact(workflow, ir)
+      send(orchestrator_pid, {:artifact_produced, workflow, ir, art})
+      art
+    end)
+    send(orchestrator_pid, {:artifacts_produced, workflow, artifacts})
     {:noreply, state}
   end
 
@@ -331,16 +336,61 @@ defmodule Current.Workflow do
   end
 
   # SantoshTODO: Stop Hardcoding
-  defp build_artifact(workflow) do
-    %Current.Artifact{
-      id: Id.generate(),
-      workflow_id: workflow.id,
-      name: :file_patch_result,
-      type: :file_patch_result,
-      storage: %{backend: :filesystem, path: "/tmp/stub"},
-      metadata: %{},
-      timestamp: DateTime.utc_now()
-    }
+  # defp build_artifact(workflow, {%Current.Intent{} = _intent, _result} = _intent_result) do
+  #   res = %Current.Artifact{
+  #     id: Id.generate(),
+  #     workflow_id: workflow.id,
+  #     name: :file_patch_result,
+  #     type: :file_patch_result,
+  #     storage: %{backend: :filesystem, path: "/tmp/stub"},
+  #     metadata: %{},
+  #     timestamp: DateTime.utc_now()
+  #   }
+  #   {:ok, res}
+  # end
+
+  defp build_artifact(workflow, {%Current.Intent{} = intent, result}) do
+    {name, type, path_suffix} =
+      case intent.type do
+        :file_patch ->
+          {:file_patch_result, :file_patch_result, "file_patch_result.json"}
+
+        :write_file ->
+          {:write_file_result, :report, "write_file_result.json"}
+
+        :run_command ->
+          {:command_result, :command_result, "command_result.json"}
+
+        :read_file ->
+          {:read_result, :read_result, "read_result.json"}
+
+        :claim ->
+          {:claim_result, :claim_result, "claim_result.json"}
+
+        :report ->
+          {:report, :report, "report.json"}
+      end
+
+    path = "/tmp/current/#{workflow.id}/#{intent.id}/#{path_suffix}"
+    body = inspect(%{intent: intent, result: result}, pretty: true)
+
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, body)
+
+    {:ok,
+      %Current.Artifact{
+        id: Id.generate(),
+        workflow_id: workflow.id,
+        intent_id: intent.id,
+        name: name,
+        type: type,
+        storage: %{backend: :filesystem, path: path},
+        metadata: %{
+          bytes: byte_size(body),
+          content_type: "text/plain"
+        },
+        timestamp: DateTime.utc_now()
+      }}
   end
 
   defp apply_intents_streaming([], _orchestrator_pid, _workflow, acc) do
