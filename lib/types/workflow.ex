@@ -335,20 +335,6 @@ defmodule Current.Workflow do
     }
   end
 
-  # SantoshTODO: Stop Hardcoding
-  # defp build_artifact(workflow, {%Current.Intent{} = _intent, _result} = _intent_result) do
-  #   res = %Current.Artifact{
-  #     id: Id.generate(),
-  #     workflow_id: workflow.id,
-  #     name: :file_patch_result,
-  #     type: :file_patch_result,
-  #     storage: %{backend: :filesystem, path: "/tmp/stub"},
-  #     metadata: %{},
-  #     timestamp: DateTime.utc_now()
-  #   }
-  #   {:ok, res}
-  # end
-
   defp build_artifact(workflow, {%Current.Intent{} = intent, result}) do
     {name, type, path_suffix} =
       case intent.type do
@@ -371,6 +357,7 @@ defmodule Current.Workflow do
           {:report, :report, "report.json"}
       end
 
+    # SantoshTODO: Figure out a proper dir to store this in, ideally coming from config
     path = "/tmp/current/#{workflow.id}/#{intent.id}/#{path_suffix}"
     body = inspect(%{intent: intent, result: result}, pretty: true)
 
