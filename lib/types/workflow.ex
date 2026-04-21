@@ -261,11 +261,11 @@ defmodule Current.Workflow do
     %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
   ) do
     artifacts = intent_results |>
-    Enum.map(fn(ir) ->
-      {:ok, art} = build_artifact(workflow, ir)
-      send(orchestrator_pid, {:artifact_produced, workflow, ir, art})
-      art
-    end)
+      Enum.map(fn(ir) ->
+        {:ok, art} = Current.ArtifactBuilder.build(workflow, ir)
+        send(orchestrator_pid, {:artifact_produced, workflow, ir, art})
+        art
+      end)
     send(orchestrator_pid, {:artifacts_produced, workflow, artifacts})
     {:noreply, state}
   end
@@ -333,51 +333,6 @@ defmodule Current.Workflow do
       metadata: %{},
       created_at: DateTime.utc_now()
     }
-  end
-
-  defp build_artifact(workflow, {%Current.Intent{} = intent, result}) do
-    {name, type, path_suffix} =
-      case intent.type do
-        :file_patch ->
-          {:file_patch_result, :file_patch_result, "file_patch_result.json"}
-
-        :write_file ->
-          {:write_file_result, :report, "write_file_result.json"}
-
-        :run_command ->
-          {:command_result, :command_result, "command_result.json"}
-
-        :read_file ->
-          {:read_result, :read_result, "read_result.json"}
-
-        :claim ->
-          {:claim_result, :claim_result, "claim_result.json"}
-
-        :report ->
-          {:report, :report, "report.json"}
-      end
-
-    # SantoshTODO: Figure out a proper dir to store this in, ideally coming from config
-    path = "/tmp/current/#{workflow.id}/#{intent.id}/#{path_suffix}"
-    body = inspect(%{intent: intent, result: result}, pretty: true)
-
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, body)
-
-    {:ok,
-      %Current.Artifact{
-        id: Id.generate(),
-        workflow_id: workflow.id,
-        intent_id: intent.id,
-        name: name,
-        type: type,
-        storage: %{backend: :filesystem, path: path},
-        metadata: %{
-          bytes: byte_size(body),
-          content_type: "text/plain"
-        },
-        timestamp: DateTime.utc_now()
-      }}
   end
 
   defp apply_intents_streaming([], _orchestrator_pid, _workflow, acc) do
