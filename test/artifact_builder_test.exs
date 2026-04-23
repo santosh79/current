@@ -1,5 +1,5 @@
 defmodule Current.ArtifactBuilderTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Current.{ArtifactBuilder, Id, Intent, Workflow}
 

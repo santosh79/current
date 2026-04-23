@@ -41,27 +41,8 @@ defmodule CurrentTest do
     ## → orchestrator triggers proposal
     ## → workflow emits proposal
     test "orchestrator drives workflow transitions" do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-      assert :ok = Current.Id.validate(task_id)
-
-      created_workflow =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            assert %Workflow{} = workflow
-            assert :ok = Current.Id.validate(workflow.id)
-            assert workflow.task_id == task_id
-            assert workflow.status == :created
-            assert workflow.proposal == nil
-            workflow
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
+      created_workflow = workflow
 
       planning_workflow =
         receive do
@@ -117,21 +98,8 @@ defmodule CurrentTest do
     # fetch event log and assert ordered event types
 
     test "approving a proposal" do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow_id =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow.id
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
+      workflow_id = workflow.id
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -183,21 +151,8 @@ defmodule CurrentTest do
     # receive proposal_rejected
     # fetch event log and assert ordered event types
     test "rejecting a proposal" do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow_id =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow.id
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
+      workflow_id = workflow.id
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -242,21 +197,8 @@ defmodule CurrentTest do
     end
 
     test "event log entries carry the correct workflow snapshot at each stage" do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow_id =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow.id
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
+      workflow_id = workflow.id
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -325,21 +267,8 @@ defmodule CurrentTest do
     end
 
     test "rejection event log entries carry the correct workflow snapshot at each stage" do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow_id =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow.id
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
+      workflow_id = workflow.id
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -408,21 +337,7 @@ defmodule CurrentTest do
     end
 
     test "approved proposal advances through effect application, artifact production, assembly, and completion" do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
 
       receive do
         {:proposal_production_started, ^task_id, planning_workflow} ->
@@ -564,21 +479,8 @@ defmodule CurrentTest do
     end
 
     test "artifact_produced event carries the produced artifact payload" do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow_id =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow.id
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
+      workflow_id = workflow.id
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -642,21 +544,8 @@ defmodule CurrentTest do
     end
 
     test "workflow_result_assembled event carries the assembled result payload" do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow_id =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow.id
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
+      workflow_id = workflow.id
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -723,19 +612,7 @@ defmodule CurrentTest do
       :persistent_term.put(:proposal_builder, Current.FaultyProposalBuilder)
       on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
 
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow =
-        receive do
-          {:workflow_created, ^task_id, workflow} -> workflow
-        after
-          1_000 -> flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} -> :ok
@@ -812,21 +689,7 @@ defmodule CurrentTest do
       :persistent_term.put(:proposal_builder, Current.MultiIntentProposalBuilder)
       on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
 
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow
-        after
-          1_000 ->
-            flunk("did not receive workflow_created")
-        end
+      {:ok, task_id, workflow} = submit_simple_task()
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} ->
@@ -969,6 +832,26 @@ defmodule CurrentTest do
 
       assert Enum.sort(event_artifact_ids) == Enum.sort(artifact_ids)
       assert Enum.sort(Enum.map(produced_artifacts, & &1.id)) == Enum.sort(artifact_ids)
+    end
+
+    defp submit_simple_task do
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow =
+        receive do
+          {:workflow_created, ^task_id, workflow} ->
+            workflow
+        after
+          1_000 ->
+            flunk("did not receive workflow_created")
+        end
+
+      {:ok, task_id, workflow}
     end
   end
 end
