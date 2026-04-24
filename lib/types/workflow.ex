@@ -340,7 +340,8 @@ defmodule Current.Workflow do
   end
 
   defp apply_intents_streaming([intent | rest], orchestrator_pid, workflow, acc) do
-    case Current.EffectApplicator.apply(intent) do
+    applicator = :persistent_term.get(:effect_applicator, Current.EffectApplicator)
+    case applicator.apply(intent) do
       {:ok, result} ->
         send(orchestrator_pid, {:effect_applied, workflow, intent, result})
         apply_intents_streaming(rest, orchestrator_pid, workflow, [{intent, result} | acc])
