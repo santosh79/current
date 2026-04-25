@@ -973,6 +973,15 @@ defmodule CurrentTest do
                :effect_failed,
                :workflow_failed
              ]
+
+      failed_event =
+        Enum.find(events, &(&1.type == :workflow_failed)) ||
+          flunk("did not find workflow_failed event")
+
+      assert failed_event.data.workflow.status == :failed
+      assert failed_event.data.workflow.error != nil
+      assert failed_event.data.workflow.result == nil
+      assert failed_event.data.workflow.proposal.id == proposal.id
     end
   end
 end
