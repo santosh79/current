@@ -1,6 +1,7 @@
 defmodule Current.EffectApplicator do
   alias Current.Intent
 
+  @callback apply(Intent.t()) :: {:ok, map()} | {:error, String.t()}
   @spec apply(Intent.t()) :: {:ok, map()} | {:error, String.t()}
 
   # SantoshTODO: implement real effect logic

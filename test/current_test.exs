@@ -853,5 +853,126 @@ defmodule CurrentTest do
 
       {:ok, task_id, workflow}
     end
+
+    # proposal has 3 intents:
+    #   → approval succeeds
+    #   → effect application starts
+    #   → intent 1 applies
+    #   → intent 2 fails during application
+    #   → intent 3 is never applied
+    #   → no artifacts
+    #   → no result
+    #   → workflow_failed
+    test "workflow fails when second intent fails during effect application" do
+      :ok = :persistent_term.put(:proposal_builder, Current.SecondIntentFailsProposalBuilder)
+      :ok = :persistent_term.put(:effect_applicator, Current.FaultyEffectApplicator)
+
+      on_exit(fn ->
+        :ok = :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
+        :ok = :persistent_term.put(:effect_applicator, Current.EffectApplicator)
+      end)
+
+      req = %Request{
+        input: "add email validation to signup flow",
+        context: %{}
+      }
+
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow =
+        receive do
+          {:workflow_created, ^task_id, workflow} -> workflow
+        after
+          1_000 -> flunk("did not receive workflow_created")
+        end
+
+      receive do
+        {:proposal_production_started, ^task_id, _workflow} -> :ok
+      after
+        1_000 -> flunk("did not receive proposal_production_started")
+      end
+
+      proposal =
+        receive do
+          {:proposal_produced, ^task_id, produced_workflow, proposal} ->
+            assert produced_workflow.status == :validating
+            assert length(proposal.intents) == 3
+
+            assert Enum.map(proposal.intents, & &1.type) == [
+                     :file_patch,
+                     :file_patch,
+                     :run_command
+                   ]
+
+            proposal
+        after
+          1_000 -> flunk("did not receive proposal_produced")
+        end
+
+      assert :ok =
+               Current.review_proposal(
+                 proposal.id,
+                 {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+               )
+
+      receive do
+        {:proposal_approved, ^task_id, approved_workflow} ->
+          assert approved_workflow.status == :approved
+      after
+        1_000 -> flunk("did not receive proposal_approved")
+      end
+
+      receive do
+        {:effect_applied, ^task_id, effect_workflow, intent, _result} ->
+          assert effect_workflow.status == :applying
+          assert intent.type == :file_patch
+      after
+        1_000 -> flunk("did not receive first effect_applied")
+      end
+
+      receive do
+        {:effect_failed, ^task_id, failed_workflow, reason} ->
+          assert failed_workflow.status == :applying
+          assert failed_workflow.result == nil
+          assert is_binary(reason)
+      after
+        1_000 -> flunk("did not receive effect_failed")
+      end
+
+      receive do
+        {:workflow_failed, ^task_id, failed_workflow} ->
+          assert failed_workflow.id == workflow.id
+          assert failed_workflow.status == :failed
+          assert failed_workflow.proposal.id == proposal.id
+          assert failed_workflow.result == nil
+          assert failed_workflow.error != nil
+      after
+        1_000 -> flunk("did not receive workflow_failed")
+      end
+
+      refute_receive {:effects_applied, ^task_id, _, _}, 200
+      refute_receive {:artifact_produced, ^task_id, _, _}, 200
+      refute_receive {:artifacts_produced, ^task_id, _, _}, 200
+      refute_receive {:workflow_result_assembled, ^task_id, _, _}, 200
+      refute_receive {:workflow_completed, ^task_id, _}, 200
+
+      {:ok, final_workflow} = Current.get_workflow(task_id)
+      assert final_workflow.status == :failed
+      assert final_workflow.result == nil
+      assert final_workflow.error != nil
+
+      events = Current.EventStore.list_by_workflow_id(workflow.id)
+
+      assert Enum.map(events, & &1.type) == [
+               :workflow_created,
+               :proposal_production_started,
+               :proposal_produced,
+               :proposal_approved,
+               :effect_application_started,
+               :effect_applied,
+               :effect_failed,
+               :workflow_failed
+             ]
+    end
   end
 end
