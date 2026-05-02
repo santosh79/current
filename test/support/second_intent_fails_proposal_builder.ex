@@ -11,18 +11,46 @@ defmodule Current.SecondIntentFailsProposalBuilder do
 
     proposal_id = Id.generate()
 
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "current_second_intent_fails_#{System.unique_integer([:positive])}"
+      )
+
+    :ok = File.mkdir_p!(dir)
+    path = Path.join(dir, "stub.ex")
+    :ok = File.write!(path, "defmodule Stub do\nend\n")
+
+    good_diff = """
+    --- a/stub.ex
+    +++ b/stub.ex
+    @@ -1,2 +1,3 @@
+     defmodule Stub do
+    +  def ok, do: true
+     end
+    """
+
+    bad_diff = """
+    --- a/stub.ex
+    +++ b/stub.ex
+    @@ -1,2 +1,3 @@
+     defmodule WrongModule do
+    +  def bad, do: true
+     end
+    """
+
     intents = [
       %Intent{
         id: Id.generate(),
         proposal_id: proposal_id,
         type: :file_patch,
-        payload: %{path: "lib/stub.ex", diff: "..."}
+        payload: %{path: path, diff: good_diff}
       },
       %Intent{
         id: Id.generate(),
         proposal_id: proposal_id,
         type: :file_patch,
-        payload: %{path: "lib/stub.ex", diff: "...", force_failure: true}
+        payload: %{path: path, diff: bad_diff}
       },
       %Intent{
         id: Id.generate(),
