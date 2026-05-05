@@ -66,44 +66,43 @@ defmodule Current.EffectApplicatorTest do
     end
   end
 
-  # describe "apply/1 - unsupported intent type" do
-  #   test "returns error with descriptive message" do
-  #     intent = intent_fixture(:drop_database, %{})
-  #     assert {:error, reason} = EffectApplicator.apply(intent)
-  #     assert reason =~ "unsupported intent type"
-  #     assert reason =~ "drop_database"
-  #   end
+  describe "apply/1 - unsupported intent type" do
+    test "returns error with descriptive message" do
+      intent = intent_fixture(:drop_database, %{})
+      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert reason =~ "unsupported intent type"
+      assert reason =~ "drop_database"
+    end
 
-  #   test "error message includes the actual intent type" do
-  #     intent = intent_fixture(:launch_missiles, %{})
-  #     {:error, reason} = EffectApplicator.apply(intent)
-  #     assert reason =~ "launch_missiles"
-  #   end
-  # end
+    test "error message includes the actual intent type" do
+      intent = intent_fixture(:launch_missiles, %{})
+      {:error, reason} = EffectApplicator.apply(intent)
+      assert reason =~ "launch_missiles"
+    end
+  end
 
   # describe "apply/1 - run_command" do
-  #   test "executes the command and returns exit code 0 on success" do
-  #     intent = intent_fixture(:run_command, %{command: "echo hello"})
+  #   test "executes command and captures stdout" do
+  #     intent = intent_fixture(:run_command, %{cmd: "echo", args: ["hello"]})
+
   #     assert {:ok, result} = EffectApplicator.apply(intent)
   #     assert result.exit_code == 0
   #     assert result.stdout =~ "hello"
+  #     assert result.stderr == ""
   #   end
 
-  #   test "returns non-zero exit code on failure" do
-  #     intent = intent_fixture(:run_command, %{command: "exit 1"})
+  #   test "returns non-zero exit code without treating command failure as applicator failure" do
+  #     intent = intent_fixture(:run_command, %{cmd: "false", args: []})
+
   #     assert {:ok, result} = EffectApplicator.apply(intent)
   #     assert result.exit_code != 0
   #   end
 
-  #   test "captures stderr output" do
-  #     intent = intent_fixture(:run_command, %{command: "echo error >&2"})
-  #     assert {:ok, result} = EffectApplicator.apply(intent)
-  #     assert is_binary(result.stderr)
-  #   end
-
   #   test "returns error if command is not found" do
-  #     intent = intent_fixture(:run_command, %{command: "this_command_does_not_exist_xyz"})
-  #     assert {:error, _reason} = EffectApplicator.apply(intent)
+  #     intent = intent_fixture(:run_command, %{cmd: "this_command_does_not_exist_xyz", args: []})
+
+  #     assert {:error, reason} = EffectApplicator.apply(intent)
+  #     assert reason =~ "not found"
   #   end
   # end
 end

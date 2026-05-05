@@ -7,12 +7,12 @@ defmodule Current.EventStore do
   end
 
   @spec append(Current.Event.t()) :: :ok | {:error, :invalid_event}
-  def append(%Current.Event{} = event) do
-    case Current.Event.valid_type?(event.type) do
-      true ->
-        Agent.update(__MODULE__, fn events -> [event | events] end)
-        :ok
-      _ -> {:error, :invalid_event}
+  def append(event) do
+    if Current.Event.valid?(event) do
+      Agent.update(__MODULE__, fn events -> [event | events] end)
+      :ok
+    else
+      {:error, :invalid_event}
     end
   end
 

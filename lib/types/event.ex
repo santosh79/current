@@ -1,46 +1,37 @@
 defmodule Current.Event do
-  @enforce_keys [:id, :workflow_id, :type, :data, :timestamp]
-  defstruct [
-    :id,
-    :workflow_id,
-    :type,
-    :data,
-    :timestamp
+  @type t ::
+          Current.Event.WorkflowCreated.t()
+          | Current.Event.ProposalProductionStarted.t()
+          | Current.Event.ProposalProduced.t()
+          | Current.Event.ProposalApproved.t()
+          | Current.Event.ProposalRejected.t()
+          | Current.Event.EffectApplicationStarted.t()
+          | Current.Event.EffectApplied.t()
+          | Current.Event.EffectFailed.t()
+          | Current.Event.EffectsApplied.t()
+          | Current.Event.ArtifactProduced.t()
+          | Current.Event.ArtifactsProduced.t()
+          | Current.Event.WorkflowResultAssembled.t()
+          | Current.Event.WorkflowCompleted.t()
+          | Current.Event.WorkflowFailed.t()
+
+  @known_modules [
+    Current.Event.WorkflowCreated,
+    Current.Event.ProposalProductionStarted,
+    Current.Event.ProposalProduced,
+    Current.Event.ProposalApproved,
+    Current.Event.ProposalRejected,
+    Current.Event.EffectApplicationStarted,
+    Current.Event.EffectApplied,
+    Current.Event.EffectFailed,
+    Current.Event.EffectsApplied,
+    Current.Event.ArtifactProduced,
+    Current.Event.ArtifactsProduced,
+    Current.Event.WorkflowResultAssembled,
+    Current.Event.WorkflowCompleted,
+    Current.Event.WorkflowFailed
   ]
 
-  @valid_types [
-    :task_submitted,
-    :workflow_created,
-    :proposal_production_started,
-    :proposal_produced,
-    :approval_requested,
-    :proposal_approved,
-    :proposal_rejected,
-    :intent_proposed,
-    :intent_validated,
-    :intent_rejected,
-    :effect_application_started,
-    :effect_applied,
-    :effect_failed,
-    :effects_applied,
-    :artifact_produced,
-    :artifacts_produced,
-    :claim_verified,
-    :workflow_result_assembled,
-    :workflow_completed,
-    :workflow_failed,
-  ]
-
-  @type type :: unquote(Enum.reduce(@valid_types, &{:|, [], [&1, &2]}))
-
-  @type t :: %__MODULE__{
-    id: Current.Id.t(),
-    workflow_id: Current.Id.t(),
-    type: type(),
-    data: map(),
-    timestamp: DateTime.t()
-  }
-
-  def valid_type?(type), do: type in @valid_types
+  def valid?(%{__struct__: mod}), do: mod in @known_modules
+  def valid?(_), do: false
 end
-

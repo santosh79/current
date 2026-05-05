@@ -10,6 +10,7 @@ defmodule Current.MultiIntentProposalBuilder do
     end
 
     proposal_id = Id.generate()
+
     diff = """
     --- a/signup.ex
     +++ b/signup.ex
@@ -41,9 +42,10 @@ defmodule Current.MultiIntentProposalBuilder do
       %Intent{
         id: Id.generate(),
         proposal_id: proposal_id,
-        type: :run_command,
+        type: :write_file,
         payload: %{
-          command: "mix test test/my_app/signup_test.exs"
+          path: get_file_path(),
+          contents: "...MORE generated test contents..."
         }
       }
     ]
@@ -63,7 +65,7 @@ defmodule Current.MultiIntentProposalBuilder do
 
     {:ok, proposal}
   end
-  
+
   defp get_file_path() do
     dir = Path.join(System.tmp_dir!(), "current_multi_#{System.unique_integer([:positive])}")
     :ok = File.mkdir_p!(dir)
@@ -71,5 +73,4 @@ defmodule Current.MultiIntentProposalBuilder do
     File.write!(path, "defmodule Signup do\nend\n")
     path
   end
-
 end
