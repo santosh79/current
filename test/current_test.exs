@@ -141,13 +141,6 @@ defmodule CurrentTest do
                %Current.Event.ProposalProduced{},
                %Current.Event.ProposalApproved{}
              ] = events |> Enum.take(4)
-
-      # assert Enum.map(events, & &1.type) |> Enum.take(4) == [
-      #          :workflow_created,
-      #          :proposal_production_started,
-      #          :proposal_produced,
-      #          :proposal_approved
-      #        ]
     end
 
     # submit task
@@ -201,13 +194,6 @@ defmodule CurrentTest do
                %Current.Event.ProposalProduced{},
                %Current.Event.ProposalRejected{}
              ] = events
-
-      # assert Enum.map(events, & &1.type) == [
-      #          :workflow_created,
-      #          :proposal_production_started,
-      #          :proposal_produced,
-      #          :proposal_rejected
-      #        ]
     end
 
     test "event log entries carry the correct workflow snapshot at each stage" do
@@ -615,9 +601,6 @@ defmodule CurrentTest do
         result_event =
         Enum.find(events, &match?(%Current.Event.WorkflowResultAssembled{}, &1))
 
-      # Enum.find(events, fn event -> event.type == :workflow_result_assembled end) ||
-      #   flunk("did not find workflow_result_assembled event in event log")
-
       assert result_event.workflow_id == workflow_id
       assert result_event.workflow.task_id == task_id
       assert %Current.Workflow{} = result_event.workflow
@@ -698,16 +681,6 @@ defmodule CurrentTest do
                %Current.Event.EffectFailed{},
                %Current.Event.WorkflowFailed{}
              ] = events
-
-      # assert Enum.map(events, & &1.type) == [
-      #          :workflow_created,
-      #          :proposal_production_started,
-      #          :proposal_produced,
-      #          :proposal_approved,
-      #          :effect_application_started,
-      #          :effect_failed,
-      #          :workflow_failed
-      #        ]
     end
 
     # This test does the following:
@@ -860,8 +833,6 @@ defmodule CurrentTest do
         artifacts_produced_event =
         Enum.find(events, &match?(%Current.Event.ArtifactsProduced{}, &1))
 
-      # Enum.find(events, fn event -> event.type == :artifacts_produced end)
-
       event_artifact_ids = Enum.map(artifacts_produced_event.artifacts, & &1.id)
 
       assert Enum.sort(event_artifact_ids) == Enum.sort(artifact_ids)
@@ -1008,24 +979,9 @@ defmodule CurrentTest do
                %Current.Event.WorkflowFailed{}
              ] = events
 
-      # assert Enum.map(events, & &1.type) == [
-      #          :workflow_created,
-      #          :proposal_production_started,
-      #          :proposal_produced,
-      #          :proposal_approved,
-      #          :effect_application_started,
-      #          :effect_applied,
-      #          :effect_failed,
-      #          :workflow_failed
-      #        ]
-
       %Current.Event.WorkflowFailed{} =
         failed_event =
         Enum.find(events, &match?(%Current.Event.WorkflowFailed{}, &1))
-
-      # failed_event =
-      #   Enum.find(events, &(&1.type == :workflow_failed)) ||
-      #     flunk("did not find workflow_failed event")
 
       assert failed_event.workflow.status == :failed
       assert failed_event.workflow.error != nil

@@ -55,45 +55,30 @@ defmodule Current.EffectApplicator do
     cmd = Map.fetch!(intent.payload, :cmd)
     args = Map.get(intent.payload, :args, [])
 
-    stdout_path =
-      Path.join(System.tmp_dir!(), "current_stdout_#{System.unique_integer([:positive])}.txt")
-
-    stderr_path =
-      Path.join(System.tmp_dir!(), "current_stderr_#{System.unique_integer([:positive])}.txt")
-
-    script =
-      Enum.join(
-        [
-          shell_escape(cmd),
-          Enum.map_join(args, " ", &shell_escape/1),
-          ">",
-          shell_escape(stdout_path),
-          "2>",
-          shell_escape(stderr_path)
-        ],
-        " "
-      )
+    stdout_path = temp_path("stdout")
+    stderr_path = temp_path("stderr")
 
     try do
-      {_output, exit_code} = System.cmd("sh", ["-c", script], stderr_to_stdout: true)
+      case run_command_with_redirect(cmd, args, stdout_path, stderr_path) do
+        {:ok, exit_code} ->
+          stdout = File.read!(stdout_path)
+          stderr = File.read!(stderr_path)
 
-      stdout = File.read!(stdout_path)
-      stderr = File.read!(stderr_path)
+          with {:ok, stdout_artifact_id} <- Current.ArtifactStore.put("stdout.txt", stdout),
+               {:ok, stderr_artifact_id} <- Current.ArtifactStore.put("stderr.txt", stderr) do
+            {:ok,
+             %Current.EffectResult.Command{
+               exit_code: exit_code,
+               stdout_artifact_id: stdout_artifact_id,
+               stderr_artifact_id: stderr_artifact_id,
+               stdout_bytes: byte_size(stdout),
+               stderr_bytes: byte_size(stderr)
+             }}
+          end
 
-      {:ok, stdout_artifact_id} = Current.ArtifactStore.put("stdout.txt", stdout)
-      {:ok, stderr_artifact_id} = Current.ArtifactStore.put("stderr.txt", stderr)
-
-      {:ok,
-       %Current.EffectResult.Command{
-         exit_code: exit_code,
-         stdout_artifact_id: stdout_artifact_id,
-         stderr_artifact_id: stderr_artifact_id,
-         stdout_bytes: byte_size(stdout),
-         stderr_bytes: byte_size(stderr)
-       }}
-    rescue
-      e ->
-        {:error, "command failed: #{Exception.message(e)}"}
+        {:error, reason} ->
+          {:error, reason}
+      end
     after
       File.rm(stdout_path)
       File.rm(stderr_path)
@@ -114,7 +99,34 @@ defmodule Current.EffectApplicator do
 
   def apply(%Intent{type: type}), do: {:error, "unsupported intent type: #{type}"}
 
-  defp shell_escape(value) when is_binary(value) do
-    "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
+  defp run_command_with_redirect(cmd, args, stdout_path, stderr_path) do
+    executable = System.find_executable(cmd)
+
+    if executable == nil do
+      {:error, "command not found: #{cmd}"}
+    else
+      script = """
+      exec "$1" "${@:4}" > "$2" 2> "$3"
+      """
+
+      {_output, exit_code} =
+        System.cmd(
+          "bash",
+          ["-c", script, "current-runner", executable, stdout_path, stderr_path | args],
+          stderr_to_stdout: true
+        )
+
+      {:ok, exit_code}
+    end
+  rescue
+    e ->
+      {:error, "command failed: #{Exception.message(e)}"}
+  end
+
+  defp temp_path(label) do
+    Path.join(
+      System.tmp_dir!(),
+      "current_#{label}_#{System.unique_integer([:positive])}.txt"
+    )
   end
 end

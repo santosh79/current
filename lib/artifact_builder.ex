@@ -118,6 +118,8 @@ defmodule Current.ArtifactBuilder do
   end
 
   defp persist(workflow, intent, name, type, filename, body, metadata) do
+    # SantoshTODO: Stop hardcoding
+    # SantoshTODO: Figure out if a plug and play actor approach is better here
     path = "/tmp/current/#{workflow.id}/#{intent.id}/#{filename}"
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, body)
