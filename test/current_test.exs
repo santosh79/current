@@ -232,9 +232,9 @@ defmodule CurrentTest do
           flunk("did not receive proposal_approved")
       end
 
-      events = Current.EventStore.list_by_workflow_id(workflow_id)
+      events = Current.EventStore.list_by_workflow_id(workflow_id) |> Enum.take(4)
 
-      assert length(events) >= 4
+      assert length(events) == 4
 
       [
         %Current.Event.WorkflowCreated{} = created,

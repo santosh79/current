@@ -11,14 +11,17 @@ defmodule Current.MultiIntentProposalBuilder do
 
     proposal_id = Id.generate()
 
-    diff = """
-    --- a/signup.ex
-    +++ b/signup.ex
-    @@ -1,2 +1,3 @@
-     defmodule Signup do
-    +  def validate_email(email), do: String.contains?(email, "@")
-     end
-    """
+    diff =
+      [
+        "--- signup.ex",
+        "+++ signup.ex",
+        "@@ -1,2 +1,3 @@",
+        " defmodule Signup do",
+        "+  def validate_email(email), do: String.contains?(email, \"@\")",
+        " end",
+        ""
+      ]
+      |> Enum.join("\n")
 
     intents = [
       %Intent{

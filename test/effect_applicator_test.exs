@@ -24,14 +24,17 @@ defmodule Current.EffectApplicatorTest do
       path = Path.join(dir, "signup.ex")
       File.write!(path, "defmodule Signup do\nend\n")
 
-      diff = """
-      --- a/signup.ex
-      +++ b/signup.ex
-      @@ -1,2 +1,3 @@
-       defmodule Signup do
-      +  def validate_email(email), do: String.contains?(email, "@")
-       end
-      """
+      diff =
+        [
+          "--- signup.ex",
+          "+++ signup.ex",
+          "@@ -1,2 +1,3 @@",
+          " defmodule Signup do",
+          "+  def validate_email(email), do: String.contains?(email, \"@\")",
+          " end",
+          ""
+        ]
+        |> Enum.join("\n")
 
       intent = intent_fixture(:file_patch, %{path: path, diff: diff})
       assert {:ok, result} = EffectApplicator.apply(intent)
@@ -52,16 +55,7 @@ defmodule Current.EffectApplicatorTest do
       path = Path.join(dir, "app.ex")
       File.write!(path, "defmodule App do\nend\n")
 
-      bad_diff = """
-      --- a/app.ex
-      +++ b/app.ex
-      @@ -1,2 +1,3 @@
-       defmodule WrongModule do
-      +  def foo, do: :bar
-       end
-      """
-
-      intent = intent_fixture(:file_patch, %{path: path, diff: bad_diff})
+      intent = intent_fixture(:file_patch, %{path: path, diff: bad_diff()})
       assert {:error, _reason} = EffectApplicator.apply(intent)
     end
   end
@@ -81,28 +75,59 @@ defmodule Current.EffectApplicatorTest do
     end
   end
 
-  # describe "apply/1 - run_command" do
-  #   test "executes command and captures stdout" do
-  #     intent = intent_fixture(:run_command, %{cmd: "echo", args: ["hello"]})
+  describe "apply/1 - run_command" do
+    test "executes command and captures stdout" do
+      intent = intent_fixture(:run_command, %{cmd: "echo", args: ["hello"]})
+      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert result.exit_code == 0
+      assert result.stdout_bytes > 0
 
-  #     assert {:ok, result} = EffectApplicator.apply(intent)
-  #     assert result.exit_code == 0
-  #     assert result.stdout =~ "hello"
-  #     assert result.stderr == ""
-  #   end
+      {:ok, stdout_path} = Current.ArtifactStore.path_for(result.stdout_artifact_id)
+      stdout = File.read!(stdout_path)
 
-  #   test "returns non-zero exit code without treating command failure as applicator failure" do
-  #     intent = intent_fixture(:run_command, %{cmd: "false", args: []})
+      assert stdout =~ "hello"
 
-  #     assert {:ok, result} = EffectApplicator.apply(intent)
-  #     assert result.exit_code != 0
-  #   end
+      assert result.stderr_bytes == 0
+    end
 
-  #   test "returns error if command is not found" do
-  #     intent = intent_fixture(:run_command, %{cmd: "this_command_does_not_exist_xyz", args: []})
+    test "executes command and captures stderr" do
+      path_to_unknown_file = "/path/to/unknown/file"
+      intent = intent_fixture(:run_command, %{cmd: "cat", args: [path_to_unknown_file]})
+      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert result.exit_code > 0
 
-  #     assert {:error, reason} = EffectApplicator.apply(intent)
-  #     assert reason =~ "not found"
-  #   end
-  # end
+      assert result.stderr_bytes > 0
+      {:ok, stderr_path} = Current.ArtifactStore.path_for(result.stderr_artifact_id)
+      stderr = File.read!(stderr_path)
+      assert stderr =~ "No such file or directory"
+
+      assert result.stdout_bytes == 0
+    end
+
+    test "returns non-zero exit code without treating command failure as applicator failure" do
+      intent = intent_fixture(:run_command, %{cmd: "false", args: []})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert result.exit_code != 0
+      assert result.stderr_bytes == 0
+    end
+
+    test "returns error if command is not found" do
+      intent = intent_fixture(:run_command, %{cmd: "this_command_does_not_exist_xyz", args: []})
+
+      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert reason =~ "not found"
+    end
+  end
+
+  defp bad_diff() do
+    [
+      "--- app.ex",
+      "+++ app.ex",
+      "@@ -1,2 +1,3 @@",
+      " defmodule WrongModule do",
+      "+  def bad, do: true",
+      " end"
+    ] |> Enum.join("\n")
+  end
 end
