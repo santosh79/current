@@ -1,6 +1,8 @@
 defmodule Current.WorkflowOrchestrator do
   use GenServer
 
+  alias Current.Event
+
   @type state :: %{
           listeners: [pid()],
           workflow_pid: pid() | nil
@@ -22,19 +24,29 @@ defmodule Current.WorkflowOrchestrator do
   @impl true
   def handle_info({:workflow_created, workflow_pid, %Current.Workflow{} = workflow}, state)
       when is_pid(workflow_pid) do
-    :ok = create_event(:workflow_created, workflow)
+    :ok =
+      append_event(%Event.WorkflowCreated{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        timestamp: DateTime.utc_now()
+      })
+
     notify_listeners(state.listeners, {:workflow_created, workflow.task_id, workflow})
     GenServer.cast(workflow_pid, :start_planning)
     {:noreply, %{state | workflow_pid: workflow_pid}}
   end
 
   @impl true
-  def handle_info(
-        {:proposal_production_started, %Current.Workflow{} = workflow},
-        state
-      )
+  def handle_info({:proposal_production_started, %Current.Workflow{} = workflow}, state)
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:proposal_production_started, workflow)
+    :ok =
+      append_event(%Event.ProposalProductionStarted{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        timestamp: DateTime.utc_now()
+      })
 
     notify_listeners(state.listeners, {:proposal_production_started, workflow.task_id, workflow})
     {:noreply, state}
@@ -43,7 +55,13 @@ defmodule Current.WorkflowOrchestrator do
   @impl true
   def handle_info({:proposal_produced, %Current.Workflow{} = workflow}, state)
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:proposal_produced, workflow)
+    :ok =
+      append_event(%Event.ProposalProduced{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        timestamp: DateTime.utc_now()
+      })
 
     notify_listeners(
       state.listeners,
@@ -67,7 +85,14 @@ defmodule Current.WorkflowOrchestrator do
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:proposal_approved, workflow)
+    :ok =
+      append_event(%Event.ProposalApproved{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        timestamp: DateTime.utc_now()
+      })
+
     notify_listeners(state.listeners, {:proposal_approved, workflow.task_id, workflow})
     GenServer.cast(state.workflow_pid, :apply_effects)
     {:noreply, state}
@@ -80,7 +105,14 @@ defmodule Current.WorkflowOrchestrator do
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:proposal_rejected, workflow)
+    :ok =
+      append_event(%Event.ProposalRejected{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        timestamp: DateTime.utc_now()
+      })
+
     notify_listeners(state.listeners, {:proposal_rejected, workflow.task_id, workflow})
     {:noreply, state}
   end
@@ -88,7 +120,14 @@ defmodule Current.WorkflowOrchestrator do
   @impl true
   def handle_info({:effect_application_started, %Current.Workflow{} = workflow}, state)
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:effect_application_started, workflow)
+    :ok =
+      append_event(%Event.EffectApplicationStarted{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        timestamp: DateTime.utc_now()
+      })
+
     {:noreply, state}
   end
 
@@ -98,7 +137,15 @@ defmodule Current.WorkflowOrchestrator do
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:effect_applied, workflow, intent, result)
+    :ok =
+      append_event(%Event.EffectApplied{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        intent: intent,
+        result: result,
+        timestamp: DateTime.utc_now()
+      })
 
     notify_listeners(
       state.listeners,
@@ -111,7 +158,14 @@ defmodule Current.WorkflowOrchestrator do
   @impl true
   def handle_info({:effects_applied, %Current.Workflow{} = workflow, intent_results}, state)
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:effects_applied, workflow, intent_results)
+    :ok =
+      append_event(%Event.EffectsApplied{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        intent_results: intent_results,
+        timestamp: DateTime.utc_now()
+      })
 
     notify_listeners(
       state.listeners,
@@ -124,11 +178,20 @@ defmodule Current.WorkflowOrchestrator do
 
   @impl true
   def handle_info(
-        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent{} = _intent, reason},
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent{} = intent, reason},
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:effect_failed, workflow)
+    :ok =
+      append_event(%Event.EffectFailed{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        intent: intent,
+        reason: reason,
+        timestamp: DateTime.utc_now()
+      })
+
     notify_listeners(state.listeners, {:effect_failed, workflow.task_id, workflow, reason})
     GenServer.cast(state.workflow_pid, {:fail, reason})
     {:noreply, state}
@@ -137,30 +200,55 @@ defmodule Current.WorkflowOrchestrator do
   @impl true
   def handle_info({:workflow_failed, %Current.Workflow{} = workflow}, state)
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:workflow_failed, workflow)
+    :ok =
+      append_event(%Event.WorkflowFailed{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        timestamp: DateTime.utc_now()
+      })
+
     notify_listeners(state.listeners, {:workflow_failed, workflow.task_id, workflow})
     {:noreply, state}
   end
 
   @impl true
   def handle_info(
-        {:artifact_produced, %Current.Workflow{} = workflow, intent_result,
+        {:artifact_produced, %Current.Workflow{} = workflow, {%Current.Intent{} = intent, result},
          %Current.Artifact{} = artifact},
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:artifact_produced, workflow, intent_result, artifact)
+    :ok =
+      append_event(%Event.ArtifactProduced{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        intent: intent,
+        result: result,
+        artifact: artifact,
+        timestamp: DateTime.utc_now()
+      })
+
     notify_listeners(state.listeners, {:artifact_produced, workflow.task_id, workflow, artifact})
     {:noreply, state}
   end
 
+  @impl true
   def handle_info(
         {:artifacts_produced, %Current.Workflow{} = workflow,
          [%Current.Artifact{} | _] = artifacts},
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:artifacts_produced, workflow, artifacts)
+    :ok =
+      append_event(%Event.ArtifactsProduced{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        artifacts: artifacts,
+        timestamp: DateTime.utc_now()
+      })
 
     notify_listeners(
       state.listeners,
@@ -178,7 +266,14 @@ defmodule Current.WorkflowOrchestrator do
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:workflow_result_assembled, workflow, result)
+    :ok =
+      append_event(%Event.WorkflowResultAssembled{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        result: result,
+        timestamp: DateTime.utc_now()
+      })
 
     notify_listeners(
       state.listeners,
@@ -192,144 +287,25 @@ defmodule Current.WorkflowOrchestrator do
   @impl true
   def handle_info({:workflow_completed, %Current.Workflow{} = workflow}, state)
       when is_pid(state.workflow_pid) do
-    :ok = create_event(:workflow_completed, workflow)
+    :ok =
+      append_event(%Event.WorkflowCompleted{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        timestamp: DateTime.utc_now()
+      })
+
     notify_listeners(state.listeners, {:workflow_completed, workflow.task_id, workflow})
     {:noreply, state}
   end
 
+  defp append_event(event) do
+    :ok = Current.EventStore.append(event)
+    :ok
+  end
+
   defp notify_listeners(listeners, message) do
-    Enum.each(listeners, fn pid ->
-      send(pid, message)
-    end)
-
-    :ok
-  end
-
-  defp create_event(event_type, %Current.Workflow{} = workflow) do
-    event = %Current.Event{
-      id: Current.Id.generate(),
-      workflow_id: workflow.id,
-      type: event_type,
-      data: %{
-        task_id: workflow.task_id,
-        workflow: workflow
-      },
-      timestamp: DateTime.utc_now()
-    }
-
-    :ok = Current.EventStore.append(event)
-    :ok
-  end
-
-  defp create_event(
-         :effect_applied,
-         %Current.Workflow{} = workflow,
-         %Current.Intent{} = intent,
-         result
-       ) do
-    event = %Current.Event{
-      id: Current.Id.generate(),
-      workflow_id: workflow.id,
-      type: :effect_applied,
-      data: %{
-        task_id: workflow.task_id,
-        workflow: workflow,
-        intent: intent,
-        result: result
-      },
-      timestamp: DateTime.utc_now()
-    }
-
-    :ok = Current.EventStore.append(event)
-    :ok
-  end
-
-  defp create_event(
-         :artifact_produced,
-         %Current.Workflow{} = workflow,
-         intent_result,
-         %Current.Artifact{} = artifact
-       ) do
-    {%Current.Intent{} = intent, result} = intent_result
-
-    event = %Current.Event{
-      id: Current.Id.generate(),
-      workflow_id: workflow.id,
-      type: :artifact_produced,
-      data: %{
-        task_id: workflow.task_id,
-        workflow: workflow,
-        intent: intent,
-        result: result,
-        artifact: artifact
-      },
-      timestamp: DateTime.utc_now()
-    }
-
-    :ok = Current.EventStore.append(event)
-    :ok
-  end
-
-  defp create_event(
-         :effects_applied,
-         %Current.Workflow{} = workflow,
-         intent_results
-       ) do
-    event = %Current.Event{
-      id: Current.Id.generate(),
-      workflow_id: workflow.id,
-      type: :effects_applied,
-      data: %{
-        task_id: workflow.task_id,
-        workflow: workflow,
-        intent_results: intent_results
-      },
-      timestamp: DateTime.utc_now()
-    }
-
-    :ok = Current.EventStore.append(event)
-    :ok
-  end
-
-  defp create_event(
-         :artifacts_produced,
-         %Current.Workflow{} = workflow,
-         [%Current.Artifact{} | _] = artifacts
-       ) do
-    event = %Current.Event{
-      id: Current.Id.generate(),
-      workflow_id: workflow.id,
-      type: :artifacts_produced,
-      data: %{
-        task_id: workflow.task_id,
-        workflow: workflow,
-        artifacts: artifacts
-      },
-      timestamp: DateTime.utc_now()
-    }
-
-    :ok = Current.EventStore.append(event)
-    :ok
-  end
-
-  defp create_event(
-         :workflow_result_assembled,
-         %Current.Workflow{} = workflow,
-         %Current.WorkflowResult{} = result
-       ) do
-    event = %Current.Event{
-      id: Current.Id.generate(),
-      workflow_id: workflow.id,
-      type: :workflow_result_assembled,
-      data: %{
-        task_id: workflow.task_id,
-        workflow: workflow,
-        result: result
-      },
-      timestamp: DateTime.utc_now()
-    }
-
-    :ok = Current.EventStore.append(event)
+    Enum.each(listeners, fn pid -> send(pid, message) end)
     :ok
   end
 end

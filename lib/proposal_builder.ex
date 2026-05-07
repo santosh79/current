@@ -3,19 +3,29 @@ defmodule Current.ProposalBuilder do
 
   @callback build(Request.t(), Current.Id.t()) :: {:ok, Proposal.t()} | {:error, term()}
 
-  # SantoshTODO: Stop Hardcoding
+  # SantoshTODO: Stop Hardcoding — replace with LLM-driven proposal generation
   def build(%Request{} = req, workflow_id) do
     proposal_id = Id.generate()
 
+    dir = Path.join(System.tmp_dir!(), "current_proposal_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "signup.ex")
+    File.write!(path, "defmodule Signup do\nend\n")
+
+    diff = """
+    --- a/signup.ex
+    +++ b/signup.ex
+    @@ -1,2 +1,3 @@
+     defmodule Signup do
+    +  def validate_email(email), do: String.contains?(email, "@")
+     end
+    """
 
     intent = %Intent{
       id: Id.generate(),
       proposal_id: proposal_id,
       type: :file_patch,
-      payload: %{
-        path: "lib/my_app/signup.ex",
-        diff: "...diff..."
-      }
+      payload: %{path: path, diff: diff}
     }
 
     proposal = %Proposal{
@@ -29,6 +39,8 @@ defmodule Current.ProposalBuilder do
       ],
       dependencies: []
     }
+
     {:ok, proposal}
   end
 end
+

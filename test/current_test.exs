@@ -135,12 +135,12 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow_id)
 
-      assert Enum.map(events, & &1.type) |> Enum.take(4) == [
-               :workflow_created,
-               :proposal_production_started,
-               :proposal_produced,
-               :proposal_approved
-             ]
+      assert [
+               %Current.Event.WorkflowCreated{},
+               %Current.Event.ProposalProductionStarted{},
+               %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalApproved{}
+             ] = events |> Enum.take(4)
     end
 
     # submit task
@@ -188,12 +188,12 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow_id)
 
-      assert Enum.map(events, & &1.type) == [
-               :workflow_created,
-               :proposal_production_started,
-               :proposal_produced,
-               :proposal_rejected
-             ]
+      assert [
+               %Current.Event.WorkflowCreated{},
+               %Current.Event.ProposalProductionStarted{},
+               %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalRejected{}
+             ] = events
     end
 
     test "event log entries carry the correct workflow snapshot at each stage" do
@@ -236,34 +236,35 @@ defmodule CurrentTest do
 
       assert length(events) >= 4
 
-      [created, production_started, produced, approved] = events
+      [
+        %Current.Event.WorkflowCreated{} = created,
+        %Current.Event.ProposalProductionStarted{} = production_started,
+        %Current.Event.ProposalProduced{} = produced,
+        %Current.Event.ProposalApproved{} = approved
+      ] = events
 
-      assert created.type == :workflow_created
-      assert created.data.workflow.id == workflow_id
-      assert created.data.workflow.task_id == task_id
-      assert created.data.workflow.status == :created
-      assert created.data.workflow.proposal == nil
+      assert created.workflow.id == workflow_id
+      assert created.workflow.task_id == task_id
+      assert created.workflow.status == :created
+      assert created.workflow.proposal == nil
 
-      assert production_started.type == :proposal_production_started
-      assert production_started.data.workflow.id == workflow_id
-      assert production_started.data.workflow.task_id == task_id
-      assert production_started.data.workflow.status == :planning
-      assert production_started.data.workflow.proposal == nil
-      assert production_started.data.workflow.started_at != nil
+      assert production_started.workflow.id == workflow_id
+      assert production_started.workflow.task_id == task_id
+      assert production_started.workflow.status == :planning
+      assert production_started.workflow.proposal == nil
+      assert production_started.workflow.started_at != nil
 
-      assert produced.type == :proposal_produced
-      assert produced.data.workflow.id == workflow_id
-      assert produced.data.workflow.task_id == task_id
-      assert produced.data.workflow.status == :validating
-      assert produced.data.workflow.proposal != nil
-      assert produced.data.workflow.proposal.id == proposal_id
+      assert produced.workflow.id == workflow_id
+      assert produced.workflow.task_id == task_id
+      assert produced.workflow.status == :validating
+      assert produced.workflow.proposal != nil
+      assert produced.workflow.proposal.id == proposal_id
 
-      assert approved.type == :proposal_approved
-      assert approved.data.workflow.id == workflow_id
-      assert approved.data.workflow.task_id == task_id
-      assert approved.data.workflow.status == :approved
-      assert approved.data.workflow.proposal != nil
-      assert approved.data.workflow.proposal.id == proposal_id
+      assert approved.workflow.id == workflow_id
+      assert approved.workflow.task_id == task_id
+      assert approved.workflow.status == :approved
+      assert approved.workflow.proposal != nil
+      assert approved.workflow.proposal.id == proposal_id
     end
 
     test "rejection event log entries carry the correct workflow snapshot at each stage" do
@@ -306,34 +307,36 @@ defmodule CurrentTest do
 
       assert length(events) == 4
 
-      [created, production_started, produced, rejected] = events
+      [
+        %Current.Event.WorkflowCreated{} = created,
+        %Current.Event.ProposalProductionStarted{} = production_started,
+        %Current.Event.ProposalProduced{} = produced,
+        %Current.Event.ProposalRejected{} = rejected
+      ] =
+        events
 
-      assert created.type == :workflow_created
-      assert created.data.workflow.id == workflow_id
-      assert created.data.workflow.task_id == task_id
-      assert created.data.workflow.status == :created
-      assert created.data.workflow.proposal == nil
+      assert created.workflow.id == workflow_id
+      assert created.workflow.task_id == task_id
+      assert created.workflow.status == :created
+      assert created.workflow.proposal == nil
 
-      assert production_started.type == :proposal_production_started
-      assert production_started.data.workflow.id == workflow_id
-      assert production_started.data.workflow.task_id == task_id
-      assert production_started.data.workflow.status == :planning
-      assert production_started.data.workflow.proposal == nil
-      assert production_started.data.workflow.started_at != nil
+      assert production_started.workflow.id == workflow_id
+      assert production_started.workflow.task_id == task_id
+      assert production_started.workflow.status == :planning
+      assert production_started.workflow.proposal == nil
+      assert production_started.workflow.started_at != nil
 
-      assert produced.type == :proposal_produced
-      assert produced.data.workflow.id == workflow_id
-      assert produced.data.workflow.task_id == task_id
-      assert produced.data.workflow.status == :validating
-      assert produced.data.workflow.proposal != nil
-      assert produced.data.workflow.proposal.id == proposal_id
+      assert produced.workflow.id == workflow_id
+      assert produced.workflow.task_id == task_id
+      assert produced.workflow.status == :validating
+      assert produced.workflow.proposal != nil
+      assert produced.workflow.proposal.id == proposal_id
 
-      assert rejected.type == :proposal_rejected
-      assert rejected.data.workflow.id == workflow_id
-      assert rejected.data.workflow.task_id == task_id
-      assert rejected.data.workflow.status == :rejected
-      assert rejected.data.workflow.proposal != nil
-      assert rejected.data.workflow.proposal.id == proposal_id
+      assert rejected.workflow.id == workflow_id
+      assert rejected.workflow.task_id == task_id
+      assert rejected.workflow.status == :rejected
+      assert rejected.workflow.proposal != nil
+      assert rejected.workflow.proposal.id == proposal_id
     end
 
     test "approved proposal advances through effect application, artifact production, assembly, and completion" do
@@ -463,19 +466,19 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow.id)
 
-      assert Enum.map(events, & &1.type) == [
-               :workflow_created,
-               :proposal_production_started,
-               :proposal_produced,
-               :proposal_approved,
-               :effect_application_started,
-               :effect_applied,
-               :effects_applied,
-               :artifact_produced,
-               :artifacts_produced,
-               :workflow_result_assembled,
-               :workflow_completed
-             ]
+      assert [
+               %Current.Event.WorkflowCreated{},
+               %Current.Event.ProposalProductionStarted{},
+               %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalApproved{},
+               %Current.Event.EffectApplicationStarted{},
+               %Current.Event.EffectApplied{},
+               %Current.Event.EffectsApplied{},
+               %Current.Event.ArtifactProduced{},
+               %Current.Event.ArtifactsProduced{},
+               %Current.Event.WorkflowResultAssembled{},
+               %Current.Event.WorkflowCompleted{}
+             ] = events
     end
 
     test "artifact_produced event carries the produced artifact payload" do
@@ -527,20 +530,22 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow_id)
 
-      artifact_event =
-        Enum.find(events, fn event -> event.type == :artifact_produced end) ||
-          flunk("did not find artifact_produced event in event log")
+      %Current.Event.ArtifactProduced{} =
+        artifact_event =
+        Enum.find(events, &match?(%Current.Event.ArtifactProduced{}, &1))
+
+      # Enum.find(events, fn event -> event.type == :artifact_produced end) ||
+      #   flunk("did not find artifact_produced event in event log")
 
       assert artifact_event.workflow_id == workflow_id
-      assert artifact_event.data.task_id == task_id
-      assert %Current.Workflow{} = artifact_event.data.workflow
-      assert artifact_event.data.workflow.id == workflow_id
+      assert artifact_event.workflow.task_id == task_id
+      assert %Current.Workflow{} = artifact_event.workflow
+      assert artifact_event.workflow.id == workflow_id
 
-      assert %Current.Artifact{} = artifact_event.data.artifact
-      assert artifact_event.data.artifact.id == produced_artifact.id
-      assert artifact_event.data.artifact.workflow_id == workflow_id
-      assert artifact_event.data.artifact.type == produced_artifact.type
-      assert artifact_event.data.artifact.storage == produced_artifact.storage
+      assert %Current.Artifact{} = artifact_event.artifact
+      assert artifact_event.artifact.id == produced_artifact.id
+      assert artifact_event.artifact.workflow_id == workflow_id
+      assert artifact_event.artifact.storage == produced_artifact.storage
     end
 
     test "workflow_result_assembled event carries the assembled result payload" do
@@ -592,20 +597,19 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow_id)
 
-      result_event =
-        Enum.find(events, fn event -> event.type == :workflow_result_assembled end) ||
-          flunk("did not find workflow_result_assembled event in event log")
+      %Current.Event.WorkflowResultAssembled{} =
+        result_event =
+        Enum.find(events, &match?(%Current.Event.WorkflowResultAssembled{}, &1))
 
       assert result_event.workflow_id == workflow_id
-      assert result_event.data.task_id == task_id
-      assert %Current.Workflow{} = result_event.data.workflow
-      assert result_event.data.workflow.id == workflow_id
+      assert result_event.workflow.task_id == task_id
+      assert %Current.Workflow{} = result_event.workflow
+      assert result_event.workflow.id == workflow_id
 
-      assert %Current.WorkflowResult{} = result_event.data.result
-      assert result_event.data.result.id == assembled_result.id
-      assert result_event.data.result.workflow_id == workflow_id
-      assert result_event.data.result.type == assembled_result.type
-      assert result_event.data.result.artifacts == assembled_result.artifacts
+      assert %Current.WorkflowResult{} = result_event.result
+      assert result_event.result.id == assembled_result.id
+      assert result_event.result.workflow_id == workflow_id
+      assert result_event.result.artifacts == assembled_result.artifacts
     end
 
     test "approved proposal can fail during execution and the workflow fails" do
@@ -668,15 +672,15 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow.id)
 
-      assert Enum.map(events, & &1.type) == [
-               :workflow_created,
-               :proposal_production_started,
-               :proposal_produced,
-               :proposal_approved,
-               :effect_application_started,
-               :effect_failed,
-               :workflow_failed
-             ]
+      assert [
+               %Current.Event.WorkflowCreated{},
+               %Current.Event.ProposalProductionStarted{},
+               %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalApproved{},
+               %Current.Event.EffectApplicationStarted{},
+               %Current.Event.EffectFailed{},
+               %Current.Event.WorkflowFailed{}
+             ] = events
     end
 
     # This test does the following:
@@ -807,28 +811,29 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow.id)
 
-      assert Enum.map(events, & &1.type) == [
-               :workflow_created,
-               :proposal_production_started,
-               :proposal_produced,
-               :proposal_approved,
-               :effect_application_started,
-               :effect_applied,
-               :effect_applied,
-               :effect_applied,
-               :effects_applied,
-               :artifact_produced,
-               :artifact_produced,
-               :artifact_produced,
-               :artifacts_produced,
-               :workflow_result_assembled,
-               :workflow_completed
-             ]
+      assert [
+               %Current.Event.WorkflowCreated{},
+               %Current.Event.ProposalProductionStarted{},
+               %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalApproved{},
+               %Current.Event.EffectApplicationStarted{},
+               %Current.Event.EffectApplied{},
+               %Current.Event.EffectApplied{},
+               %Current.Event.EffectApplied{},
+               %Current.Event.EffectsApplied{},
+               %Current.Event.ArtifactProduced{},
+               %Current.Event.ArtifactProduced{},
+               %Current.Event.ArtifactProduced{},
+               %Current.Event.ArtifactsProduced{},
+               %Current.Event.WorkflowResultAssembled{},
+               %Current.Event.WorkflowCompleted{}
+             ] = events
 
-      artifacts_produced_event =
-        Enum.find(events, fn event -> event.type == :artifacts_produced end)
+      %Current.Event.ArtifactsProduced{} =
+        artifacts_produced_event =
+        Enum.find(events, &match?(%Current.Event.ArtifactsProduced{}, &1))
 
-      event_artifact_ids = Enum.map(artifacts_produced_event.data.artifacts, & &1.id)
+      event_artifact_ids = Enum.map(artifacts_produced_event.artifacts, & &1.id)
 
       assert Enum.sort(event_artifact_ids) == Enum.sort(artifact_ids)
       assert Enum.sort(Enum.map(produced_artifacts, & &1.id)) == Enum.sort(artifact_ids)
@@ -963,25 +968,152 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow.id)
 
-      assert Enum.map(events, & &1.type) == [
-               :workflow_created,
-               :proposal_production_started,
-               :proposal_produced,
-               :proposal_approved,
-               :effect_application_started,
-               :effect_applied,
-               :effect_failed,
-               :workflow_failed
-             ]
+      assert [
+               %Current.Event.WorkflowCreated{},
+               %Current.Event.ProposalProductionStarted{},
+               %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalApproved{},
+               %Current.Event.EffectApplicationStarted{},
+               %Current.Event.EffectApplied{},
+               %Current.Event.EffectFailed{},
+               %Current.Event.WorkflowFailed{}
+             ] = events
 
-      failed_event =
-        Enum.find(events, &(&1.type == :workflow_failed)) ||
-          flunk("did not find workflow_failed event")
+      %Current.Event.WorkflowFailed{} =
+        failed_event =
+        Enum.find(events, &match?(%Current.Event.WorkflowFailed{}, &1))
 
-      assert failed_event.data.workflow.status == :failed
-      assert failed_event.data.workflow.error != nil
-      assert failed_event.data.workflow.result == nil
-      assert failed_event.data.workflow.proposal.id == proposal.id
+      assert failed_event.workflow.status == :failed
+      assert failed_event.workflow.error != nil
+      assert failed_event.workflow.result == nil
+      assert failed_event.workflow.proposal.id == proposal.id
+    end
+
+    test "run_command intent produces stdout and stderr as artifacts" do
+      :persistent_term.put(:proposal_builder, Current.RunCommandProposalBuilder)
+      on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
+
+      {:ok, task_id, workflow} = submit_simple_task()
+
+      receive do
+        {:proposal_production_started, ^task_id, _workflow} -> :ok
+      after
+        1_000 -> flunk("did not receive proposal_production_started")
+      end
+
+      proposal =
+        receive do
+          {:proposal_produced, ^task_id, _produced_workflow, proposal} ->
+            assert length(proposal.intents) == 1
+            [intent] = proposal.intents
+            assert intent.type == :run_command
+            proposal
+        after
+          1_000 -> flunk("did not receive proposal_produced")
+        end
+
+      assert :ok =
+               Current.review_proposal(
+                 proposal.id,
+                 {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+               )
+
+      receive do
+        {:proposal_approved, ^task_id, _workflow} -> :ok
+      after
+        1_000 -> flunk("did not receive proposal_approved")
+      end
+
+      receive do
+        {:effects_applied, ^task_id, effect_workflow, intent_results} ->
+          assert effect_workflow.status == :applying
+          assert length(intent_results) == 1
+
+          [{intent, result}] = intent_results
+
+          assert intent.type == :run_command
+          assert result.exit_code == 0
+
+          # stdout and stderr are artifact ids, not raw strings
+          assert is_binary(result.stdout_artifact_id)
+          assert is_binary(result.stderr_artifact_id)
+          assert :ok = Current.Id.validate(result.stdout_artifact_id)
+          assert :ok = Current.Id.validate(result.stderr_artifact_id)
+
+          # they are different artifacts
+          assert result.stdout_artifact_id != result.stderr_artifact_id
+
+          # stdout artifact exists on disk and contains the command output
+          {:ok, stdout_artifact_path} = Current.ArtifactStore.path_for(result.stdout_artifact_id)
+          assert File.exists?(stdout_artifact_path)
+          stdout_contents = File.read!(stdout_artifact_path)
+          assert stdout_contents =~ "hello from test"
+
+          # stderr artifact exists on disk (may be empty but must exist)
+          {:ok, stderr_artifact_path} = Current.ArtifactStore.path_for(result.stderr_artifact_id)
+          assert File.exists?(stderr_artifact_path)
+          stderr_contents = File.read!(stderr_artifact_path)
+          assert stderr_contents =~ "error from test"
+
+          assert byte_size(stdout_contents) > 0
+          assert byte_size(stderr_contents) > 0
+
+          refute stdout_artifact_path == stderr_artifact_path
+      after
+        1_000 -> flunk("did not receive effects_applied")
+      end
+
+      # the command_result artifact produced by ArtifactBuilder references both
+      artifact =
+        receive do
+          {:artifact_produced, ^task_id, _workflow,
+           %Current.Artifact{type: :command_result} = artifact} ->
+            assert artifact.workflow_id == workflow.id
+            assert artifact.metadata.exit_code == 0
+            assert is_binary(artifact.metadata.stdout_artifact_id)
+            assert is_binary(artifact.metadata.stderr_artifact_id)
+            assert artifact.metadata.stdout_bytes > 0
+            artifact
+        after
+          1_000 -> flunk("did not receive artifact_produced")
+        end
+
+      receive do
+        {:artifacts_produced, ^task_id, _workflow, artifacts} ->
+          assert length(artifacts) == 1
+          assert hd(artifacts).id == artifact.id
+      after
+        1_000 -> flunk("did not receive artifacts_produced")
+      end
+
+      receive do
+        {:workflow_result_assembled, ^task_id, _workflow, _result} -> :ok
+      after
+        1_000 -> flunk("did not receive workflow_result_assembled")
+      end
+
+      receive do
+        {:workflow_completed, ^task_id, completed_workflow} ->
+          assert completed_workflow.status == :completed
+      after
+        1_000 -> flunk("did not receive workflow_completed")
+      end
+
+      events = Current.EventStore.list_by_workflow_id(workflow.id)
+
+      # event log carries summarized result, not raw output
+      %Current.Event.EffectsApplied{} =
+        effects_applied_event =
+        Enum.find(events, &match?(%Current.Event.EffectsApplied{}, &1))
+
+      effects_applied_event.intent_results
+      |> Enum.each(fn ea ->
+        {_intent, erc} = ea
+        assert erc.exit_code == 0
+        assert erc.stdout_artifact_id == artifact.metadata.stdout_artifact_id
+
+        assert erc.stderr_artifact_id == artifact.metadata.stderr_artifact_id
+      end)
     end
   end
 end

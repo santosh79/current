@@ -1,42 +1,126 @@
 defmodule Current.ArtifactBuilder do
   alias Current.{Artifact, Id, Intent, Workflow}
+  alias Current.EffectResult
 
-  @spec build(Workflow.t(), {Intent.t(), map()}) :: {:ok, Artifact.t()}
-  def build(%Workflow{} = workflow, {%Intent{} = intent, result}) do
-    {name, type, path_suffix} =
-      case intent.type do
-        :file_patch ->
-          {:file_patch_result, :file_patch_result, "file_patch_result.json"}
+  @spec build(Workflow.t(), {Intent.t(), Current.EffectApplicator.result()}) ::
+          {:ok, Artifact.t()}
 
-        :write_file ->
-          {:write_file_result, :report, "write_file_result.json"}
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.FilePatch{} = result}) do
+    body = :json.encode(%{path: result.path, intent_id: intent.id}) |> IO.iodata_to_binary()
 
-        :delete_file ->
-          {:delete_file_result, :report, "delete_file_result.json"}
+    persist(
+      workflow,
+      intent,
+      :file_patch_result,
+      :file_patch_result,
+      "file_patch_result.json",
+      body,
+      %{
+        bytes: byte_size(body),
+        content_type: "application/json",
+        patched_path: result.path
+      }
+    )
+  end
 
-        :run_command ->
-          {:command_result, :command_result, "command_result.json"}
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Command{} = result}) do
+    body =
+      :json.encode(%{
+        exit_code: result.exit_code,
+        stdout_artifact_id: result.stdout_artifact_id,
+        stderr_artifact_id: result.stderr_artifact_id,
+        stdout_bytes: result.stdout_bytes,
+        stderr_bytes: result.stderr_bytes,
+        intent_id: intent.id
+      })
+      |> IO.iodata_to_binary()
 
-        :read_file ->
-          {:read_result, :read_result, "read_result.json"}
+    persist(workflow, intent, :command_result, :command_result, "command_result.json", body, %{
+      bytes: byte_size(body),
+      content_type: "application/json",
+      exit_code: result.exit_code,
+      stdout_artifact_id: result.stdout_artifact_id,
+      stderr_artifact_id: result.stderr_artifact_id,
+      stdout_bytes: result.stdout_bytes,
+      stderr_bytes: result.stderr_bytes
+    })
+  end
 
-        :glob ->
-          {:glob_result, :report, "glob_result.json"}
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.WriteFile{} = result}) do
+    body = :json.encode(%{path: result.path, intent_id: intent.id}) |> IO.iodata_to_binary()
 
-        :grep ->
-          {:grep_result, :report, "grep_result.json"}
+    persist(workflow, intent, :write_file_result, :report, "write_file_result.json", body, %{
+      bytes: byte_size(body),
+      content_type: "application/json",
+      written_path: result.path
+    })
+  end
 
-        :claim ->
-          {:claim_result, :claim_result, "claim_result.json"}
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.DeleteFile{} = result}) do
+    body = :json.encode(%{path: result.path, intent_id: intent.id}) |> IO.iodata_to_binary()
 
-        :report ->
-          {:report, :report, "report.json"}
-      end
+    persist(workflow, intent, :delete_file_result, :report, "delete_file_result.json", body, %{
+      bytes: byte_size(body),
+      content_type: "application/json",
+      deleted_path: result.path
+    })
+  end
 
-    # SantoshTODO: Figure out a proper dir to store this in, ideally coming from config
-    path = "/tmp/current/#{workflow.id}/#{intent.id}/#{path_suffix}"
-    body = inspect(%{intent: intent, result: result}, pretty: true)
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.ReadFile{} = result}) do
+    body = :json.encode(%{path: result.path, intent_id: intent.id}) |> IO.iodata_to_binary()
 
+    persist(workflow, intent, :read_result, :read_result, "read_result.json", body, %{
+      bytes: byte_size(body),
+      content_type: "application/json",
+      read_path: result.path
+    })
+  end
+
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Glob{} = result}) do
+    body = :json.encode(%{matches: result.matches, intent_id: intent.id}) |> IO.iodata_to_binary()
+
+    persist(workflow, intent, :glob_result, :report, "glob_result.json", body, %{
+      bytes: byte_size(body),
+      content_type: "application/json",
+      match_count: length(result.matches)
+    })
+  end
+
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Grep{} = result}) do
+    body = :json.encode(%{matches: result.matches, intent_id: intent.id}) |> IO.iodata_to_binary()
+
+    persist(workflow, intent, :grep_result, :report, "grep_result.json", body, %{
+      bytes: byte_size(body),
+      content_type: "application/json",
+      match_count: length(result.matches)
+    })
+  end
+
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Claim{} = result}) do
+    body =
+      :json.encode(%{verified: result.verified, intent_id: intent.id}) |> IO.iodata_to_binary()
+
+    persist(workflow, intent, :claim_result, :claim_result, "claim_result.json", body, %{
+      bytes: byte_size(body),
+      content_type: "application/json",
+      verified: result.verified
+    })
+  end
+
+  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Report{} = result}) do
+    body =
+      :json.encode(%{generated: result.generated, intent_id: intent.id}) |> IO.iodata_to_binary()
+
+    persist(workflow, intent, :report, :report, "report.json", body, %{
+      bytes: byte_size(body),
+      content_type: "application/json"
+    })
+  end
+
+  defp persist(workflow, intent, name, type, filename, body, metadata) do
+    # SantoshTODO: Stop hardcoding
+    # SantoshTODO: Figure out if a plug and play actor approach is better here
+    path = "/tmp/current/#{workflow.id}/#{intent.id}/#{filename}"
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, body)
 
@@ -48,10 +132,7 @@ defmodule Current.ArtifactBuilder do
        name: name,
        type: type,
        storage: %{backend: :filesystem, path: path},
-       metadata: %{
-         bytes: byte_size(body),
-         content_type: "text/plain"
-       },
+       metadata: metadata,
        timestamp: DateTime.utc_now()
      }}
   end
