@@ -125,8 +125,7 @@ defmodule Current.EffectApplicator do
       matches =
         paths
         |> Enum.flat_map(fn path ->
-          path
-          |> File.stream!([], :line)
+          File.stream!(path, :line)
           |> Stream.with_index(1)
           |> Enum.filter(fn {line, _line_no} ->
             String.contains?(line, pattern)
