@@ -129,16 +129,18 @@ defmodule Current.EffectApplicator do
           |> File.stream!([], :line)
           |> Stream.with_index(1)
           |> Enum.flat_map(fn {line, line_no} ->
-            if String.contains?(line, pattern) do
-              [
-                %Current.EffectResult.Grep.Match{
-                  path: path,
-                  line: line_no,
-                  text: String.trim_trailing(line)
-                }
-              ]
-            else
-              []
+            case String.contains?(line, pattern) do
+              true ->
+                [
+                  %Current.EffectResult.Grep.Match{
+                    path: path,
+                    line: line_no,
+                    text: String.trim_trailing(line)
+                  }
+                ]
+
+              _ ->
+                []
             end
           end)
         end)
