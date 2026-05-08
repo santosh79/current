@@ -45,8 +45,25 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :write_file} = intent),
-    do: {:ok, %Current.EffectResult.WriteFile{path: intent.payload.path}}
+  def apply(%Intent{type: :write_file} = intent) do
+    path = Map.fetch!(intent.payload, :path)
+
+    case File.exists?(path) do
+      true ->
+        {:error, "file already exists: #{path}"}
+
+      false ->
+        contents = Map.fetch!(intent.payload, :contents)
+
+        case write_file(path, contents) do
+          :ok ->
+            {:ok, %Current.EffectResult.WriteFile{path: path}}
+
+          {:error, reason} ->
+            {:error, "write_file failed for #{path}: #{inspect(reason)}"}
+        end
+    end
+  end
 
   def apply(%Intent{type: :delete_file} = intent),
     do: {:ok, %Current.EffectResult.DeleteFile{path: intent.payload.path}}
@@ -128,5 +145,12 @@ defmodule Current.EffectApplicator do
       System.tmp_dir!(),
       "current_#{label}_#{System.unique_integer([:positive])}.txt"
     )
+  end
+
+  defp write_file(path, contents) do
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         :ok <- File.write(path, contents) do
+      :ok
+    end
   end
 end

@@ -56,7 +56,7 @@ defmodule Current.SecondIntentFailsProposalBuilder do
         id: Id.generate(),
         proposal_id: proposal_id,
         type: :run_command,
-        payload: %{command: "mix test"}
+        payload: %{command: "echo hello"}
       }
     ]
 

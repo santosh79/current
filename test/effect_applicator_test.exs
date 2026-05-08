@@ -119,6 +119,57 @@ defmodule Current.EffectApplicatorTest do
       assert reason =~ "not found"
     end
   end
+  
+  describe "apply/1 - write_file" do
+    setup do
+      dir =
+        System.tmp_dir!()
+        |> Path.join("write_file_test_#{System.unique_integer([:positive])}")
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      {:ok, dir: dir}
+    end
+
+    test "creates parent dirs and writes contents", %{dir: dir} do
+      path = Path.join([dir, "nested", "deep", "generated.ex"])
+      contents = "defmodule Generated do\n  def ok, do: true\nend\n"
+
+      intent =
+        intent_fixture(:write_file, %{
+              path: path,
+              contents: contents
+                       })
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert %Current.EffectResult.WriteFile{} = result
+      assert result.path == path
+
+      assert File.exists?(path)
+      assert File.read!(path) == contents
+    end
+    
+    test "returns error if file already exists", %{dir: dir} do
+      path = Path.join(dir, "existing.ex")
+
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, "original")
+
+      intent =
+        intent_fixture(:write_file, %{
+              path: path,
+              contents: "new contents"
+                       })
+
+      assert {:error, reason} = EffectApplicator.apply(intent)
+
+      assert reason =~ "already exists"
+
+      # original contents preserved
+      assert File.read!(path) == "original"
+    end
+  end
 
   defp bad_diff() do
     [

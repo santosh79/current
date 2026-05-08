@@ -10,18 +10,11 @@ defmodule Current.MultiIntentProposalBuilder do
     end
 
     proposal_id = Id.generate()
+    dir = make_test_dir()
 
-    diff =
-      [
-        "--- signup.ex",
-        "+++ signup.ex",
-        "@@ -1,2 +1,3 @@",
-        " defmodule Signup do",
-        "+  def validate_email(email), do: String.contains?(email, \"@\")",
-        " end",
-        ""
-      ]
-      |> Enum.join("\n")
+    patch_path = create_existing_signup_file(dir)
+    generated_test_path = Path.join(dir, "signup_test.exs")
+    generated_helper_path = Path.join(dir, "signup_helper.ex")
 
     intents = [
       %Intent{
@@ -29,8 +22,8 @@ defmodule Current.MultiIntentProposalBuilder do
         proposal_id: proposal_id,
         type: :file_patch,
         payload: %{
-          path: get_file_path(),
-          diff: diff
+          path: patch_path,
+          diff: signup_diff()
         }
       },
       %Intent{
@@ -38,8 +31,8 @@ defmodule Current.MultiIntentProposalBuilder do
         proposal_id: proposal_id,
         type: :write_file,
         payload: %{
-          path: get_file_path(),
-          contents: "...generated test contents..."
+          path: generated_test_path,
+          contents: "defmodule SignupTest do\n  use ExUnit.Case\nend\n"
         }
       },
       %Intent{
@@ -47,33 +40,55 @@ defmodule Current.MultiIntentProposalBuilder do
         proposal_id: proposal_id,
         type: :write_file,
         payload: %{
-          path: get_file_path(),
-          contents: "...MORE generated test contents..."
+          path: generated_helper_path,
+          contents: "defmodule SignupHelper do\n  def sample_email, do: \"test@example.com\"\nend\n"
         }
       }
     ]
 
-    proposal = %Proposal{
-      id: proposal_id,
-      workflow_id: workflow_id,
-      intents: intents,
-      justification: "Proposed changes for request: #{inspect(req.input)}",
-      claims: [
-        "signup flow validates email input",
-        "test coverage is added for signup validation",
-        "validation behavior is verified through command execution"
-      ],
-      dependencies: []
-    }
-
-    {:ok, proposal}
+    {:ok,
+     %Proposal{
+       id: proposal_id,
+       workflow_id: workflow_id,
+       intents: intents,
+       justification: "Proposed changes for request: #{inspect(req.input)}",
+       claims: [
+         "signup flow validates email input",
+         "test coverage is added for signup validation",
+         "helper code is generated without overwriting existing files"
+       ],
+       dependencies: []
+     }}
   end
 
-  defp get_file_path() do
-    dir = Path.join(System.tmp_dir!(), "current_multi_#{System.unique_integer([:positive])}")
+  defp make_test_dir do
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "current_multi_#{System.unique_integer([:positive])}"
+      )
+
     :ok = File.mkdir_p!(dir)
+    dir
+  end
+
+  defp create_existing_signup_file(dir) do
     path = Path.join(dir, "signup.ex")
-    File.write!(path, "defmodule Signup do\nend\n")
+    :ok = File.write!(path, "defmodule Signup do\nend\n")
     path
   end
+
+  defp signup_diff do
+    [
+      "--- signup.ex",
+      "+++ signup.ex",
+      "@@ -1,2 +1,3 @@",
+      " defmodule Signup do",
+      "+  def validate_email(email), do: String.contains?(email, \"@\")",
+      " end",
+      ""
+    ]
+    |> Enum.join("\n")
+  end
 end
+
