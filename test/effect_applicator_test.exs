@@ -220,6 +220,122 @@ defmodule Current.EffectApplicatorTest do
     end
   end
 
+  describe "apply/1 - grep" do
+    setup do
+      dir =
+        System.tmp_dir!()
+        |> Path.join("grep_test_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(dir)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      {:ok, dir: dir}
+    end
+
+    test "returns matching lines from files", %{dir: dir} do
+      path = Path.join(dir, "signup.ex")
+
+      File.write!(path, """
+      defmodule Signup do
+        def validate_email(email), do: String.contains?(email, "@")
+        def ok, do: true
+      end
+      """)
+
+      intent =
+        intent_fixture(:grep, %{
+          pattern: "validate_email",
+          paths: [path]
+        })
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert %Current.EffectResult.Grep{} = result
+      assert length(result.matches) == 1
+
+      [match] = result.matches
+
+      assert match.path == path
+      assert match.line == 2
+      assert match.text =~ "validate_email"
+    end
+
+    test "returns empty matches when nothing matches", %{dir: dir} do
+      path = Path.join(dir, "signup.ex")
+
+      File.write!(path, """
+      defmodule Signup do
+        def ok, do: true
+      end
+      """)
+
+      intent =
+        intent_fixture(:grep, %{
+          pattern: "validate_email",
+          paths: [path]
+        })
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert %Current.EffectResult.Grep{} = result
+      assert result.matches == []
+    end
+
+    test "returns one match per matching line", %{dir: dir} do
+      path = Path.join(dir, "app.ex")
+
+      File.write!(path, """
+      alpha
+      beta TODO
+      gamma TODO
+      """)
+
+      intent = intent_fixture(:grep, %{pattern: "TODO", paths: [path]})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert [
+               %Current.EffectResult.Grep.Match{
+                 line: 2,
+                 path: ^path,
+                 text: "beta TODO"
+               },
+               %Current.EffectResult.Grep.Match{
+                 line: 3,
+                 path: ^path,
+                 text: "gamma TODO"
+               }
+             ] = result.matches
+    end
+
+    test "returns one match when a single line contains pattern multiple times", %{dir: dir} do
+      path = Path.join(dir, "app.ex")
+      File.write!(path, "TODO TODO TODO")
+
+      intent = intent_fixture(:grep, %{pattern: "TODO", paths: [path]})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert [%Current.EffectResult.Grep.Match{path: ^path, line: 1, text: "TODO TODO TODO"}] =
+               result.matches
+    end
+
+    test "returns error when a searched file does not exist", %{dir: dir} do
+      path = Path.join(dir, "missing.ex")
+
+      intent =
+        intent_fixture(:grep, %{
+          pattern: "validate_email",
+          paths: [path]
+        })
+
+      assert {:error, reason} = EffectApplicator.apply(intent)
+
+      assert reason =~ "not found"
+    end
+  end
+
   defp bad_diff() do
     [
       "--- app.ex",

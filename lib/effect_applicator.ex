@@ -117,8 +117,35 @@ defmodule Current.EffectApplicator do
   def apply(%Intent{type: :glob} = _intent),
     do: {:ok, %Current.EffectResult.Glob{matches: []}}
 
-  def apply(%Intent{type: :grep} = _intent),
-    do: {:ok, %Current.EffectResult.Grep{matches: []}}
+  def apply(%Intent{type: :grep} = intent) do
+    pattern = Map.fetch!(intent.payload, :pattern)
+    paths = Map.fetch!(intent.payload, :paths)
+
+    with :ok <- validate_paths_exist(paths) do
+      matches =
+        paths
+        |> Enum.flat_map(fn path ->
+          path
+          |> File.stream!([], :line)
+          |> Stream.with_index(1)
+          |> Enum.flat_map(fn {line, line_no} ->
+            if String.contains?(line, pattern) do
+              [
+                %Current.EffectResult.Grep.Match{
+                  path: path,
+                  line: line_no,
+                  text: String.trim_trailing(line)
+                }
+              ]
+            else
+              []
+            end
+          end)
+        end)
+
+      {:ok, %Current.EffectResult.Grep{matches: matches}}
+    end
+  end
 
   def apply(%Intent{type: :claim} = _intent),
     do: {:ok, %Current.EffectResult.Claim{verified: true}}
@@ -170,6 +197,16 @@ defmodule Current.EffectApplicator do
     case File.exists?(path) do
       true -> File.rm(path)
       _ -> :ok
+    end
+  end
+
+  defp validate_paths_exist(paths) do
+    case Enum.find(paths, &(not File.regular?(&1))) do
+      nil ->
+        :ok
+
+      path ->
+        {:error, "file not found: #{path}"}
     end
   end
 end
