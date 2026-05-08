@@ -65,8 +65,20 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :delete_file} = intent),
-    do: {:ok, %Current.EffectResult.DeleteFile{path: intent.payload.path}}
+  def apply(%Intent{type: :delete_file} = intent) do
+    path = Map.fetch!(intent.payload, :path)
+
+    case File.dir?(path) do
+      true ->
+        {:error, "delete_file failed for #{path}: not a regular file"}
+
+      _ ->
+        case delete_file(path) do
+          :ok -> {:ok, %Current.EffectResult.DeleteFile{path: path}}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
 
   def apply(%Intent{type: :run_command} = intent) do
     cmd = Map.fetch!(intent.payload, :cmd)
@@ -151,6 +163,13 @@ defmodule Current.EffectApplicator do
     with :ok <- File.mkdir_p(Path.dirname(path)),
          :ok <- File.write(path, contents) do
       :ok
+    end
+  end
+
+  defp delete_file(path) do
+    case File.exists?(path) do
+      true -> File.rm(path)
+      _ -> :ok
     end
   end
 end

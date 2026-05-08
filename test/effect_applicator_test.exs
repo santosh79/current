@@ -119,7 +119,7 @@ defmodule Current.EffectApplicatorTest do
       assert reason =~ "not found"
     end
   end
-  
+
   describe "apply/1 - write_file" do
     setup do
       dir =
@@ -137,9 +137,9 @@ defmodule Current.EffectApplicatorTest do
 
       intent =
         intent_fixture(:write_file, %{
-              path: path,
-              contents: contents
-                       })
+          path: path,
+          contents: contents
+        })
 
       assert {:ok, result} = EffectApplicator.apply(intent)
 
@@ -149,7 +149,7 @@ defmodule Current.EffectApplicatorTest do
       assert File.exists?(path)
       assert File.read!(path) == contents
     end
-    
+
     test "returns error if file already exists", %{dir: dir} do
       path = Path.join(dir, "existing.ex")
 
@@ -158,9 +158,9 @@ defmodule Current.EffectApplicatorTest do
 
       intent =
         intent_fixture(:write_file, %{
-              path: path,
-              contents: "new contents"
-                       })
+          path: path,
+          contents: "new contents"
+        })
 
       assert {:error, reason} = EffectApplicator.apply(intent)
 
@@ -168,6 +168,55 @@ defmodule Current.EffectApplicatorTest do
 
       # original contents preserved
       assert File.read!(path) == "original"
+    end
+  end
+
+  describe "apply/1 - delete_file" do
+    setup do
+      dir =
+        System.tmp_dir!()
+        |> Path.join("delete_file_test_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      {:ok, dir: dir}
+    end
+
+    test "deletes an existing file", %{dir: dir} do
+      path = Path.join(dir, "old.ex")
+      File.write!(path, "old contents")
+
+      intent = intent_fixture(:delete_file, %{path: path})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert %Current.EffectResult.DeleteFile{} = result
+      assert result.path == path
+      refute File.exists?(path)
+    end
+
+    test "succeeds if file does not exist", %{dir: dir} do
+      path = Path.join(dir, "missing.ex")
+
+      intent = intent_fixture(:delete_file, %{path: path})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert %Current.EffectResult.DeleteFile{} = result
+      assert result.path == path
+      refute File.exists?(path)
+    end
+
+    test "returns error when path is a directory", %{dir: dir} do
+      path = Path.join(dir, "some_dir")
+      File.mkdir_p!(path)
+
+      intent = intent_fixture(:delete_file, %{path: path})
+
+      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert reason =~ "not a regular file"
+      assert File.dir?(path)
     end
   end
 
@@ -179,6 +228,7 @@ defmodule Current.EffectApplicatorTest do
       " defmodule WrongModule do",
       "+  def bad, do: true",
       " end"
-    ] |> Enum.join("\n")
+    ]
+    |> Enum.join("\n")
   end
 end
