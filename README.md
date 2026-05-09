@@ -66,7 +66,7 @@ The model is still non-deterministic. The system around it does not have to be.
 ```text
 Human Request
     ↓
-Task
+  Task
     ↓
 Workflow is created
     ↓
