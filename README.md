@@ -1,12 +1,25 @@
 # Current
 
-**A runtime for AI workflows where agents propose changes instead of performing them directly.**
+**A deterministic runtime for AI workflows.**
 
-Agents do not write files, run shell commands, or mutate the world on their own. They describe what should happen. The system decides what actually happens.
+Agents propose changes.
+The runtime validates, records, and controls their execution.
+
+Current separates cognition from execution.
+
+The model may be probabilistic.
+The runtime should not be.
+
+Models propose structured intents.
+Reducers derive workflow state.
+Trusted interpreters apply effects.
+Events and immutable artifacts form the system record.
+
+Agents do not write files, run commands, or mutate the world directly. They describe intended changes. The runtime decides what actually happens.
 
 Most systems let the agent edit files, run commands, and mutate the world directly. This is convenient. It also puts side effects inside a probabilistic system.
 
-Current separates the two.
+Current keeps side effects at the edge of the system.
 
 > **AI workflows as pure state transitions, with effects at the edge.**
 
