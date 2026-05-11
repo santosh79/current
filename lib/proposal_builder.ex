@@ -43,4 +43,3 @@ defmodule Current.ProposalBuilder do
     {:ok, proposal}
   end
 end
-

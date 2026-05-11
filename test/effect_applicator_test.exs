@@ -238,8 +238,8 @@ defmodule Current.EffectApplicatorTest do
 
       File.write!(path, """
       defmodule Signup do
-        def validate_email(email), do: String.contains?(email, "@")
-        def ok, do: true
+      def validate_email(email), do: String.contains?(email, "@")
+      def ok, do: true
       end
       """)
 
@@ -266,7 +266,7 @@ defmodule Current.EffectApplicatorTest do
 
       File.write!(path, """
       defmodule Signup do
-        def ok, do: true
+      def ok, do: true
       end
       """)
 
@@ -333,6 +333,84 @@ defmodule Current.EffectApplicatorTest do
       assert {:error, reason} = EffectApplicator.apply(intent)
 
       assert reason =~ "not found"
+    end
+  end
+
+  describe "apply/1 - glob" do
+    setup do
+      dir =
+        System.tmp_dir!()
+        |> Path.join("glob_test_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+      {:ok, dir: dir}
+    end
+
+    test "returns matching files for a pattern", %{dir: dir} do
+      File.write!(Path.join(dir, "foo.ex"), "")
+      File.write!(Path.join(dir, "bar.ex"), "")
+      File.write!(Path.join(dir, "baz.txt"), "")
+
+      intent = intent_fixture(:glob, %{pattern: "*.ex", base_dir: dir})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert %Current.EffectResult.Glob{} = result
+      assert length(result.matches) == 2
+      assert Path.join(dir, "foo.ex") in result.matches
+      assert Path.join(dir, "bar.ex") in result.matches
+    end
+
+    test "returns empty list when no files match", %{dir: dir} do
+      File.write!(Path.join(dir, "foo.txt"), "")
+
+      intent = intent_fixture(:glob, %{pattern: "*.ex", base_dir: dir})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert result.matches == []
+    end
+
+    test "matches files recursively with ** pattern", %{dir: dir} do
+      subdir = Path.join(dir, "subdir")
+      File.mkdir_p!(subdir)
+      File.write!(Path.join(dir, "top.ex"), "")
+      File.write!(Path.join(subdir, "nested.ex"), "")
+
+      intent = intent_fixture(:glob, %{pattern: "**/*.ex", base_dir: dir})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert length(result.matches) == 2
+      assert Path.join(dir, "top.ex") in result.matches
+      assert Path.join(subdir, "nested.ex") in result.matches
+    end
+
+    test "returns error when base_dir does not exist", %{dir: dir} do
+      missing = Path.join(dir, "missing")
+
+      intent = intent_fixture(:glob, %{pattern: "*.ex", base_dir: missing})
+
+      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert reason =~ "not found"
+    end
+
+    test "returns matches in sorted order", %{dir: dir} do
+      z_path = Path.join(dir, "z.ex")
+      a_path = Path.join(dir, "a.ex")
+
+      File.write!(z_path, "")
+      File.write!(a_path, "")
+
+      intent = intent_fixture(:glob, %{pattern: "*.ex", base_dir: dir})
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert result.matches == [a_path, z_path]
+    end
+
+    test "returns error when pattern is absolute", %{dir: dir} do
+      intent = intent_fixture(:glob, %{pattern: Path.join(dir, "*.ex"), base_dir: dir})
+
+      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert reason =~ "relative"
     end
   end
 

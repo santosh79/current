@@ -114,8 +114,26 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :glob} = _intent),
-    do: {:ok, %Current.EffectResult.Glob{matches: []}}
+  def apply(%Intent{type: :glob} = intent) do
+    pattern = Map.fetch!(intent.payload, :pattern)
+    base_dir = Map.get(intent.payload, :base_dir, ".")
+
+    cond do
+      Path.type(pattern) == :absolute ->
+        {:error, "glob pattern must be relative"}
+
+      not File.dir?(base_dir) ->
+        {:error, "directory not found: #{base_dir}"}
+
+      true ->
+        matches =
+          Path.join(base_dir, pattern)
+          |> Path.wildcard()
+          |> Enum.sort()
+
+        {:ok, %Current.EffectResult.Glob{matches: matches}}
+    end
+  end
 
   def apply(%Intent{type: :grep} = intent) do
     pattern = Map.fetch!(intent.payload, :pattern)

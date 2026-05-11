@@ -691,29 +691,33 @@ defmodule CurrentTest do
     # 3/ Run it through the usual flow
     # 4/ Assert there are 3 artifacts produced that map 1:1 with the intents
     # 5/ Assert the workflow completes successfully
-    test "proposal with 3 intents produces 3 artifacts and completes" do
+    test "proposal with 5 intents produces 5 artifacts and completes" do
       :persistent_term.put(:proposal_builder, Current.MultiIntentProposalBuilder)
       on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
 
       {:ok, task_id, workflow} = submit_simple_task()
 
       receive do
-        {:proposal_production_started, ^task_id, _workflow} ->
-          :ok
+        {:proposal_production_started, ^task_id, _workflow} -> :ok
       after
-        @receive_timeout ->
-          flunk("did not receive proposal_production_started")
+        @receive_timeout -> flunk("did not receive proposal_production_started")
       end
 
       proposal =
         receive do
           {:proposal_produced, ^task_id, produced_workflow, proposal} ->
             assert produced_workflow.status == :validating
-            assert length(proposal.intents) == 3
+            assert length(proposal.intents) == 5
+
+            intent_types = Enum.map(proposal.intents, & &1.type)
+            assert :file_patch in intent_types
+            assert :write_file in intent_types
+            assert :glob in intent_types
+            assert :grep in intent_types
+
             proposal
         after
-          @receive_timeout ->
-            flunk("did not receive proposal_produced")
+          @receive_timeout -> flunk("did not receive proposal_produced")
         end
 
       proposal_intent_ids = Enum.map(proposal.intents, & &1.id)
@@ -729,22 +733,33 @@ defmodule CurrentTest do
           assert approved_workflow.status == :approved
           assert approved_workflow.proposal.id == proposal.id
       after
-        @receive_timeout ->
-          flunk("did not receive proposal_approved")
+        @receive_timeout -> flunk("did not receive proposal_approved")
       end
 
       receive do
         {:effects_applied, ^task_id, effect_workflow, intent_results} ->
           assert effect_workflow.status == :applying
           assert effect_workflow.proposal.id == proposal.id
-          assert length(intent_results) == 3
+          assert length(intent_results) == 5
+
+          {_glob_intent, glob_result} =
+            Enum.find(intent_results, fn {intent, _result} -> intent.type == :glob end)
+
+          assert %Current.EffectResult.Glob{} = glob_result
+          assert length(glob_result.matches) == 2
+
+          {_grep_intent, grep_result} =
+            Enum.find(intent_results, fn {intent, _result} -> intent.type == :grep end)
+
+          assert %Current.EffectResult.Grep{} = grep_result
+          assert length(grep_result.matches) == 1
+          assert hd(grep_result.matches).text =~ "validate_email"
       after
-        @receive_timeout ->
-          flunk("did not receive effects_applied")
+        @receive_timeout -> flunk("did not receive effects_applied")
       end
 
       artifacts =
-        1..3
+        1..5
         |> Enum.map(fn _ ->
           receive do
             {:artifact_produced, ^task_id, artifact_workflow, %Current.Artifact{} = artifact} ->
@@ -758,8 +773,7 @@ defmodule CurrentTest do
               assert File.exists?(artifact.storage.path)
               artifact
           after
-            @receive_timeout ->
-              flunk("did not receive artifact_produced")
+            @receive_timeout -> flunk("did not receive artifact_produced")
           end
         end)
 
@@ -768,20 +782,19 @@ defmodule CurrentTest do
       artifact_paths = Enum.map(artifacts, & &1.storage.path)
 
       assert Enum.sort(artifact_intent_ids) == Enum.sort(proposal_intent_ids)
-      assert length(Enum.uniq(artifact_ids)) == 3
-      assert length(Enum.uniq(artifact_paths)) == 3
+      assert length(Enum.uniq(artifact_ids)) == 5
+      assert length(Enum.uniq(artifact_paths)) == 5
 
       produced_artifacts =
         receive do
           {:artifacts_produced, ^task_id, artifact_workflow, produced_artifacts} ->
             assert artifact_workflow.id == workflow.id
             assert artifact_workflow.proposal.id == proposal.id
-            assert length(produced_artifacts) == 3
+            assert length(produced_artifacts) == 5
             assert Enum.sort(Enum.map(produced_artifacts, & &1.id)) == Enum.sort(artifact_ids)
             produced_artifacts
         after
-          @receive_timeout ->
-            flunk("did not receive artifacts_produced")
+          @receive_timeout -> flunk("did not receive artifacts_produced")
         end
 
       workflow_result =
@@ -789,12 +802,11 @@ defmodule CurrentTest do
           {:workflow_result_assembled, ^task_id, assembled_workflow, workflow_result} ->
             assert assembled_workflow.id == workflow.id
             assert %Current.WorkflowResult{} = workflow_result
-            assert length(workflow_result.artifacts) == 3
+            assert length(workflow_result.artifacts) == 5
             assert Enum.sort(workflow_result.artifacts) == Enum.sort(artifact_ids)
             workflow_result
         after
-          @receive_timeout ->
-            flunk("did not receive workflow_result_assembled")
+          @receive_timeout -> flunk("did not receive workflow_result_assembled")
         end
 
       receive do
@@ -802,13 +814,12 @@ defmodule CurrentTest do
           assert completed_workflow.status == :completed
           assert completed_workflow.result.id == workflow_result.id
       after
-        @receive_timeout ->
-          flunk("did not receive workflow_completed")
+        @receive_timeout -> flunk("did not receive workflow_completed")
       end
 
       {:ok, final_workflow} = Current.get_workflow(task_id)
       assert final_workflow.status == :completed
-      assert length(final_workflow.result.artifacts) == 3
+      assert length(final_workflow.result.artifacts) == 5
       assert Enum.sort(final_workflow.result.artifacts) == Enum.sort(artifact_ids)
 
       events = Current.EventStore.list_by_workflow_id(workflow.id)
@@ -822,7 +833,11 @@ defmodule CurrentTest do
                %Current.Event.EffectApplied{},
                %Current.Event.EffectApplied{},
                %Current.Event.EffectApplied{},
+               %Current.Event.EffectApplied{},
+               %Current.Event.EffectApplied{},
                %Current.Event.EffectsApplied{},
+               %Current.Event.ArtifactProduced{},
+               %Current.Event.ArtifactProduced{},
                %Current.Event.ArtifactProduced{},
                %Current.Event.ArtifactProduced{},
                %Current.Event.ArtifactProduced{},

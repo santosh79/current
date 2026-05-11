@@ -41,7 +41,26 @@ defmodule Current.MultiIntentProposalBuilder do
         type: :write_file,
         payload: %{
           path: generated_helper_path,
-          contents: "defmodule SignupHelper do\n  def sample_email, do: \"test@example.com\"\nend\n"
+          contents:
+            "defmodule SignupHelper do\n  def sample_email, do: \"test@example.com\"\nend\n"
+        }
+      },
+      %Intent{
+        id: Id.generate(),
+        proposal_id: proposal_id,
+        type: :glob,
+        payload: %{
+          pattern: "*.ex",
+          base_dir: dir
+        }
+      },
+      %Intent{
+        id: Id.generate(),
+        proposal_id: proposal_id,
+        type: :grep,
+        payload: %{
+          pattern: "validate_email",
+          paths: [patch_path]
         }
       }
     ]
@@ -55,7 +74,9 @@ defmodule Current.MultiIntentProposalBuilder do
        claims: [
          "signup flow validates email input",
          "test coverage is added for signup validation",
-         "helper code is generated without overwriting existing files"
+         "helper code is generated without overwriting existing files",
+         "all .ex files in the module directory are discoverable",
+         "validate_email is present in the patched signup module"
        ],
        dependencies: []
      }}
@@ -91,4 +112,3 @@ defmodule Current.MultiIntentProposalBuilder do
     |> Enum.join("\n")
   end
 end
-

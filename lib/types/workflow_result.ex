@@ -11,20 +11,19 @@ defmodule Current.WorkflowResult do
   ]
 
   @type type ::
-  :result_bundle
-  | :report
-  | :manifest
-  | :patch_set
-  | :verification_output
+          :result_bundle
+          | :report
+          | :manifest
+          | :patch_set
+          | :verification_output
 
   @type t :: %__MODULE__{
-    id: Current.Id.t(),
-    workflow_id: Current.Id.t(),
-    type: type(),
-    artifacts: [Current.Id.t()],
-    summary: String.t() | nil,
-    metadata: map() | nil,
-    created_at: DateTime.t()
-  }
+          id: Current.Id.t(),
+          workflow_id: Current.Id.t(),
+          type: type(),
+          artifacts: [Current.Id.t()],
+          summary: String.t() | nil,
+          metadata: map() | nil,
+          created_at: DateTime.t()
+        }
 end
-
