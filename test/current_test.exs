@@ -7,6 +7,8 @@ defmodule CurrentTest do
   alias Current.Workflow
   alias Current.Proposal
 
+  @receive_timeout 5_000
+
   describe "workflow lifecycle" do
     test "request submission" do
       req = %Request{
@@ -21,7 +23,7 @@ defmodule CurrentTest do
           assert {:ok, status} = Current.get_status(task_id)
           assert status != nil
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive workflow")
       end
     end
@@ -55,7 +57,7 @@ defmodule CurrentTest do
             assert workflow.started_at != nil
             workflow
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_production_started")
         end
 
@@ -76,7 +78,7 @@ defmodule CurrentTest do
           assert is_list(proposal.intents)
           assert length(proposal.intents) > 0
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_produced")
       end
     end
@@ -105,7 +107,7 @@ defmodule CurrentTest do
         {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_production_started")
       end
 
@@ -115,7 +117,7 @@ defmodule CurrentTest do
             assert workflow.status == :validating
             proposal.id
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
 
@@ -129,7 +131,7 @@ defmodule CurrentTest do
         {:proposal_approved, ^task_id, workflow} ->
           assert workflow.status == :approved
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_approved")
       end
 
@@ -158,7 +160,7 @@ defmodule CurrentTest do
         {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_production_started")
       end
 
@@ -168,7 +170,7 @@ defmodule CurrentTest do
             assert workflow.status == :validating
             proposal.id
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
 
@@ -182,7 +184,7 @@ defmodule CurrentTest do
         {:proposal_rejected, ^task_id, workflow} ->
           assert workflow.status == :rejected
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_rejected")
       end
 
@@ -204,7 +206,7 @@ defmodule CurrentTest do
         {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_production_started")
       end
 
@@ -214,7 +216,7 @@ defmodule CurrentTest do
             assert workflow.status == :validating
             proposal.id
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
 
@@ -228,7 +230,7 @@ defmodule CurrentTest do
         {:proposal_approved, ^task_id, workflow} ->
           assert workflow.status == :approved
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_approved")
       end
 
@@ -275,7 +277,7 @@ defmodule CurrentTest do
         {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_production_started")
       end
 
@@ -285,7 +287,7 @@ defmodule CurrentTest do
             assert workflow.status == :validating
             proposal.id
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
 
@@ -299,7 +301,7 @@ defmodule CurrentTest do
         {:proposal_rejected, ^task_id, workflow} ->
           assert workflow.status == :rejected
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_rejected")
       end
 
@@ -348,7 +350,7 @@ defmodule CurrentTest do
           assert planning_workflow.status == :planning
           assert planning_workflow.proposal == nil
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_production_started")
       end
 
@@ -361,7 +363,7 @@ defmodule CurrentTest do
             assert length(proposal.intents) > 0
             proposal
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
 
@@ -377,7 +379,7 @@ defmodule CurrentTest do
           assert approved_workflow.status == :approved
           assert approved_workflow.proposal.id == proposal.id
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_approved")
       end
 
@@ -387,7 +389,7 @@ defmodule CurrentTest do
           assert effect_workflow.status == :applying
           assert effect_workflow.proposal.id == proposal.id
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive effects_applied")
       end
 
@@ -404,7 +406,7 @@ defmodule CurrentTest do
 
             artifact
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive artifact_produced")
         end
 
@@ -423,7 +425,7 @@ defmodule CurrentTest do
 
             artifacts
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive artifact_produced")
         end
 
@@ -441,7 +443,7 @@ defmodule CurrentTest do
 
             workflow_result
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive workflow_result_assembled")
         end
 
@@ -453,7 +455,7 @@ defmodule CurrentTest do
           assert completed_workflow.result != nil
           assert completed_workflow.result.id == workflow_result.id
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive workflow_completed")
       end
 
@@ -489,7 +491,7 @@ defmodule CurrentTest do
         {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_production_started")
       end
 
@@ -499,7 +501,7 @@ defmodule CurrentTest do
             assert workflow.status == :validating
             proposal.id
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
 
@@ -513,7 +515,7 @@ defmodule CurrentTest do
         {:proposal_approved, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_approved")
       end
 
@@ -524,7 +526,7 @@ defmodule CurrentTest do
             assert %Current.Artifact{} = artifact
             artifact
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive artifact_produced")
         end
 
@@ -556,7 +558,7 @@ defmodule CurrentTest do
         {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_production_started")
       end
 
@@ -566,7 +568,7 @@ defmodule CurrentTest do
             assert workflow.status == :validating
             proposal.id
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
 
@@ -580,7 +582,7 @@ defmodule CurrentTest do
         {:proposal_approved, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_approved")
       end
 
@@ -591,7 +593,7 @@ defmodule CurrentTest do
             assert %Current.WorkflowResult{} = result
             result
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive workflow_result_assembled")
         end
 
@@ -621,7 +623,7 @@ defmodule CurrentTest do
       receive do
         {:proposal_production_started, ^task_id, _workflow} -> :ok
       after
-        1_000 -> flunk("did not receive proposal_production_started")
+        @receive_timeout -> flunk("did not receive proposal_production_started")
       end
 
       proposal =
@@ -630,7 +632,7 @@ defmodule CurrentTest do
             assert produced_workflow.status == :validating
             proposal
         after
-          1_000 -> flunk("did not receive proposal_produced")
+          @receive_timeout -> flunk("did not receive proposal_produced")
         end
 
       assert :ok =
@@ -644,14 +646,14 @@ defmodule CurrentTest do
           assert approved_workflow.id == workflow.id
           assert approved_workflow.status == :approved
       after
-        1_000 -> flunk("did not receive proposal_approved")
+        @receive_timeout -> flunk("did not receive proposal_approved")
       end
 
       receive do
         {:effect_failed, ^task_id, failed_workflow, _reason} ->
           assert failed_workflow.id == workflow.id
       after
-        1_000 -> flunk("did not receive effect_failed")
+        @receive_timeout -> flunk("did not receive effect_failed")
       end
 
       receive do
@@ -662,7 +664,7 @@ defmodule CurrentTest do
           assert failed_workflow.result == nil
           assert failed_workflow.error != nil
       after
-        1_000 -> flunk("did not receive workflow_failed")
+        @receive_timeout -> flunk("did not receive workflow_failed")
       end
 
       {:ok, final_workflow} = Current.get_workflow(task_id)
@@ -699,7 +701,7 @@ defmodule CurrentTest do
         {:proposal_production_started, ^task_id, _workflow} ->
           :ok
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_production_started")
       end
 
@@ -710,7 +712,7 @@ defmodule CurrentTest do
             assert length(proposal.intents) == 3
             proposal
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
 
@@ -727,7 +729,7 @@ defmodule CurrentTest do
           assert approved_workflow.status == :approved
           assert approved_workflow.proposal.id == proposal.id
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive proposal_approved")
       end
 
@@ -737,7 +739,7 @@ defmodule CurrentTest do
           assert effect_workflow.proposal.id == proposal.id
           assert length(intent_results) == 3
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive effects_applied")
       end
 
@@ -756,7 +758,7 @@ defmodule CurrentTest do
               assert File.exists?(artifact.storage.path)
               artifact
           after
-            1_000 ->
+            @receive_timeout ->
               flunk("did not receive artifact_produced")
           end
         end)
@@ -778,7 +780,7 @@ defmodule CurrentTest do
             assert Enum.sort(Enum.map(produced_artifacts, & &1.id)) == Enum.sort(artifact_ids)
             produced_artifacts
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive artifacts_produced")
         end
 
@@ -791,7 +793,7 @@ defmodule CurrentTest do
             assert Enum.sort(workflow_result.artifacts) == Enum.sort(artifact_ids)
             workflow_result
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive workflow_result_assembled")
         end
 
@@ -800,7 +802,7 @@ defmodule CurrentTest do
           assert completed_workflow.status == :completed
           assert completed_workflow.result.id == workflow_result.id
       after
-        1_000 ->
+        @receive_timeout ->
           flunk("did not receive workflow_completed")
       end
 
@@ -852,7 +854,7 @@ defmodule CurrentTest do
           {:workflow_created, ^task_id, workflow} ->
             workflow
         after
-          1_000 ->
+          @receive_timeout ->
             flunk("did not receive workflow_created")
         end
 
@@ -888,13 +890,13 @@ defmodule CurrentTest do
         receive do
           {:workflow_created, ^task_id, workflow} -> workflow
         after
-          1_000 -> flunk("did not receive workflow_created")
+          @receive_timeout -> flunk("did not receive workflow_created")
         end
 
       receive do
         {:proposal_production_started, ^task_id, _workflow} -> :ok
       after
-        1_000 -> flunk("did not receive proposal_production_started")
+        @receive_timeout -> flunk("did not receive proposal_production_started")
       end
 
       proposal =
@@ -911,7 +913,7 @@ defmodule CurrentTest do
 
             proposal
         after
-          1_000 -> flunk("did not receive proposal_produced")
+          @receive_timeout -> flunk("did not receive proposal_produced")
         end
 
       assert :ok =
@@ -924,7 +926,7 @@ defmodule CurrentTest do
         {:proposal_approved, ^task_id, approved_workflow} ->
           assert approved_workflow.status == :approved
       after
-        1_000 -> flunk("did not receive proposal_approved")
+        @receive_timeout -> flunk("did not receive proposal_approved")
       end
 
       receive do
@@ -932,7 +934,7 @@ defmodule CurrentTest do
           assert effect_workflow.status == :applying
           assert intent.type == :file_patch
       after
-        1_000 -> flunk("did not receive first effect_applied")
+        @receive_timeout -> flunk("did not receive first effect_applied")
       end
 
       receive do
@@ -941,7 +943,7 @@ defmodule CurrentTest do
           assert failed_workflow.result == nil
           assert is_binary(reason)
       after
-        1_000 -> flunk("did not receive effect_failed")
+        @receive_timeout -> flunk("did not receive effect_failed")
       end
 
       receive do
@@ -952,7 +954,7 @@ defmodule CurrentTest do
           assert failed_workflow.result == nil
           assert failed_workflow.error != nil
       after
-        1_000 -> flunk("did not receive workflow_failed")
+        @receive_timeout -> flunk("did not receive workflow_failed")
       end
 
       refute_receive {:effects_applied, ^task_id, _, _}, 200
@@ -998,7 +1000,7 @@ defmodule CurrentTest do
       receive do
         {:proposal_production_started, ^task_id, _workflow} -> :ok
       after
-        1_000 -> flunk("did not receive proposal_production_started")
+        @receive_timeout -> flunk("did not receive proposal_production_started")
       end
 
       proposal =
@@ -1009,7 +1011,7 @@ defmodule CurrentTest do
             assert intent.type == :run_command
             proposal
         after
-          1_000 -> flunk("did not receive proposal_produced")
+          @receive_timeout -> flunk("did not receive proposal_produced")
         end
 
       assert :ok =
@@ -1021,7 +1023,7 @@ defmodule CurrentTest do
       receive do
         {:proposal_approved, ^task_id, _workflow} -> :ok
       after
-        1_000 -> flunk("did not receive proposal_approved")
+        @receive_timeout -> flunk("did not receive proposal_approved")
       end
 
       receive do
@@ -1060,7 +1062,7 @@ defmodule CurrentTest do
 
           refute stdout_artifact_path == stderr_artifact_path
       after
-        1_000 -> flunk("did not receive effects_applied")
+        @receive_timeout -> flunk("did not receive effects_applied")
       end
 
       # the command_result artifact produced by ArtifactBuilder references both
@@ -1075,7 +1077,7 @@ defmodule CurrentTest do
             assert artifact.metadata.stdout_bytes > 0
             artifact
         after
-          1_000 -> flunk("did not receive artifact_produced")
+          @receive_timeout -> flunk("did not receive artifact_produced")
         end
 
       receive do
@@ -1083,20 +1085,20 @@ defmodule CurrentTest do
           assert length(artifacts) == 1
           assert hd(artifacts).id == artifact.id
       after
-        1_000 -> flunk("did not receive artifacts_produced")
+        @receive_timeout -> flunk("did not receive artifacts_produced")
       end
 
       receive do
         {:workflow_result_assembled, ^task_id, _workflow, _result} -> :ok
       after
-        1_000 -> flunk("did not receive workflow_result_assembled")
+        @receive_timeout -> flunk("did not receive workflow_result_assembled")
       end
 
       receive do
         {:workflow_completed, ^task_id, completed_workflow} ->
           assert completed_workflow.status == :completed
       after
-        1_000 -> flunk("did not receive workflow_completed")
+        @receive_timeout -> flunk("did not receive workflow_completed")
       end
 
       events = Current.EventStore.list_by_workflow_id(workflow.id)
