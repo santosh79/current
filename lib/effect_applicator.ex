@@ -161,8 +161,19 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :claim} = _intent),
-    do: {:ok, %Current.EffectResult.Claim{verified: true}}
+  # SantoshTODO: Plug in real verification eventually
+  def apply(%Intent{type: :claim} = intent) do
+    case Map.fetch(intent.payload, :expected) do
+      {:ok, expected} when is_boolean(expected) ->
+        {:ok, %Current.EffectResult.Claim{verified: expected}}
+
+      {:ok, _other} ->
+        {:error, "claim expected must be a boolean"}
+
+      :error ->
+        {:error, "claim expected is required"}
+    end
+  end
 
   def apply(%Intent{type: :report} = _intent),
     do: {:ok, %Current.EffectResult.Report{generated: true}}

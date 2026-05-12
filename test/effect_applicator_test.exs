@@ -414,6 +414,55 @@ defmodule Current.EffectApplicatorTest do
     end
   end
 
+  describe "apply/1 - claim" do
+    test "returns verified true when expected is true" do
+      intent =
+        intent_fixture(:claim, %{
+          claim: "signup validates email",
+          expected: true
+        })
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert %Current.EffectResult.Claim{} = result
+      assert result.verified == true
+    end
+
+    test "returns verified false when expected is false" do
+      intent =
+        intent_fixture(:claim, %{
+          claim: "signup validates email",
+          expected: false
+        })
+
+      assert {:ok, result} = EffectApplicator.apply(intent)
+
+      assert %Current.EffectResult.Claim{} = result
+      assert result.verified == false
+    end
+
+    test "returns error when expected is missing" do
+      intent =
+        intent_fixture(:claim, %{
+          claim: "signup validates email"
+        })
+
+      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert reason =~ "expected"
+    end
+
+    test "returns error when expected is not boolean" do
+      intent =
+        intent_fixture(:claim, %{
+          claim: "signup validates email",
+          expected: "true"
+        })
+
+      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert reason =~ "boolean"
+    end
+  end
+
   defp bad_diff() do
     [
       "--- app.ex",

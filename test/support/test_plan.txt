@@ -1,0 +1,216 @@
+This completes the first real local-filesystem interpreter layer. After this, the next big step should be intent validation before effect application, not more effect types.
+
+Central Line:
++++
+deterministic orchestration around nondeterministic cognition
++++
+
++++
+
+What would actually close the gap
+In rough priority order:
+
+1/ A real EffectApplicator that executes at least file_patch and run_command against a real or sandboxed filesystem
+2/ Actual artifact persistence — write to disk, store the path, verify it
+3/ A plan mode that produces proposals without applying effects
+4/ LLM integration for ProposalBuilder — even a minimal one that calls an API and parses a structured response
+5/ Intent validation before effect application
+6/ Proper supervision tree
++++
+Run Command Work Remaining:
+Yes — mostly complete for a first real implementation.
+
+You now have the important pieces:
+
+* run_command executes a real command.
+* stdout/stderr are persisted outside the event log.
+* result carries stdout_artifact_id, stderr_artifact_id, bytes, and exit code.
+* ArtifactBuilder creates a :command_result artifact that references those output artifacts.
+* events stay thin and typed.
+
+The main things still not “complete” are hardening items:
+
+* timeout / killing long-running commands
+* working directory support
+* environment variable support
+* max stdout/stderr size
+* command allowlist / policy gate
+* sandbox directory
+* safer non-shell command path for simple commands
+* structured JSON artifact body instead of inspect/1
+
+But architecturally, yes: the model is now right. The next step is not more shape work; it’s policy/sandboxing around run_command.
++++
+CGPT version:
+That’s the right north star. I’d sequence it like this:
+
+1. Proper supervision tree
+    Do this first. Your Agents/Stores/Registry/Current root process should start predictably under OTP. This makes everything else less ad hoc.
+2. Intent validation before effect application
+    Add a Current.IntentValidator that checks allowed types + required payload keys. This is the cleanest safety boundary before real effects.
+3. Plan mode
+    This gives you a no-effects path: submit → proposal → stop. It will clarify execution modes before you wire real mutation.
+4. Real EffectApplicator for file_patch and run_command in a sandbox
+    Do this only after validation + plan mode. Effects should run in a configured workspace, never arbitrary paths.
+5. Artifact persistence cleanup
+    You already write artifacts. Next make storage root configurable and persist structured JSON instead of inspect.
+6. LLM ProposalBuilder
+    Do this last. Once the runtime loop is solid, the LLM just becomes one implementation of ProposalBuilder.
++++
+
+
+
+So from here, the next most natural tests are:
+
+1. A multi-intent failure test
+    * proposal has 3 intents
+    * first succeeds, second fails
+    * workflow fails
+    * no completion
+    * decide whether artifacts before failure are allowed or not
+2. ArtifactBuilder unit tests
+    * especially now that it is its own module
+    * verify path, intent_id, type mapping, metadata, file contents
+3. Result integrity test
+    * WorkflowResult.artifacts exactly equals the produced artifact ids
+    * no extras, no missing ids, no duplicates
+4. Event payload test for artifacts_produced
+    * assert the event payload contains the same artifacts that were actually emitted individually
+
+
+Yes. I’d turn this into a short progressive ladder, where each test unlocks the next one.
+
+North star
+
+A workflow with multiple intents should behave like a real execution pipeline:
+	•	each intent is handled deliberately
+	•	outputs accumulate
+	•	the final WorkflowResult is a true bundle over produced artifacts
+	•	failures have clear semantics
+
+Proposed progression: 5 tests
+
+1. workflow_result contains the exact produced artifact ids
+
+This is the smallest next test and the best immediate lock.
+
+Goal:
+	•	approve a normal proposal
+	•	collect every artifact_produced message
+	•	receive workflow_result_assembled
+	•	assert workflow_result.artifacts == Enum.map(produced_artifacts, & &1.id)
+
+Why first:
+	•	it strengthens the current model without forcing a redesign yet
+	•	it tells you whether result assembly is actually faithful
+
+⸻
+
+2. proposal with multiple intents produces multiple artifacts
+
+Introduce a MultiIntentProposalBuilder in test/support.
+
+Goal:
+	•	proposal has 2 intents
+	•	after approval, you receive 2 artifact_produced messages
+	•	workflow_result.artifacts has length 2
+	•	workflow completes
+
+Why second:
+	•	this is the first true push beyond the one-intent assumption
+	•	it forces you to decide whether artifact production is per-intent or per-workflow
+
+⸻
+
+3. multiple-intent workflow emits one effect event per intent or one per execution phase
+
+This test is partly architectural: you choose the semantics and then lock them down.
+
+Two valid options:
+
+Option A:
+	•	one :effect_applied per intent
+
+Option B:
+	•	one :effect_applied for the whole apply phase
+
+Pick one and encode it.
+
+Why third:
+	•	you need to settle the event model before the system gets more complex
+
+⸻
+
+4. multiple-intent workflow fails when one intent fails
+
+Use a builder that emits:
+	•	one valid intent
+	•	one failing intent, like :drop_database
+
+Goal:
+	•	define whether partial success is allowed
+	•	likely expected behavior:
+	•	:effect_failed
+	•	:workflow_failed
+	•	no final result
+	•	maybe no artifacts persisted after failure, depending on policy
+
+Why fourth:
+	•	this forces the first real policy decision for multi-intent execution
+
+⸻
+
+5. workflow_failed event carries the correct terminal snapshot
+
+You already test ordering. This would lock the payload.
+
+Goal:
+	•	assert failed event snapshot has:
+	•	status == :failed
+	•	error != nil
+	•	result == nil
+	•	approved proposal still attached
+
+Why fifth:
+	•	once multi-intent failure exists, you want the terminal record to be trustworthy
+
+⸻
+
+If you want the shortest version: 4 tests
+
+You could compress it to this:
+	1.	workflow_result contains exact produced artifact ids
+	2.	multiple-intent proposal produces multiple artifacts
+	3.	multiple-intent proposal failure semantics
+	4.	workflow_failed snapshot is correct
+
+That’s enough to move toward the north star without overfitting.
+
+Recommended order of implementation
+
+Start here:
+	1.	result contains exact artifact ids
+	2.	multi-intent happy path
+	3.	choose effect event semantics
+	4.	multi-intent failure path
+	5.	failed snapshot payload
+
+The actual north-star test
+
+Once those are in place, the end-state test becomes something like:
+
+proposal with 3 intents
+→ all intents applied in defined order
+→ 3 artifacts produced
+→ workflow_result references exactly those 3 artifact ids
+→ workflow completes
+
+And the sibling:
+
+proposal with 3 intents, one invalid
+→ failure semantics are explicit
+→ workflow_failed snapshot is correct
+→ no ambiguity around partial outputs
+
+If you want, I’d start by writing test 1 first: workflow_result contains the exact produced artifact ids.
+
