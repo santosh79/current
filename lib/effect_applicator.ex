@@ -1,4 +1,5 @@
 defmodule Current.EffectApplicator do
+  import Kernel, except: [apply: 2]
   alias Current.Intent
 
   @type result ::
@@ -12,12 +13,15 @@ defmodule Current.EffectApplicator do
           | Current.EffectResult.Claim.t()
           | Current.EffectResult.Report.t()
 
+
   @callback apply(Intent.t()) :: {:ok, result()} | {:error, String.t()}
   @spec apply(Intent.t()) :: {:ok, result()} | {:error, String.t()}
+  def apply(%Intent{} = intent), do: apply(intent, [])
 
-  # SantoshTODO: implement real effect logic
-  # SantoshTODO: See if this can be generated from Intent Types directly
-  def apply(%Intent{type: :file_patch} = intent) do
+  @callback apply(Intent.t(), [{Intent.t(), result()}]) :: {:ok, result()} | {:error, String.t()}
+  @spec apply(Intent.t(), [{Intent.t(), result()}]) :: {:ok, result()} | {:error, String.t()}
+
+  def apply(%Intent{type: :file_patch} = intent, _prior_results) do
     path = intent.payload.path
     diff = intent.payload.diff
 
@@ -45,7 +49,7 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :write_file} = intent) do
+  def apply(%Intent{type: :write_file} = intent, _prior_results) do
     path = Map.fetch!(intent.payload, :path)
 
     case File.exists?(path) do
@@ -56,16 +60,13 @@ defmodule Current.EffectApplicator do
         contents = Map.fetch!(intent.payload, :contents)
 
         case write_file(path, contents) do
-          :ok ->
-            {:ok, %Current.EffectResult.WriteFile{path: path}}
-
-          {:error, reason} ->
-            {:error, "write_file failed for #{path}: #{inspect(reason)}"}
+          :ok -> {:ok, %Current.EffectResult.WriteFile{path: path}}
+          {:error, reason} -> {:error, "write_file failed for #{path}: #{inspect(reason)}"}
         end
     end
   end
 
-  def apply(%Intent{type: :delete_file} = intent) do
+  def apply(%Intent{type: :delete_file} = intent, _prior_results) do
     path = Map.fetch!(intent.payload, :path)
 
     case File.dir?(path) do
@@ -80,7 +81,7 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :run_command} = intent) do
+  def apply(%Intent{type: :run_command} = intent, _prior_results) do
     cmd = Map.fetch!(intent.payload, :cmd)
     args = Map.get(intent.payload, :args, [])
 
@@ -114,7 +115,7 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :glob} = intent) do
+  def apply(%Intent{type: :glob} = intent, _prior_results) do
     pattern = Map.fetch!(intent.payload, :pattern)
     base_dir = Map.get(intent.payload, :base_dir, ".")
 
@@ -126,16 +127,12 @@ defmodule Current.EffectApplicator do
         {:error, "directory not found: #{base_dir}"}
 
       true ->
-        matches =
-          Path.join(base_dir, pattern)
-          |> Path.wildcard()
-          |> Enum.sort()
-
+        matches = Path.join(base_dir, pattern) |> Path.wildcard() |> Enum.sort()
         {:ok, %Current.EffectResult.Glob{matches: matches}}
     end
   end
 
-  def apply(%Intent{type: :grep} = intent) do
+  def apply(%Intent{type: :grep} = intent, _prior_results) do
     pattern = Map.fetch!(intent.payload, :pattern)
     paths = Map.fetch!(intent.payload, :paths)
 
@@ -145,9 +142,7 @@ defmodule Current.EffectApplicator do
         |> Enum.flat_map(fn path ->
           File.stream!(path, :line)
           |> Stream.with_index(1)
-          |> Enum.filter(fn {line, _line_no} ->
-            String.contains?(line, pattern)
-          end)
+          |> Enum.filter(fn {line, _} -> String.contains?(line, pattern) end)
           |> Enum.map(fn {line, line_no} ->
             %Current.EffectResult.Grep.Match{
               path: path,
@@ -161,25 +156,39 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  # SantoshTODO: Plug in real verification eventually
-  def apply(%Intent{type: :claim} = intent) do
-    case Map.fetch(intent.payload, :expected) do
-      {:ok, expected} when is_boolean(expected) ->
-        {:ok, %Current.EffectResult.Claim{verified: expected}}
+  def apply(%Intent{type: :report} = _intent, _prior_results),
+    do: {:ok, %Current.EffectResult.Report{generated: true}}
 
-      {:ok, _other} ->
-        {:error, "claim expected must be a boolean"}
+  def apply(%Intent{type: :claim} = intent, prior_results) do
+    statement = Map.get(intent.payload, :statement, Map.get(intent.payload, :claim, ""))
+
+    case Map.fetch(intent.payload, :evidence) do
+      {:ok, evidence} ->
+        verify_evidence(statement, evidence, prior_results)
 
       :error ->
-        {:error, "claim expected is required"}
+        case Map.fetch(intent.payload, :expected) do
+          {:ok, expected} when is_boolean(expected) ->
+            {:ok,
+             %Current.EffectResult.Claim{
+               verified: expected,
+               statement: statement,
+               reason: "asserted directly"
+             }}
+
+          {:ok, _other} ->
+            {:error, "claim expected must be a boolean"}
+
+          :error ->
+            {:error, "claim requires either :evidence or :expected"}
+        end
     end
   end
 
-  def apply(%Intent{type: :report} = _intent),
-    do: {:ok, %Current.EffectResult.Report{generated: true}}
+  def apply(%Intent{type: type}, _prior_results),
+    do: {:error, "unsupported intent type: #{type}"}
 
-  def apply(%Intent{type: type}), do: {:error, "unsupported intent type: #{type}"}
-
+  # ... private functions unchanged ...
   defp run_command_with_redirect(cmd, args, stdout_path, stderr_path) do
     executable = System.find_executable(cmd)
 
@@ -234,4 +243,105 @@ defmodule Current.EffectApplicator do
         {:error, "file not found: #{path}"}
     end
   end
+
+  defp verify_evidence(statement, evidence, prior_results) do
+    intent_type = Map.fetch!(evidence, :intent_type)
+    condition = Map.fetch!(evidence, :condition)
+    value = Map.fetch!(evidence, :value)
+
+    case find_prior_result(prior_results, intent_type) do
+      nil ->
+        {:error, "claim evidence references #{intent_type} but no such intent result found"}
+
+      prior_result ->
+        evaluate_condition(statement, condition, value, prior_result)
+    end
+  end
+
+  defp find_prior_result(prior_results, intent_type) do
+    case Enum.find(prior_results, fn {intent, _result} -> intent.type == intent_type end) do
+      {_intent, result} -> result
+      nil -> nil
+    end
+  end
+
+  defp evaluate_condition(
+         statement,
+         :match_count_greater_than,
+         value,
+         %Current.EffectResult.Grep{} = result
+       ) do
+    count = length(result.matches)
+    verified = count > value
+    reason = "grep produced #{count} match(es), expected more than #{value}"
+
+    {:ok,
+     %Current.EffectResult.Claim{
+       verified: verified,
+       statement: statement,
+       reason: reason,
+       evidence: %{intent_type: :grep, condition: :match_count_greater_than, value: value}
+     }}
+  end
+
+  defp evaluate_condition(
+         statement,
+         :match_count_greater_than,
+         value,
+         %Current.EffectResult.Glob{} = result
+       ) do
+    count = length(result.matches)
+    verified = count > value
+    reason = "glob produced #{count} match(es), expected more than #{value}"
+
+    {:ok,
+     %Current.EffectResult.Claim{
+       verified: verified,
+       statement: statement,
+       reason: reason,
+       evidence: %{intent_type: :glob, condition: :match_count_greater_than, value: value}
+     }}
+  end
+
+  defp evaluate_condition(
+         statement,
+         :match_count_equals,
+         value,
+         %Current.EffectResult.Grep{} = result
+       ) do
+    count = length(result.matches)
+    verified = count == value
+    reason = "grep produced #{count} match(es), expected exactly #{value}"
+
+    {:ok,
+     %Current.EffectResult.Claim{
+       verified: verified,
+       statement: statement,
+       reason: reason,
+       evidence: %{intent_type: :grep, condition: :match_count_equals, value: value}
+     }}
+  end
+
+  defp evaluate_condition(
+         statement,
+         :exit_code_equals,
+         value,
+         %Current.EffectResult.Command{} = result
+       ) do
+    verified = result.exit_code == value
+    reason = "command exited with #{result.exit_code}, expected #{value}"
+
+    {:ok,
+     %Current.EffectResult.Claim{
+       verified: verified,
+       statement: statement,
+       reason: reason,
+       evidence: %{intent_type: :run_command, condition: :exit_code_equals, value: value}
+     }}
+  end
+
+  defp evaluate_condition(_statement, condition, _value, result) do
+    {:error, "condition #{condition} is not supported for #{result.__struct__}"}
+  end
 end
+

@@ -191,16 +191,23 @@ defmodule Current.ArtifactBuilderTest do
   end
 
   describe "build/2 - claim" do
-    test "constructs a claim_result artifact with verified flag" do
+    test "constructs a claim_result artifact with verified flag and statement" do
       workflow = workflow_fixture()
-      intent = intent_fixture(:claim, %{claim: "tests pass"})
-      result = %EffectResult.Claim{verified: true}
+      intent = intent_fixture(:claim, %{statement: "tests pass"})
+
+      result = %EffectResult.Claim{
+        verified: true,
+        statement: "tests pass",
+        reason: "asserted directly"
+      }
 
       {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
 
       assert artifact.name == :claim_result
       assert artifact.type == :claim_result
       assert artifact.metadata.verified == true
+      assert artifact.metadata.statement == "tests pass"
+      assert artifact.metadata.reason == "asserted directly"
     end
   end
 

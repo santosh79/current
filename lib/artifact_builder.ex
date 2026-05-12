@@ -98,12 +98,20 @@ defmodule Current.ArtifactBuilder do
 
   def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Claim{} = result}) do
     body =
-      :json.encode(%{verified: result.verified, intent_id: intent.id}) |> IO.iodata_to_binary()
+      :json.encode(%{
+        verified: result.verified,
+        statement: result.statement,
+        reason: result.reason,
+        intent_id: intent.id
+      })
+      |> IO.iodata_to_binary()
 
     persist(workflow, intent, :claim_result, :claim_result, "claim_result.json", body, %{
       bytes: byte_size(body),
       content_type: "application/json",
-      verified: result.verified
+      verified: result.verified,
+      statement: result.statement,
+      reason: result.reason
     })
   end
 
