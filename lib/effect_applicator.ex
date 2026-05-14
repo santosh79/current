@@ -188,7 +188,6 @@ defmodule Current.EffectApplicator do
   def apply(%Intent{type: type}, _prior_results),
     do: {:error, "unsupported intent type: #{type}"}
 
-  # ... private functions unchanged ...
   defp run_command_with_redirect(cmd, args, stdout_path, stderr_path) do
     executable = System.find_executable(cmd)
 
