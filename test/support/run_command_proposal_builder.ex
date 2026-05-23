@@ -11,14 +11,11 @@ defmodule Current.RunCommandProposalBuilder do
 
     proposal_id = Id.generate()
 
-    intent = %Intent{
+    intent = %Intent.RunCommand{
       id: Id.generate(),
       proposal_id: proposal_id,
-      type: :run_command,
-      payload: %{
-        cmd: "sh",
-        args: ["-c", "echo hello from test; echo error from test >&2"]
-      }
+      cmd: "sh",
+      args: ["-c", "echo hello from test; echo error from test >&2"]
     }
 
     {:ok,

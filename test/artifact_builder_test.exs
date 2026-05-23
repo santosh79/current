@@ -21,15 +21,80 @@ defmodule Current.ArtifactBuilderTest do
       error: nil
     }
   end
-
   defp intent_fixture(type, payload) do
-    %Intent{
-      id: Id.generate(),
-      proposal_id: Id.generate(),
-      type: type,
-      payload: payload
-    }
+    case type do
+      :file_patch ->
+        %Intent.FilePatch{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          path: Map.get(payload, :path),
+          diff: Map.get(payload, :diff)
+        }
+
+      :write_file ->
+        %Intent.WriteFile{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          path: Map.get(payload, :path),
+          contents: Map.get(payload, :contents)
+        }
+
+      :delete_file ->
+        %Intent.DeleteFile{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          path: Map.get(payload, :path)
+        }
+
+      :read_file ->
+        %Intent.ReadFile{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          path: Map.get(payload, :path)
+        }
+
+      :glob ->
+        %Intent.Glob{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          pattern: Map.get(payload, :pattern),
+          base_dir: Map.get(payload, :base_dir, ".")
+        }
+
+      :grep ->
+        %Intent.Grep{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          pattern: Map.get(payload, :pattern),
+          paths: Map.get(payload, :paths)
+        }
+
+      :claim ->
+        %Intent.Claim{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          statement: Map.get(payload, :statement),
+          evidence: Map.get(payload, :evidence),
+          expected: Map.get(payload, :expected)
+        }
+
+      :run_command ->
+        %Intent.RunCommand{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          cmd: Map.get(payload, :cmd),
+          args: Map.get(payload, :args, [])
+        }
+
+      :report ->
+        %Intent.Report{
+          id: Id.generate(),
+          proposal_id: Id.generate(),
+          summary: Map.get(payload, :summary)
+        }
+    end
   end
+
 
   describe "build/2 - file_patch" do
     test "constructs a file_patch_result artifact" do
@@ -191,16 +256,23 @@ defmodule Current.ArtifactBuilderTest do
   end
 
   describe "build/2 - claim" do
-    test "constructs a claim_result artifact with verified flag" do
+    test "constructs a claim_result artifact with verified flag and statement" do
       workflow = workflow_fixture()
-      intent = intent_fixture(:claim, %{claim: "tests pass"})
-      result = %EffectResult.Claim{verified: true}
+      intent = intent_fixture(:claim, %{statement: "tests pass"})
+
+      result = %EffectResult.Claim{
+        verified: true,
+        statement: "tests pass",
+        reason: "asserted directly"
+      }
 
       {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
 
       assert artifact.name == :claim_result
       assert artifact.type == :claim_result
       assert artifact.metadata.verified == true
+      assert artifact.metadata.statement == "tests pass"
+      assert artifact.metadata.reason == "asserted directly"
     end
   end
 

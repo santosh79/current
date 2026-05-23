@@ -133,27 +133,60 @@ defmodule Current.WorkflowOrchestrator do
 
   @impl true
   def handle_info(
-        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent{} = intent, result},
+        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent.FilePatch{} = intent,
+         result},
         state
       )
-      when is_pid(state.workflow_pid) do
-    :ok =
-      append_event(%Event.EffectApplied{
-        id: Current.Id.generate(),
-        workflow_id: workflow.id,
-        workflow: workflow,
-        intent: intent,
-        result: result,
-        timestamp: DateTime.utc_now()
-      })
+      when is_pid(state.workflow_pid), do: handle_effect_applied(workflow, intent, result, state)
 
-    notify_listeners(
-      state.listeners,
-      {:effect_applied, workflow.task_id, workflow, intent, result}
-    )
+  def handle_info(
+        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent.WriteFile{} = intent,
+         result},
+        state
+      )
+      when is_pid(state.workflow_pid), do: handle_effect_applied(workflow, intent, result, state)
 
-    {:noreply, state}
-  end
+  def handle_info(
+        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent.RunCommand{} = intent,
+         result},
+        state
+      )
+      when is_pid(state.workflow_pid), do: handle_effect_applied(workflow, intent, result, state)
+
+  def handle_info(
+        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent.ReadFile{} = intent,
+         result},
+        state
+      )
+      when is_pid(state.workflow_pid), do: handle_effect_applied(workflow, intent, result, state)
+
+  def handle_info(
+        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent.Glob{} = intent,
+         result},
+        state
+      )
+      when is_pid(state.workflow_pid), do: handle_effect_applied(workflow, intent, result, state)
+
+  def handle_info(
+        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent.Grep{} = intent,
+         result},
+        state
+      )
+      when is_pid(state.workflow_pid), do: handle_effect_applied(workflow, intent, result, state)
+
+  def handle_info(
+        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent.Claim{} = intent,
+         result},
+        state
+      )
+      when is_pid(state.workflow_pid), do: handle_effect_applied(workflow, intent, result, state)
+
+  def handle_info(
+        {:effect_applied, %Current.Workflow{} = workflow, %Current.Intent.Report{} = intent,
+         result},
+        state
+      )
+      when is_pid(state.workflow_pid), do: handle_effect_applied(workflow, intent, result, state)
 
   @impl true
   def handle_info({:effects_applied, %Current.Workflow{} = workflow, intent_results}, state)
@@ -178,23 +211,90 @@ defmodule Current.WorkflowOrchestrator do
 
   @impl true
   def handle_info(
-        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent{} = intent, reason},
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.FilePatch{} = intent,
+         reason},
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok =
-      append_event(%Event.EffectFailed{
-        id: Current.Id.generate(),
-        workflow_id: workflow.id,
-        workflow: workflow,
-        intent: intent,
-        reason: reason,
-        timestamp: DateTime.utc_now()
-      })
+    handle_effect_failed(workflow, intent, reason, state)
+  end
 
-    notify_listeners(state.listeners, {:effect_failed, workflow.task_id, workflow, reason})
-    GenServer.cast(state.workflow_pid, {:fail, reason})
-    {:noreply, state}
+  @impl true
+  def handle_info(
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.WriteFile{} = intent,
+         reason},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_effect_failed(workflow, intent, reason, state)
+  end
+
+  @impl true
+  def handle_info(
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.ReadFile{} = intent,
+         reason},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_effect_failed(workflow, intent, reason, state)
+  end
+
+  @impl true
+  def handle_info(
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.DeleteFile{} = intent,
+         reason},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_effect_failed(workflow, intent, reason, state)
+  end
+
+  @impl true
+  def handle_info(
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.RunCommand{} = intent,
+         reason},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_effect_failed(workflow, intent, reason, state)
+  end
+
+  @impl true
+  def handle_info(
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.Grep{} = intent, reason},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_effect_failed(workflow, intent, reason, state)
+  end
+
+  @impl true
+  def handle_info(
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.Glob{} = intent, reason},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_effect_failed(workflow, intent, reason, state)
+  end
+
+  @impl true
+  def handle_info(
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.Claim{} = intent,
+         reason},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_effect_failed(workflow, intent, reason, state)
+  end
+
+  @impl true
+  def handle_info(
+        {:effect_failed, %Current.Workflow{} = workflow, %Current.Intent.Report{} = intent,
+         reason},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_effect_failed(workflow, intent, reason, state)
   end
 
   @impl true
@@ -214,24 +314,84 @@ defmodule Current.WorkflowOrchestrator do
 
   @impl true
   def handle_info(
-        {:artifact_produced, %Current.Workflow{} = workflow, {%Current.Intent{} = intent, result},
-         %Current.Artifact{} = artifact},
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.ReadFile{} = intent, result}, %Current.Artifact{} = artifact},
         state
       )
       when is_pid(state.workflow_pid) do
-    :ok =
-      append_event(%Event.ArtifactProduced{
-        id: Current.Id.generate(),
-        workflow_id: workflow.id,
-        workflow: workflow,
-        intent: intent,
-        result: result,
-        artifact: artifact,
-        timestamp: DateTime.utc_now()
-      })
+    handle_artifact_produced(workflow, intent, result, state, artifact)
+  end
 
-    notify_listeners(state.listeners, {:artifact_produced, workflow.task_id, workflow, artifact})
-    {:noreply, state}
+  def handle_info(
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.WriteFile{} = intent, result}, %Current.Artifact{} = artifact},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_artifact_produced(workflow, intent, result, state, artifact)
+  end
+
+  def handle_info(
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.DeleteFile{} = intent, result}, %Current.Artifact{} = artifact},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_artifact_produced(workflow, intent, result, state, artifact)
+  end
+
+  def handle_info(
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.FilePatch{} = intent, result}, %Current.Artifact{} = artifact},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_artifact_produced(workflow, intent, result, state, artifact)
+  end
+
+  def handle_info(
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.RunCommand{} = intent, result}, %Current.Artifact{} = artifact},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_artifact_produced(workflow, intent, result, state, artifact)
+  end
+
+  def handle_info(
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.Grep{} = intent, result}, %Current.Artifact{} = artifact},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_artifact_produced(workflow, intent, result, state, artifact)
+  end
+
+  def handle_info(
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.Glob{} = intent, result}, %Current.Artifact{} = artifact},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_artifact_produced(workflow, intent, result, state, artifact)
+  end
+
+  def handle_info(
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.Claim{} = intent, result}, %Current.Artifact{} = artifact},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_artifact_produced(workflow, intent, result, state, artifact)
+  end
+
+  def handle_info(
+        {:artifact_produced, %Current.Workflow{} = workflow,
+         {%Current.Intent.Report{} = intent, result}, %Current.Artifact{} = artifact},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    handle_artifact_produced(workflow, intent, result, state, artifact)
   end
 
   @impl true
@@ -307,5 +467,56 @@ defmodule Current.WorkflowOrchestrator do
   defp notify_listeners(listeners, message) do
     Enum.each(listeners, fn pid -> send(pid, message) end)
     :ok
+  end
+
+  defp handle_effect_applied(workflow, intent, result, state) do
+    :ok =
+      append_event(%Event.EffectApplied{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        intent: intent,
+        result: result,
+        timestamp: DateTime.utc_now()
+      })
+
+    notify_listeners(
+      state.listeners,
+      {:effect_applied, workflow.task_id, workflow, intent, result}
+    )
+
+    {:noreply, state}
+  end
+
+  defp handle_effect_failed(workflow, intent, reason, state) do
+    :ok =
+      append_event(%Event.EffectFailed{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        intent: intent,
+        reason: reason,
+        timestamp: DateTime.utc_now()
+      })
+
+    notify_listeners(state.listeners, {:effect_failed, workflow.task_id, workflow, reason})
+    GenServer.cast(state.workflow_pid, {:fail, reason})
+    {:noreply, state}
+  end
+
+  defp handle_artifact_produced(workflow, intent, result, state, artifact) do
+    :ok =
+      append_event(%Event.ArtifactProduced{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        intent: intent,
+        result: result,
+        artifact: artifact,
+        timestamp: DateTime.utc_now()
+      })
+
+    notify_listeners(state.listeners, {:artifact_produced, workflow.task_id, workflow, artifact})
+    {:noreply, state}
   end
 end

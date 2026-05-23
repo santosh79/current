@@ -5,7 +5,7 @@ defmodule Current.ArtifactBuilder do
   @spec build(Workflow.t(), {Intent.t(), Current.EffectApplicator.result()}) ::
           {:ok, Artifact.t()}
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.FilePatch{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.FilePatch{} = intent, %EffectResult.FilePatch{} = result}) do
     body = :json.encode(%{path: result.path, intent_id: intent.id}) |> IO.iodata_to_binary()
 
     persist(
@@ -23,7 +23,7 @@ defmodule Current.ArtifactBuilder do
     )
   end
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Command{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.RunCommand{} = intent, %EffectResult.Command{} = result}) do
     body =
       :json.encode(%{
         exit_code: result.exit_code,
@@ -46,7 +46,7 @@ defmodule Current.ArtifactBuilder do
     })
   end
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.WriteFile{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.WriteFile{} = intent, %EffectResult.WriteFile{} = result}) do
     body = :json.encode(%{path: result.path, intent_id: intent.id}) |> IO.iodata_to_binary()
 
     persist(workflow, intent, :write_file_result, :report, "write_file_result.json", body, %{
@@ -56,7 +56,7 @@ defmodule Current.ArtifactBuilder do
     })
   end
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.DeleteFile{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.DeleteFile{} = intent, %EffectResult.DeleteFile{} = result}) do
     body = :json.encode(%{path: result.path, intent_id: intent.id}) |> IO.iodata_to_binary()
 
     persist(workflow, intent, :delete_file_result, :report, "delete_file_result.json", body, %{
@@ -66,7 +66,7 @@ defmodule Current.ArtifactBuilder do
     })
   end
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.ReadFile{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.ReadFile{} = intent, %EffectResult.ReadFile{} = result}) do
     body = :json.encode(%{path: result.path, intent_id: intent.id}) |> IO.iodata_to_binary()
 
     persist(workflow, intent, :read_result, :read_result, "read_result.json", body, %{
@@ -76,7 +76,7 @@ defmodule Current.ArtifactBuilder do
     })
   end
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Glob{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.Glob{} = intent, %EffectResult.Glob{} = result}) do
     body = :json.encode(%{matches: result.matches, intent_id: intent.id}) |> IO.iodata_to_binary()
 
     persist(workflow, intent, :glob_result, :report, "glob_result.json", body, %{
@@ -86,7 +86,7 @@ defmodule Current.ArtifactBuilder do
     })
   end
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Grep{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.Grep{} = intent, %EffectResult.Grep{} = result}) do
     body = :json.encode(%{matches: result.matches, intent_id: intent.id}) |> IO.iodata_to_binary()
 
     persist(workflow, intent, :grep_result, :report, "grep_result.json", body, %{
@@ -96,18 +96,26 @@ defmodule Current.ArtifactBuilder do
     })
   end
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Claim{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.Claim{} = intent, %EffectResult.Claim{} = result}) do
     body =
-      :json.encode(%{verified: result.verified, intent_id: intent.id}) |> IO.iodata_to_binary()
+      :json.encode(%{
+        verified: result.verified,
+        statement: result.statement,
+        reason: result.reason,
+        intent_id: intent.id
+      })
+      |> IO.iodata_to_binary()
 
     persist(workflow, intent, :claim_result, :claim_result, "claim_result.json", body, %{
       bytes: byte_size(body),
       content_type: "application/json",
-      verified: result.verified
+      verified: result.verified,
+      statement: result.statement,
+      reason: result.reason
     })
   end
 
-  def build(%Workflow{} = workflow, {%Intent{} = intent, %EffectResult.Report{} = result}) do
+  def build(%Workflow{} = workflow, {%Intent.Report{} = intent, %EffectResult.Report{} = result}) do
     body =
       :json.encode(%{generated: result.generated, intent_id: intent.id}) |> IO.iodata_to_binary()
 

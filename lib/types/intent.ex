@@ -1,27 +1,112 @@
-defmodule Current.Intent do
-  @enforce_keys [:id, :type, :proposal_id, :payload]
-  defstruct [
-    :id,
-    :proposal_id,
-    :type,
-    :payload
-  ]
-
-  @type type ::
-          :file_patch
-          | :write_file
-          | :delete_file
-          | :run_command
-          | :read_file
-          | :glob
-          | :grep
-          | :claim
-          | :report
+defmodule Current.Intent.FilePatch do
+  @enforce_keys [:id, :proposal_id, :path, :diff]
+  defstruct [:id, :proposal_id, :path, :diff]
 
   @type t :: %__MODULE__{
           id: Current.Id.t(),
           proposal_id: Current.Id.t(),
-          type: type(),
-          payload: map()
+          path: String.t(),
+          diff: String.t()
+        }
+end
+
+defmodule Current.Intent.ReadFile do
+  @enforce_keys [:id, :proposal_id, :path]
+  defstruct [:id, :proposal_id, :path]
+
+  @type t :: %__MODULE__{
+          id: Current.Id.t(),
+          proposal_id: Current.Id.t(),
+          path: String.t()
+        }
+end
+
+# lib/types/intents/write_file.ex
+defmodule Current.Intent.WriteFile do
+  @enforce_keys [:id, :proposal_id, :path, :contents]
+  defstruct [:id, :proposal_id, :path, :contents]
+
+  @type t :: %__MODULE__{
+          id: Current.Id.t(),
+          proposal_id: Current.Id.t(),
+          path: String.t(),
+          contents: String.t()
+        }
+end
+
+# lib/types/intents/delete_file.ex
+defmodule Current.Intent.DeleteFile do
+  @enforce_keys [:id, :proposal_id, :path]
+  defstruct [:id, :proposal_id, :path]
+
+  @type t :: %__MODULE__{
+          id: Current.Id.t(),
+          proposal_id: Current.Id.t(),
+          path: String.t()
+        }
+end
+
+# lib/types/intents/run_command.ex
+defmodule Current.Intent.RunCommand do
+  @enforce_keys [:id, :proposal_id, :cmd]
+  defstruct [:id, :proposal_id, :cmd, args: []]
+
+  @type t :: %__MODULE__{
+          id: Current.Id.t(),
+          proposal_id: Current.Id.t(),
+          cmd: String.t(),
+          args: [String.t()]
+        }
+end
+
+# lib/types/intents/grep.ex
+defmodule Current.Intent.Grep do
+  @enforce_keys [:id, :proposal_id, :pattern, :paths]
+  defstruct [:id, :proposal_id, :pattern, :paths]
+
+  @type t :: %__MODULE__{
+          id: Current.Id.t(),
+          proposal_id: Current.Id.t(),
+          pattern: String.t(),
+          paths: [String.t()]
+        }
+end
+
+# lib/types/intents/glob.ex
+defmodule Current.Intent.Glob do
+  @enforce_keys [:id, :proposal_id, :pattern]
+  defstruct [:id, :proposal_id, :pattern, base_dir: "."]
+
+  @type t :: %__MODULE__{
+          id: Current.Id.t(),
+          proposal_id: Current.Id.t(),
+          pattern: String.t(),
+          base_dir: String.t()
+        }
+end
+
+# lib/types/intents/claim.ex
+defmodule Current.Intent.Claim do
+  @enforce_keys [:id, :proposal_id, :statement]
+  defstruct [:id, :proposal_id, :statement, :evidence, :expected]
+
+  @type t :: %__MODULE__{
+          id: Current.Id.t(),
+          proposal_id: Current.Id.t(),
+          statement: String.t(),
+          evidence: Current.EffectResult.Claim.evidence() | nil,
+          expected: boolean() | nil
+        }
+end
+
+# lib/types/intents/report.ex
+defmodule Current.Intent.Report do
+  @enforce_keys [:id, :proposal_id]
+  defstruct [:id, :proposal_id, :summary]
+
+  @type t :: %__MODULE__{
+          id: Current.Id.t(),
+          proposal_id: Current.Id.t(),
+          summary: String.t() | nil
         }
 end

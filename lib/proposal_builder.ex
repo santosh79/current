@@ -21,11 +21,11 @@ defmodule Current.ProposalBuilder do
      end
     """
 
-    intent = %Intent{
+    intent = %Intent.FilePatch{
       id: Id.generate(),
       proposal_id: proposal_id,
-      type: :file_patch,
-      payload: %{path: path, diff: diff}
+      path: path,
+      diff: diff
     }
 
     proposal = %Proposal{

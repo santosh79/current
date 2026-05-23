@@ -229,20 +229,29 @@ defmodule Current.Workflow do
     :ok = WorkflowStore.put(updated_workflow)
     send(orchestrator_pid, {:effect_application_started, updated_workflow})
 
-    case apply_intents_streaming(
-           workflow.proposal.intents,
-           orchestrator_pid,
-           updated_workflow,
-           []
-         ) do
-      {:ok, intent_results} ->
-        send(orchestrator_pid, {:effects_applied, updated_workflow, intent_results})
-        {:noreply, %{state | workflow: updated_workflow}}
+    spawn_link(fn ->
+      try do
+        case apply_intents_streaming(
+               workflow.proposal.intents,
+               orchestrator_pid,
+               updated_workflow,
+               []
+             ) do
+          {:ok, intent_results} ->
+            send(orchestrator_pid, {:effects_applied, updated_workflow, intent_results})
 
-      {:error, intent, reason} ->
-        send(orchestrator_pid, {:effect_failed, updated_workflow, intent, reason})
-        {:noreply, %{state | workflow: updated_workflow}}
-    end
+          {:error, intent, reason} ->
+            send(orchestrator_pid, {:effect_failed, updated_workflow, intent, reason})
+        end
+      rescue
+        e ->
+          reason = Exception.message(e)
+          first_intent = List.first(workflow.proposal.intents)
+          send(orchestrator_pid, {:effect_failed, updated_workflow, first_intent, reason})
+      end
+    end)
+
+    {:noreply, %{state | workflow: updated_workflow}}
   end
 
   @impl true
@@ -351,7 +360,8 @@ defmodule Current.Workflow do
   defp apply_intents_streaming([intent | rest], orchestrator_pid, workflow, acc) do
     applicator = :persistent_term.get(:effect_applicator, Current.EffectApplicator)
 
-    case applicator.apply(intent) do
+    # <-- pass acc as prior_results
+    case applicator.apply(intent, acc) do
       {:ok, result} ->
         send(orchestrator_pid, {:effect_applied, workflow, intent, result})
         apply_intents_streaming(rest, orchestrator_pid, workflow, [{intent, result} | acc])

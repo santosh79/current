@@ -3,16 +3,7 @@ defmodule Current.EffectApplicatorTest do
 
   alias Current.{EffectApplicator, Id, Intent}
 
-  defp intent_fixture(type, payload) do
-    %Intent{
-      id: Id.generate(),
-      proposal_id: Id.generate(),
-      type: type,
-      payload: payload
-    }
-  end
-
-  describe "apply/1 - file_patch" do
+  describe "apply/2 - file_patch" do
     setup do
       dir = System.tmp_dir!() |> Path.join("effect_applicator_test_#{:rand.uniform(1_000_000)}")
       File.mkdir_p!(dir)
@@ -36,18 +27,29 @@ defmodule Current.EffectApplicatorTest do
         ]
         |> Enum.join("\n")
 
-      intent = intent_fixture(:file_patch, %{path: path, diff: diff})
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      intent = %Intent.FilePatch{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path,
+        diff: diff
+      }
 
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert result.path == path
-      contents = File.read!(path)
-      assert contents =~ "def validate_email"
+      assert File.read!(path) =~ "def validate_email"
     end
 
     test "returns error if the file does not exist", %{dir: dir} do
       path = Path.join(dir, "nonexistent.ex")
-      intent = intent_fixture(:file_patch, %{path: path, diff: "--- a\n+++ b\n"})
-      assert {:error, reason} = EffectApplicator.apply(intent)
+
+      intent = %Intent.FilePatch{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path,
+        diff: "--- a\n+++ b\n"
+      }
+
+      assert {:error, reason} = EffectApplicator.apply(intent, [])
       assert reason =~ "not found" or reason =~ "no such file"
     end
 
@@ -55,79 +57,85 @@ defmodule Current.EffectApplicatorTest do
       path = Path.join(dir, "app.ex")
       File.write!(path, "defmodule App do\nend\n")
 
-      intent = intent_fixture(:file_patch, %{path: path, diff: bad_diff()})
-      assert {:error, _reason} = EffectApplicator.apply(intent)
+      intent = %Intent.FilePatch{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path,
+        diff: bad_diff()
+      }
+
+      assert {:error, _reason} = EffectApplicator.apply(intent, [])
     end
   end
 
-  describe "apply/1 - unsupported intent type" do
-    test "returns error with descriptive message" do
-      intent = intent_fixture(:drop_database, %{})
-      assert {:error, reason} = EffectApplicator.apply(intent)
-      assert reason =~ "unsupported intent type"
-      assert reason =~ "drop_database"
-    end
-
-    test "error message includes the actual intent type" do
-      intent = intent_fixture(:launch_missiles, %{})
-      {:error, reason} = EffectApplicator.apply(intent)
-      assert reason =~ "launch_missiles"
-    end
-  end
-
-  describe "apply/1 - run_command" do
+  describe "apply/2 - run_command" do
     test "executes command and captures stdout" do
-      intent = intent_fixture(:run_command, %{cmd: "echo", args: ["hello"]})
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      intent = %Intent.RunCommand{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        cmd: "echo",
+        args: ["hello"]
+      }
+
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert result.exit_code == 0
       assert result.stdout_bytes > 0
 
       {:ok, stdout_path} = Current.ArtifactStore.path_for(result.stdout_artifact_id)
-      stdout = File.read!(stdout_path)
-
-      assert stdout =~ "hello"
-
+      assert File.read!(stdout_path) =~ "hello"
       assert result.stderr_bytes == 0
     end
 
     test "executes command and captures stderr" do
-      path_to_unknown_file = "/path/to/unknown/file"
-      intent = intent_fixture(:run_command, %{cmd: "cat", args: [path_to_unknown_file]})
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      intent = %Intent.RunCommand{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        cmd: "cat",
+        args: ["/path/to/unknown/file"]
+      }
+
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert result.exit_code > 0
-
       assert result.stderr_bytes > 0
-      {:ok, stderr_path} = Current.ArtifactStore.path_for(result.stderr_artifact_id)
-      stderr = File.read!(stderr_path)
-      assert stderr =~ "No such file or directory"
 
+      {:ok, stderr_path} = Current.ArtifactStore.path_for(result.stderr_artifact_id)
+      assert File.read!(stderr_path) =~ "No such file or directory"
       assert result.stdout_bytes == 0
     end
 
     test "returns non-zero exit code without treating command failure as applicator failure" do
-      intent = intent_fixture(:run_command, %{cmd: "false", args: []})
+      intent = %Intent.RunCommand{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        cmd: "false",
+        args: []
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert result.exit_code != 0
       assert result.stderr_bytes == 0
     end
 
     test "returns error if command is not found" do
-      intent = intent_fixture(:run_command, %{cmd: "this_command_does_not_exist_xyz", args: []})
+      intent = %Intent.RunCommand{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        cmd: "this_command_does_not_exist_xyz",
+        args: []
+      }
 
-      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert {:error, reason} = EffectApplicator.apply(intent, [])
       assert reason =~ "not found"
     end
   end
 
-  describe "apply/1 - write_file" do
+  describe "apply/2 - write_file" do
     setup do
       dir =
         System.tmp_dir!()
         |> Path.join("write_file_test_#{System.unique_integer([:positive])}")
 
       on_exit(fn -> File.rm_rf!(dir) end)
-
       {:ok, dir: dir}
     end
 
@@ -135,43 +143,39 @@ defmodule Current.EffectApplicatorTest do
       path = Path.join([dir, "nested", "deep", "generated.ex"])
       contents = "defmodule Generated do\n  def ok, do: true\nend\n"
 
-      intent =
-        intent_fixture(:write_file, %{
-          path: path,
-          contents: contents
-        })
+      intent = %Intent.WriteFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path,
+        contents: contents
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
-
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert %Current.EffectResult.WriteFile{} = result
       assert result.path == path
-
       assert File.exists?(path)
       assert File.read!(path) == contents
     end
 
     test "returns error if file already exists", %{dir: dir} do
       path = Path.join(dir, "existing.ex")
-
       File.mkdir_p!(Path.dirname(path))
       File.write!(path, "original")
 
-      intent =
-        intent_fixture(:write_file, %{
-          path: path,
-          contents: "new contents"
-        })
+      intent = %Intent.WriteFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path,
+        contents: "new contents"
+      }
 
-      assert {:error, reason} = EffectApplicator.apply(intent)
-
+      assert {:error, reason} = EffectApplicator.apply(intent, [])
       assert reason =~ "already exists"
-
-      # original contents preserved
       assert File.read!(path) == "original"
     end
   end
 
-  describe "apply/1 - delete_file" do
+  describe "apply/2 - delete_file" do
     setup do
       dir =
         System.tmp_dir!()
@@ -179,7 +183,6 @@ defmodule Current.EffectApplicatorTest do
 
       File.mkdir_p!(dir)
       on_exit(fn -> File.rm_rf!(dir) end)
-
       {:ok, dir: dir}
     end
 
@@ -187,10 +190,13 @@ defmodule Current.EffectApplicatorTest do
       path = Path.join(dir, "old.ex")
       File.write!(path, "old contents")
 
-      intent = intent_fixture(:delete_file, %{path: path})
+      intent = %Intent.DeleteFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
-
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert %Current.EffectResult.DeleteFile{} = result
       assert result.path == path
       refute File.exists?(path)
@@ -199,10 +205,13 @@ defmodule Current.EffectApplicatorTest do
     test "succeeds if file does not exist", %{dir: dir} do
       path = Path.join(dir, "missing.ex")
 
-      intent = intent_fixture(:delete_file, %{path: path})
+      intent = %Intent.DeleteFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
-
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert %Current.EffectResult.DeleteFile{} = result
       assert result.path == path
       refute File.exists?(path)
@@ -212,24 +221,26 @@ defmodule Current.EffectApplicatorTest do
       path = Path.join(dir, "some_dir")
       File.mkdir_p!(path)
 
-      intent = intent_fixture(:delete_file, %{path: path})
+      intent = %Intent.DeleteFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path
+      }
 
-      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert {:error, reason} = EffectApplicator.apply(intent, [])
       assert reason =~ "not a regular file"
       assert File.dir?(path)
     end
   end
 
-  describe "apply/1 - grep" do
+  describe "apply/2 - grep" do
     setup do
       dir =
         System.tmp_dir!()
         |> Path.join("grep_test_#{System.unique_integer([:positive])}")
 
       File.mkdir_p!(dir)
-
       on_exit(fn -> File.rm_rf!(dir) end)
-
       {:ok, dir: dir}
     end
 
@@ -243,19 +254,18 @@ defmodule Current.EffectApplicatorTest do
       end
       """)
 
-      intent =
-        intent_fixture(:grep, %{
-          pattern: "validate_email",
-          paths: [path]
-        })
+      intent = %Intent.Grep{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "validate_email",
+        paths: [path]
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
-
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert %Current.EffectResult.Grep{} = result
       assert length(result.matches) == 1
 
       [match] = result.matches
-
       assert match.path == path
       assert match.line == 2
       assert match.text =~ "validate_email"
@@ -270,14 +280,14 @@ defmodule Current.EffectApplicatorTest do
       end
       """)
 
-      intent =
-        intent_fixture(:grep, %{
-          pattern: "validate_email",
-          paths: [path]
-        })
+      intent = %Intent.Grep{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "validate_email",
+        paths: [path]
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
-
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert %Current.EffectResult.Grep{} = result
       assert result.matches == []
     end
@@ -291,21 +301,18 @@ defmodule Current.EffectApplicatorTest do
       gamma TODO
       """)
 
-      intent = intent_fixture(:grep, %{pattern: "TODO", paths: [path]})
+      intent = %Intent.Grep{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "TODO",
+        paths: [path]
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
 
       assert [
-               %Current.EffectResult.Grep.Match{
-                 line: 2,
-                 path: ^path,
-                 text: "beta TODO"
-               },
-               %Current.EffectResult.Grep.Match{
-                 line: 3,
-                 path: ^path,
-                 text: "gamma TODO"
-               }
+               %Current.EffectResult.Grep.Match{line: 2, path: ^path, text: "beta TODO"},
+               %Current.EffectResult.Grep.Match{line: 3, path: ^path, text: "gamma TODO"}
              ] = result.matches
     end
 
@@ -313,9 +320,14 @@ defmodule Current.EffectApplicatorTest do
       path = Path.join(dir, "app.ex")
       File.write!(path, "TODO TODO TODO")
 
-      intent = intent_fixture(:grep, %{pattern: "TODO", paths: [path]})
+      intent = %Intent.Grep{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "TODO",
+        paths: [path]
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
 
       assert [%Current.EffectResult.Grep.Match{path: ^path, line: 1, text: "TODO TODO TODO"}] =
                result.matches
@@ -324,19 +336,19 @@ defmodule Current.EffectApplicatorTest do
     test "returns error when a searched file does not exist", %{dir: dir} do
       path = Path.join(dir, "missing.ex")
 
-      intent =
-        intent_fixture(:grep, %{
-          pattern: "validate_email",
-          paths: [path]
-        })
+      intent = %Intent.Grep{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "validate_email",
+        paths: [path]
+      }
 
-      assert {:error, reason} = EffectApplicator.apply(intent)
-
+      assert {:error, reason} = EffectApplicator.apply(intent, [])
       assert reason =~ "not found"
     end
   end
 
-  describe "apply/1 - glob" do
+  describe "apply/2 - glob" do
     setup do
       dir =
         System.tmp_dir!()
@@ -352,9 +364,14 @@ defmodule Current.EffectApplicatorTest do
       File.write!(Path.join(dir, "bar.ex"), "")
       File.write!(Path.join(dir, "baz.txt"), "")
 
-      intent = intent_fixture(:glob, %{pattern: "*.ex", base_dir: dir})
+      intent = %Intent.Glob{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "*.ex",
+        base_dir: dir
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert %Current.EffectResult.Glob{} = result
       assert length(result.matches) == 2
       assert Path.join(dir, "foo.ex") in result.matches
@@ -364,9 +381,14 @@ defmodule Current.EffectApplicatorTest do
     test "returns empty list when no files match", %{dir: dir} do
       File.write!(Path.join(dir, "foo.txt"), "")
 
-      intent = intent_fixture(:glob, %{pattern: "*.ex", base_dir: dir})
+      intent = %Intent.Glob{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "*.ex",
+        base_dir: dir
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert result.matches == []
     end
 
@@ -376,9 +398,14 @@ defmodule Current.EffectApplicatorTest do
       File.write!(Path.join(dir, "top.ex"), "")
       File.write!(Path.join(subdir, "nested.ex"), "")
 
-      intent = intent_fixture(:glob, %{pattern: "**/*.ex", base_dir: dir})
+      intent = %Intent.Glob{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "**/*.ex",
+        base_dir: dir
+      }
 
-      assert {:ok, result} = EffectApplicator.apply(intent)
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert length(result.matches) == 2
       assert Path.join(dir, "top.ex") in result.matches
       assert Path.join(subdir, "nested.ex") in result.matches
@@ -387,83 +414,46 @@ defmodule Current.EffectApplicatorTest do
     test "returns error when base_dir does not exist", %{dir: dir} do
       missing = Path.join(dir, "missing")
 
-      intent = intent_fixture(:glob, %{pattern: "*.ex", base_dir: missing})
+      intent = %Intent.Glob{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "*.ex",
+        base_dir: missing
+      }
 
-      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert {:error, reason} = EffectApplicator.apply(intent, [])
       assert reason =~ "not found"
     end
 
     test "returns matches in sorted order", %{dir: dir} do
-      z_path = Path.join(dir, "z.ex")
-      a_path = Path.join(dir, "a.ex")
+      File.write!(Path.join(dir, "z.ex"), "")
+      File.write!(Path.join(dir, "a.ex"), "")
 
-      File.write!(z_path, "")
-      File.write!(a_path, "")
+      intent = %Intent.Glob{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "*.ex",
+        base_dir: dir
+      }
 
-      intent = intent_fixture(:glob, %{pattern: "*.ex", base_dir: dir})
-
-      assert {:ok, result} = EffectApplicator.apply(intent)
-      assert result.matches == [a_path, z_path]
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert result.matches == [Path.join(dir, "a.ex"), Path.join(dir, "z.ex")]
     end
 
     test "returns error when pattern is absolute", %{dir: dir} do
-      intent = intent_fixture(:glob, %{pattern: Path.join(dir, "*.ex"), base_dir: dir})
+      intent = %Intent.Glob{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: Path.join(dir, "*.ex"),
+        base_dir: dir
+      }
 
-      assert {:error, reason} = EffectApplicator.apply(intent)
+      assert {:error, reason} = EffectApplicator.apply(intent, [])
       assert reason =~ "relative"
     end
   end
 
-  describe "apply/1 - claim" do
-    test "returns verified true when expected is true" do
-      intent =
-        intent_fixture(:claim, %{
-          claim: "signup validates email",
-          expected: true
-        })
-
-      assert {:ok, result} = EffectApplicator.apply(intent)
-
-      assert %Current.EffectResult.Claim{} = result
-      assert result.verified == true
-    end
-
-    test "returns verified false when expected is false" do
-      intent =
-        intent_fixture(:claim, %{
-          claim: "signup validates email",
-          expected: false
-        })
-
-      assert {:ok, result} = EffectApplicator.apply(intent)
-
-      assert %Current.EffectResult.Claim{} = result
-      assert result.verified == false
-    end
-
-    test "returns error when expected is missing" do
-      intent =
-        intent_fixture(:claim, %{
-          claim: "signup validates email"
-        })
-
-      assert {:error, reason} = EffectApplicator.apply(intent)
-      assert reason =~ "expected"
-    end
-
-    test "returns error when expected is not boolean" do
-      intent =
-        intent_fixture(:claim, %{
-          claim: "signup validates email",
-          expected: "true"
-        })
-
-      assert {:error, reason} = EffectApplicator.apply(intent)
-      assert reason =~ "boolean"
-    end
-  end
-
-  defp bad_diff() do
+  defp bad_diff do
     [
       "--- app.ex",
       "+++ app.ex",

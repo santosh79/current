@@ -10,12 +10,12 @@ defmodule Current.FaultyProposalBuilder do
     end
 
     proposal_id = Id.generate()
+    missing_file_path = "/tmp/current_missing_file_#{System.unique_integer([:positive])}.ex"
 
-    intent = %Intent{
+    intent = %Intent.ReadFile{
       id: Id.generate(),
       proposal_id: proposal_id,
-      type: :drop_database,
-      payload: %{}
+      path: missing_file_path
     }
 
     faulty_proposal = %Proposal{

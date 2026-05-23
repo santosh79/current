@@ -17,51 +17,35 @@ defmodule Current.MultiIntentProposalBuilder do
     generated_helper_path = Path.join(dir, "signup_helper.ex")
 
     intents = [
-      %Intent{
+      %Intent.FilePatch{
         id: Id.generate(),
         proposal_id: proposal_id,
-        type: :file_patch,
-        payload: %{
-          path: patch_path,
-          diff: signup_diff()
-        }
+        path: patch_path,
+        diff: signup_diff()
       },
-      %Intent{
+      %Intent.WriteFile{
         id: Id.generate(),
         proposal_id: proposal_id,
-        type: :write_file,
-        payload: %{
-          path: generated_test_path,
-          contents: "defmodule SignupTest do\n  use ExUnit.Case\nend\n"
-        }
+        path: generated_test_path,
+        contents: "defmodule SignupTest do\n  use ExUnit.Case\nend\n"
       },
-      %Intent{
+      %Intent.WriteFile{
         id: Id.generate(),
         proposal_id: proposal_id,
-        type: :write_file,
-        payload: %{
-          path: generated_helper_path,
-          contents:
-            "defmodule SignupHelper do\n  def sample_email, do: \"test@example.com\"\nend\n"
-        }
+        path: generated_helper_path,
+        contents: "defmodule SignupHelper do\n  def sample_email, do: \"test@example.com\"\nend\n"
       },
-      %Intent{
+      %Intent.Glob{
         id: Id.generate(),
         proposal_id: proposal_id,
-        type: :glob,
-        payload: %{
-          pattern: "*.ex",
-          base_dir: dir
-        }
+        pattern: "*.ex",
+        base_dir: dir
       },
-      %Intent{
+      %Intent.Grep{
         id: Id.generate(),
         proposal_id: proposal_id,
-        type: :grep,
-        payload: %{
-          pattern: "validate_email",
-          paths: [patch_path]
-        }
+        pattern: "validate_email",
+        paths: [patch_path]
       }
     ]
 
