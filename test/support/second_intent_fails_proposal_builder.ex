@@ -30,33 +30,27 @@ defmodule Current.SecondIntentFailsProposalBuilder do
      end
     """
 
-    bad_diff = """
-    --- a/stub.ex
-    +++ b/stub.ex
-    @@ -1,2 +1,3 @@
-     defmodule WrongModule do
-    +  def bad, do: true
-     end
-    """
+    missing_file_path = "/tmp/current_missing_file_#{System.unique_integer([:positive])}.ex"
+
+    missing_file_path_intent = %Intent.ReadFile{
+      id: Id.generate(),
+      proposal_id: proposal_id,
+      path: missing_file_path
+    }
 
     intents = [
-      %Intent{
+      %Intent.FilePatch{
         id: Id.generate(),
         proposal_id: proposal_id,
-        type: :file_patch,
-        payload: %{path: path, diff: good_diff}
+        path: path,
+        diff: good_diff
       },
-      %Intent{
+      missing_file_path_intent,
+      %Intent.RunCommand{
         id: Id.generate(),
         proposal_id: proposal_id,
-        type: :file_patch,
-        payload: %{path: path, diff: bad_diff}
-      },
-      %Intent{
-        id: Id.generate(),
-        proposal_id: proposal_id,
-        type: :run_command,
-        payload: %{command: "echo hello"}
+        cmd: "echo",
+        args: ["hello"]
       }
     ]
 

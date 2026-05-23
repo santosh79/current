@@ -13,21 +13,21 @@ defmodule Current.EffectApplicator do
           | Current.EffectResult.Claim.t()
           | Current.EffectResult.Report.t()
 
-
-  @callback apply(Intent.t()) :: {:ok, result()} | {:error, String.t()}
-  @spec apply(Intent.t()) :: {:ok, result()} | {:error, String.t()}
-  def apply(%Intent{} = intent), do: apply(intent, [])
+  def apply(intent) do
+    __MODULE__.apply(intent, [])
+  end
 
   @callback apply(Intent.t(), [{Intent.t(), result()}]) :: {:ok, result()} | {:error, String.t()}
   @spec apply(Intent.t(), [{Intent.t(), result()}]) :: {:ok, result()} | {:error, String.t()}
 
-  def apply(%Intent{type: :file_patch} = intent, _prior_results) do
-    path = intent.payload.path
-    diff = intent.payload.diff
+  def apply(%Current.Intent.FilePatch{} = intent, _prior_results) do
+    path = intent.path
 
     unless File.exists?(path) do
       {:error, "file not found: #{path}"}
     else
+      diff = intent.diff
+
       patch_path =
         Path.join(System.tmp_dir!(), "current_patch_#{System.unique_integer([:positive])}.diff")
 
@@ -49,42 +49,35 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :write_file} = intent, _prior_results) do
-    path = Map.fetch!(intent.payload, :path)
-
-    case File.exists?(path) do
+  def apply(%Current.Intent.WriteFile{} = intent, _prior_results) do
+    case File.exists?(intent.path) do
       true ->
-        {:error, "file already exists: #{path}"}
+        {:error, "file already exists: #{intent.path}"}
 
       false ->
-        contents = Map.fetch!(intent.payload, :contents)
-
-        case write_file(path, contents) do
-          :ok -> {:ok, %Current.EffectResult.WriteFile{path: path}}
-          {:error, reason} -> {:error, "write_file failed for #{path}: #{inspect(reason)}"}
+        case write_file(intent.path, intent.contents) do
+          :ok -> {:ok, %Current.EffectResult.WriteFile{path: intent.path}}
+          {:error, reason} -> {:error, "write_file failed for #{intent.path}: #{inspect(reason)}"}
         end
     end
   end
 
-  def apply(%Intent{type: :delete_file} = intent, _prior_results) do
-    path = Map.fetch!(intent.payload, :path)
-
-    case File.dir?(path) do
+  def apply(%Current.Intent.DeleteFile{} = intent, _prior_results) do
+    case File.dir?(intent.path) do
       true ->
-        {:error, "delete_file failed for #{path}: not a regular file"}
+        {:error, "delete_file failed for #{intent.path}: not a regular file"}
 
       _ ->
-        case delete_file(path) do
-          :ok -> {:ok, %Current.EffectResult.DeleteFile{path: path}}
+        case delete_file(intent.path) do
+          :ok -> {:ok, %Current.EffectResult.DeleteFile{path: intent.path}}
           {:error, reason} -> {:error, reason}
         end
     end
   end
 
-  def apply(%Intent{type: :run_command} = intent, _prior_results) do
-    cmd = Map.fetch!(intent.payload, :cmd)
-    args = Map.get(intent.payload, :args, [])
-
+  def apply(%Current.Intent.RunCommand{} = intent, _prior_results) do
+    cmd = intent.cmd
+    args = intent.args
     stdout_path = temp_path("stdout")
     stderr_path = temp_path("stderr")
 
@@ -115,9 +108,9 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :glob} = intent, _prior_results) do
-    pattern = Map.fetch!(intent.payload, :pattern)
-    base_dir = Map.get(intent.payload, :base_dir, ".")
+  def apply(%Current.Intent.Glob{} = intent, _prior_results) do
+    pattern = intent.pattern
+    base_dir = intent.base_dir
 
     cond do
       Path.type(pattern) == :absolute ->
@@ -132,9 +125,9 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :grep} = intent, _prior_results) do
-    pattern = Map.fetch!(intent.payload, :pattern)
-    paths = Map.fetch!(intent.payload, :paths)
+  def apply(%Current.Intent.Grep{} = intent, _prior_results) do
+    pattern = intent.pattern
+    paths = intent.paths
 
     with :ok <- validate_paths_exist(paths) do
       matches =
@@ -156,37 +149,36 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Intent{type: :report} = _intent, _prior_results),
-    do: {:ok, %Current.EffectResult.Report{generated: true}}
+  def apply(%Current.Intent.Report{} = _intent, _prior_results) do
+    {:ok, %Current.EffectResult.Report{generated: true}}
+  end
 
-  def apply(%Intent{type: :claim} = intent, prior_results) do
-    statement = Map.get(intent.payload, :statement, Map.get(intent.payload, :claim, ""))
-
-    case Map.fetch(intent.payload, :evidence) do
-      {:ok, evidence} ->
-        verify_evidence(statement, evidence, prior_results)
-
-      :error ->
-        case Map.fetch(intent.payload, :expected) do
-          {:ok, expected} when is_boolean(expected) ->
+  def apply(%Current.Intent.Claim{} = intent, prior_results) do
+    case intent.evidence do
+      nil ->
+        case intent.expected do
+          expected when is_boolean(expected) ->
             {:ok,
              %Current.EffectResult.Claim{
                verified: expected,
-               statement: statement,
+               statement: intent.statement,
                reason: "asserted directly"
              }}
 
-          {:ok, _other} ->
-            {:error, "claim expected must be a boolean"}
-
-          :error ->
+          nil ->
             {:error, "claim requires either :evidence or :expected"}
+
+          _ ->
+            {:error, "claim expected must be a boolean"}
         end
+
+      evidence ->
+        verify_evidence(intent.statement, evidence, prior_results)
     end
   end
 
-  def apply(%Intent{type: type}, _prior_results),
-    do: {:error, "unsupported intent type: #{type}"}
+  def apply(%{__struct__: mod} = _intent, _prior_results),
+    do: {:error, "unsupported intent type: #{mod}"}
 
   defp run_command_with_redirect(cmd, args, stdout_path, stderr_path) do
     executable = System.find_executable(cmd)
@@ -244,21 +236,21 @@ defmodule Current.EffectApplicator do
   end
 
   defp verify_evidence(statement, evidence, prior_results) do
-    intent_type = Map.fetch!(evidence, :intent_type)
+    source_intent_id = Map.fetch!(evidence, :source_intent_id)
     condition = Map.fetch!(evidence, :condition)
     value = Map.fetch!(evidence, :value)
 
-    case find_prior_result(prior_results, intent_type) do
+    case find_prior_result_by_intent_id(prior_results, source_intent_id) do
       nil ->
-        {:error, "claim evidence references #{intent_type} but no such intent result found"}
+        {:error, "claim evidence references #{source_intent_id} but no such intent result found"}
 
       prior_result ->
-        evaluate_condition(statement, condition, value, prior_result)
+        evaluate_condition(statement, evidence, condition, value, prior_result)
     end
   end
 
-  defp find_prior_result(prior_results, intent_type) do
-    case Enum.find(prior_results, fn {intent, _result} -> intent.type == intent_type end) do
+  defp find_prior_result_by_intent_id(prior_results, source_intent_id) do
+    case Enum.find(prior_results, fn {intent, _result} -> intent.id == source_intent_id end) do
       {_intent, result} -> result
       nil -> nil
     end
@@ -266,6 +258,7 @@ defmodule Current.EffectApplicator do
 
   defp evaluate_condition(
          statement,
+         evidence,
          :match_count_greater_than,
          value,
          %Current.EffectResult.Grep{} = result
@@ -279,12 +272,13 @@ defmodule Current.EffectApplicator do
        verified: verified,
        statement: statement,
        reason: reason,
-       evidence: %{intent_type: :grep, condition: :match_count_greater_than, value: value}
+       evidence: evidence
      }}
   end
 
   defp evaluate_condition(
          statement,
+         evidence,
          :match_count_greater_than,
          value,
          %Current.EffectResult.Glob{} = result
@@ -298,12 +292,13 @@ defmodule Current.EffectApplicator do
        verified: verified,
        statement: statement,
        reason: reason,
-       evidence: %{intent_type: :glob, condition: :match_count_greater_than, value: value}
+       evidence: evidence
      }}
   end
 
   defp evaluate_condition(
          statement,
+         evidence,
          :match_count_equals,
          value,
          %Current.EffectResult.Grep{} = result
@@ -317,12 +312,13 @@ defmodule Current.EffectApplicator do
        verified: verified,
        statement: statement,
        reason: reason,
-       evidence: %{intent_type: :grep, condition: :match_count_equals, value: value}
+       evidence: evidence
      }}
   end
 
   defp evaluate_condition(
          statement,
+         evidence,
          :exit_code_equals,
          value,
          %Current.EffectResult.Command{} = result
@@ -335,12 +331,11 @@ defmodule Current.EffectApplicator do
        verified: verified,
        statement: statement,
        reason: reason,
-       evidence: %{intent_type: :run_command, condition: :exit_code_equals, value: value}
+       evidence: evidence
      }}
   end
 
-  defp evaluate_condition(_statement, condition, _value, result) do
+  defp evaluate_condition(_statement, _evidence, condition, _value, result) do
     {:error, "condition #{condition} is not supported for #{result.__struct__}"}
   end
 end
-

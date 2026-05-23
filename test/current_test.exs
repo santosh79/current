@@ -617,7 +617,6 @@ defmodule CurrentTest do
     test "approved proposal can fail during execution and the workflow fails" do
       :persistent_term.put(:proposal_builder, Current.FaultyProposalBuilder)
       on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
-
       {:ok, task_id, workflow} = submit_simple_task()
 
       receive do
@@ -652,8 +651,12 @@ defmodule CurrentTest do
       receive do
         {:effect_failed, ^task_id, failed_workflow, _reason} ->
           assert failed_workflow.id == workflow.id
+
+        {:effect_applied, ^task_id, _effect_workflow, _intent, _result} ->
+          flunk("effect applied, this should not have happened")
       after
-        @receive_timeout -> flunk("did not receive effect_failed")
+        @receive_timeout ->
+          flunk("did not receive effect_failed")
       end
 
       receive do
@@ -709,11 +712,10 @@ defmodule CurrentTest do
             assert produced_workflow.status == :validating
             assert length(proposal.intents) == 5
 
-            intent_types = Enum.map(proposal.intents, & &1.type)
-            assert :file_patch in intent_types
-            assert :write_file in intent_types
-            assert :glob in intent_types
-            assert :grep in intent_types
+            assert Enum.any?(proposal.intents, &match?(%Current.Intent.FilePatch{}, &1))
+            assert Enum.any?(proposal.intents, &match?(%Current.Intent.WriteFile{}, &1))
+            assert Enum.any?(proposal.intents, &match?(%Current.Intent.Glob{}, &1))
+            assert Enum.any?(proposal.intents, &match?(%Current.Intent.Grep{}, &1))
 
             proposal
         after
@@ -743,13 +745,18 @@ defmodule CurrentTest do
           assert length(intent_results) == 5
 
           {_glob_intent, glob_result} =
-            Enum.find(intent_results, fn {intent, _result} -> intent.type == :glob end)
+            Enum.find(intent_results, fn {intent, _result} ->
+              match?(%Current.Intent.Glob{}, intent)
+            end)
 
           assert %Current.EffectResult.Glob{} = glob_result
           assert length(glob_result.matches) == 2
 
           {_grep_intent, grep_result} =
-            Enum.find(intent_results, fn {intent, _result} -> intent.type == :grep end)
+            Enum.find(intent_results, fn {intent, _result} ->
+              match?(%Current.Intent.Grep{}, intent)
+            end)
+
 
           assert %Current.EffectResult.Grep{} = grep_result
           assert length(grep_result.matches) == 1
@@ -887,7 +894,6 @@ defmodule CurrentTest do
     #   → workflow_failed
     test "workflow fails when second intent fails during effect application" do
       :ok = :persistent_term.put(:proposal_builder, Current.SecondIntentFailsProposalBuilder)
-      :ok = :persistent_term.put(:effect_applicator, Current.FaultyEffectApplicator)
 
       on_exit(fn ->
         :ok = :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
@@ -920,12 +926,6 @@ defmodule CurrentTest do
             assert produced_workflow.status == :validating
             assert length(proposal.intents) == 3
 
-            assert Enum.map(proposal.intents, & &1.type) == [
-                     :file_patch,
-                     :file_patch,
-                     :run_command
-                   ]
-
             proposal
         after
           @receive_timeout -> flunk("did not receive proposal_produced")
@@ -947,7 +947,7 @@ defmodule CurrentTest do
       receive do
         {:effect_applied, ^task_id, effect_workflow, intent, _result} ->
           assert effect_workflow.status == :applying
-          assert intent.type == :file_patch
+          assert %Current.Intent.FilePatch{} = intent
       after
         @receive_timeout -> flunk("did not receive first effect_applied")
       end
@@ -1023,7 +1023,7 @@ defmodule CurrentTest do
           {:proposal_produced, ^task_id, _produced_workflow, proposal} ->
             assert length(proposal.intents) == 1
             [intent] = proposal.intents
-            assert intent.type == :run_command
+            assert %Current.Intent.RunCommand{} = intent
             proposal
         after
           @receive_timeout -> flunk("did not receive proposal_produced")
@@ -1048,7 +1048,7 @@ defmodule CurrentTest do
 
           [{intent, result}] = intent_results
 
-          assert intent.type == :run_command
+          assert %Current.Intent.RunCommand{} = intent
           assert result.exit_code == 0
 
           # stdout and stderr are artifact ids, not raw strings

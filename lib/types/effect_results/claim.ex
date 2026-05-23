@@ -8,7 +8,7 @@ defmodule Current.EffectResult.Claim do
           | :exit_code_equals
 
   @type evidence :: %{
-          intent_type: atom(),
+          source_intent_id: Current.Id.t(),
           condition: condition(),
           value: term()
         }
@@ -20,3 +20,4 @@ defmodule Current.EffectResult.Claim do
           evidence: evidence() | nil
         }
 end
+
