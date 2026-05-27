@@ -49,6 +49,19 @@ defmodule Current.EffectApplicator do
     end
   end
 
+  def apply(%Current.Intent.ReadFile{} = intent, _prior_results) do
+    case File.read(intent.path) do
+      {:ok, _contents} ->
+        {:ok, %Current.EffectResult.ReadFile{path: intent.path}}
+
+      {:error, :enoent} ->
+        {:error, "file not found: #{intent.path}"}
+
+      {:error, reason} ->
+        {:error, "read_file failed for #{intent.path}: #{inspect(reason)}"}
+    end
+  end
+
   def apply(%Current.Intent.WriteFile{} = intent, _prior_results) do
     case File.exists?(intent.path) do
       true ->

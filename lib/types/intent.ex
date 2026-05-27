@@ -110,3 +110,31 @@ defmodule Current.Intent.Report do
           summary: String.t() | nil
         }
 end
+
+defmodule Current.Intent do
+  @type t ::
+          Current.Intent.FilePatch.t()
+          | Current.Intent.WriteFile.t()
+          | Current.Intent.DeleteFile.t()
+          | Current.Intent.RunCommand.t()
+          | Current.Intent.ReadFile.t()
+          | Current.Intent.Glob.t()
+          | Current.Intent.Grep.t()
+          | Current.Intent.Claim.t()
+          | Current.Intent.Report.t()
+
+  @known_modules [
+    Current.Intent.FilePatch,
+    Current.Intent.WriteFile,
+    Current.Intent.DeleteFile,
+    Current.Intent.RunCommand,
+    Current.Intent.ReadFile,
+    Current.Intent.Glob,
+    Current.Intent.Grep,
+    Current.Intent.Claim,
+    Current.Intent.Report
+  ]
+
+  def valid?(%{__struct__: mod}), do: mod in @known_modules
+  def valid?(_), do: false
+end

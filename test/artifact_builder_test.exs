@@ -21,6 +21,7 @@ defmodule Current.ArtifactBuilderTest do
       error: nil
     }
   end
+
   defp intent_fixture(type, payload) do
     case type do
       :file_patch ->
@@ -95,11 +96,17 @@ defmodule Current.ArtifactBuilderTest do
     end
   end
 
-
   describe "build/2 - file_patch" do
     test "constructs a file_patch_result artifact" do
       workflow = workflow_fixture()
-      intent = intent_fixture(:file_patch, %{path: "lib/app.ex", diff: "..."})
+
+      intent = %Intent.FilePatch{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: "lib/app.ex",
+        diff: "..."
+      }
+
       result = %EffectResult.FilePatch{path: "lib/app.ex"}
 
       {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
