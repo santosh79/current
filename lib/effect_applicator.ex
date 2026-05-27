@@ -100,8 +100,8 @@ defmodule Current.EffectApplicator do
           stdout = File.read!(stdout_path)
           stderr = File.read!(stderr_path)
 
-          with {:ok, stdout_artifact_id} <- Current.ArtifactStore.put("stdout.txt", stdout),
-               {:ok, stderr_artifact_id} <- Current.ArtifactStore.put("stderr.txt", stderr) do
+          with {:ok, stdout_artifact_id} <- Current.ArtifactStore.put(stdout),
+               {:ok, stderr_artifact_id} <- Current.ArtifactStore.put(stderr) do
             {:ok,
              %Current.EffectResult.Command{
                exit_code: exit_code,
