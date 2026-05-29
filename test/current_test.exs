@@ -712,7 +712,7 @@ defmodule CurrentTest do
             assert produced_workflow.status == :validating
             assert length(proposal.intents) == 5
 
-            assert Enum.any?(proposal.intents, &match?(%Current.Intent.FilePatch{}, &1))
+            assert Enum.any?(proposal.intents, &match?(%Current.Intent.ReadFile{}, &1))
             assert Enum.any?(proposal.intents, &match?(%Current.Intent.WriteFile{}, &1))
             assert Enum.any?(proposal.intents, &match?(%Current.Intent.Glob{}, &1))
             assert Enum.any?(proposal.intents, &match?(%Current.Intent.Grep{}, &1))
@@ -760,7 +760,7 @@ defmodule CurrentTest do
 
           assert %Current.EffectResult.Grep{} = grep_result
           assert length(grep_result.matches) == 1
-          assert hd(grep_result.matches).text =~ "validate_email"
+          assert hd(grep_result.matches).text =~ "SignupHelper"
       after
         @receive_timeout -> flunk("did not receive effects_applied")
       end

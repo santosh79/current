@@ -129,6 +129,85 @@ defmodule Current.EffectApplicatorTest do
     end
   end
 
+  describe "apply/2 - read_file" do
+    setup do
+      dir =
+        System.tmp_dir!()
+        |> Path.join("read_file_test_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+      {:ok, dir: dir}
+    end
+
+    test "reads an existing file and stores contents in artifact store", %{dir: dir} do
+      path = Path.join(dir, "signup.ex")
+      contents = "defmodule Signup do\n  def ok, do: true\nend\n"
+      File.write!(path, contents)
+
+      intent = %Intent.ReadFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path
+      }
+
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert %Current.EffectResult.ReadFile{} = result
+      assert result.path == path
+
+      # these will fail — struct doesn't have these fields yet
+      assert is_binary(result.contents_artifact_id)
+      assert :ok = Current.Id.validate(result.contents_artifact_id)
+      assert result.bytes == byte_size(contents)
+
+      # contents must actually be retrievable from the store
+      {:ok, stored_path} = Current.ArtifactStore.path_for(result.contents_artifact_id)
+      assert File.exists?(stored_path)
+      assert File.read!(stored_path) == contents
+    end
+
+    test "bytes reflects actual file size", %{dir: dir} do
+      path = Path.join(dir, "small.ex")
+      File.write!(path, "hello")
+
+      intent = %Intent.ReadFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path
+      }
+
+      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert result.bytes == 5
+    end
+
+    test "returns error when file does not exist", %{dir: dir} do
+      path = Path.join(dir, "missing.ex")
+
+      intent = %Intent.ReadFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path
+      }
+
+      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert reason =~ "not found"
+      assert reason =~ path
+    end
+
+    test "same file contents produce the same artifact id", %{dir: dir} do
+      path = Path.join(dir, "app.ex")
+      File.write!(path, "content")
+
+      intent_a = %Intent.ReadFile{id: Id.generate(), proposal_id: Id.generate(), path: path}
+      intent_b = %Intent.ReadFile{id: Id.generate(), proposal_id: Id.generate(), path: path}
+
+      assert {:ok, result_a} = EffectApplicator.apply(intent_a, [])
+      assert {:ok, result_b} = EffectApplicator.apply(intent_b, [])
+
+      assert result_a.contents_artifact_id == result_b.contents_artifact_id
+    end
+  end
+
   describe "apply/2 - write_file" do
     setup do
       dir =

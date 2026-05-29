@@ -224,7 +224,14 @@ defmodule Current.ArtifactBuilderTest do
     test "constructs a read_result artifact" do
       workflow = workflow_fixture()
       intent = intent_fixture(:read_file, %{path: "lib/app.ex"})
-      result = %EffectResult.ReadFile{path: "lib/app.ex"}
+
+      {:ok, contents_artifact_id} = Current.ArtifactStore.put("defmodule App do\nend\n")
+
+      result = %EffectResult.ReadFile{
+        path: "lib/app.ex",
+        contents_artifact_id: contents_artifact_id,
+        bytes: 22
+      }
 
       {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
 

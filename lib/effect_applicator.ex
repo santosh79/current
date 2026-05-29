@@ -51,8 +51,15 @@ defmodule Current.EffectApplicator do
 
   def apply(%Current.Intent.ReadFile{} = intent, _prior_results) do
     case File.read(intent.path) do
-      {:ok, _contents} ->
-        {:ok, %Current.EffectResult.ReadFile{path: intent.path}}
+      {:ok, contents} ->
+        {:ok, artifact_id} = Current.ArtifactStore.put(contents)
+
+        {:ok,
+         %Current.EffectResult.ReadFile{
+           path: intent.path,
+           contents_artifact_id: artifact_id,
+           bytes: byte_size(contents)
+         }}
 
       {:error, :enoent} ->
         {:error, "file not found: #{intent.path}"}

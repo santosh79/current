@@ -17,11 +17,10 @@ defmodule Current.MultiIntentProposalBuilder do
     generated_helper_path = Path.join(dir, "signup_helper.ex")
 
     intents = [
-      %Intent.FilePatch{
+      %Intent.ReadFile{
         id: Id.generate(),
         proposal_id: proposal_id,
-        path: patch_path,
-        diff: signup_diff()
+        path: patch_path
       },
       %Intent.WriteFile{
         id: Id.generate(),
@@ -44,8 +43,8 @@ defmodule Current.MultiIntentProposalBuilder do
       %Intent.Grep{
         id: Id.generate(),
         proposal_id: proposal_id,
-        pattern: "validate_email",
-        paths: [patch_path]
+        pattern: "SignupHelper",
+        paths: [generated_helper_path]
       }
     ]
 
@@ -83,16 +82,4 @@ defmodule Current.MultiIntentProposalBuilder do
     path
   end
 
-  defp signup_diff do
-    [
-      "--- signup.ex",
-      "+++ signup.ex",
-      "@@ -1,2 +1,3 @@",
-      " defmodule Signup do",
-      "+  def validate_email(email), do: String.contains?(email, \"@\")",
-      " end",
-      ""
-    ]
-    |> Enum.join("\n")
-  end
 end
