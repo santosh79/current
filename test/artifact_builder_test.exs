@@ -107,7 +107,11 @@ defmodule Current.ArtifactBuilderTest do
         diff: "..."
       }
 
-      result = %EffectResult.FilePatch{path: "lib/app.ex"}
+      result = %EffectResult.FilePatch{
+        path: "lib/app.ex",
+        before_artifact_id: Id.generate(),
+        after_artifact_id: Id.generate()
+      }
 
       {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
 
@@ -126,7 +130,12 @@ defmodule Current.ArtifactBuilderTest do
     test "writes artifact under workflow and intent specific path" do
       workflow = workflow_fixture()
       intent = intent_fixture(:file_patch, %{path: "lib/my_app/signup.ex", diff: "...diff..."})
-      result = %EffectResult.FilePatch{path: "lib/my_app/signup.ex"}
+
+      result = %EffectResult.FilePatch{
+        path: "lib/my_app/signup.ex",
+        before_artifact_id: Id.generate(),
+        after_artifact_id: Id.generate()
+      }
 
       {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
 
@@ -210,7 +219,7 @@ defmodule Current.ArtifactBuilderTest do
     test "constructs a delete_file_result artifact" do
       workflow = workflow_fixture()
       intent = intent_fixture(:delete_file, %{path: "lib/old.ex"})
-      result = %EffectResult.DeleteFile{path: "lib/old.ex"}
+      result = %EffectResult.DeleteFile{path: "lib/old.ex", before_artifact_id: nil}
 
       {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
 
@@ -259,7 +268,17 @@ defmodule Current.ArtifactBuilderTest do
     test "constructs a grep_result artifact with match count" do
       workflow = workflow_fixture()
       intent = intent_fixture(:grep, %{pattern: "defmodule"})
-      result = %EffectResult.Grep{matches: ["lib/a.ex:1:defmodule A"]}
+
+      result = %EffectResult.Grep{
+        matches: [
+          %EffectResult.Grep.Match{
+            path: "lib/a.ex",
+            line: 1,
+            text: "defmodule A"
+          }
+        ],
+        searched_artifact_ids: []
+      }
 
       {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
 
@@ -287,6 +306,43 @@ defmodule Current.ArtifactBuilderTest do
       assert artifact.metadata.verified == true
       assert artifact.metadata.statement == "tests pass"
       assert artifact.metadata.reason == "asserted directly"
+    end
+
+    test "builds grep artifact from real grep effect result" do
+      workflow = workflow_fixture()
+
+      dir =
+        System.tmp_dir!()
+        |> Path.join("artifact_builder_grep_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      path = Path.join(dir, "app.ex")
+
+      File.write!(path, """
+      defmodule App do
+        def hello, do: :world
+      end
+      """)
+
+      intent = %Current.Intent.Grep{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "def hello",
+        paths: [path]
+      }
+
+      assert {:ok, result} = Current.EffectApplicator.apply(intent, [])
+
+      assert %Current.EffectResult.Grep{} = result
+      assert length(result.matches) == 1
+
+      {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
+
+      assert artifact.name == :grep_result
+      assert artifact.type == :report
+      assert artifact.metadata.match_count == 1
     end
   end
 

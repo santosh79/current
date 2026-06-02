@@ -76,7 +76,8 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
             line: 2,
             text: "def validate_email"
           }
-        ]
+        ],
+        searched_artifact_ids: []
       }
 
       prior_results = [{grep_intent, grep_result}]
@@ -114,7 +115,7 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         paths: []
       }
 
-      grep_result = %Current.EffectResult.Grep{matches: []}
+      grep_result = %Current.EffectResult.Grep{matches: [], searched_artifact_ids: []}
       prior_results = [{grep_intent, grep_result}]
 
       intent = %Intent.Claim{

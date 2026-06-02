@@ -23,29 +23,42 @@ defmodule Current.EffectApplicator do
   def apply(%Current.Intent.FilePatch{} = intent, _prior_results) do
     path = intent.path
 
-    unless File.exists?(path) do
-      {:error, "file not found: #{path}"}
-    else
-      diff = intent.diff
+    case File.exists?(path) do
+      false ->
+        {:error, "file not found: #{path}"}
 
-      patch_path =
-        Path.join(System.tmp_dir!(), "current_patch_#{System.unique_integer([:positive])}.diff")
+      _ ->
+        before_contents = File.read!(path)
+        {:ok, before_artifact_id} = Current.ArtifactStore.put(before_contents)
 
-      :ok = File.write!(patch_path, diff)
+        patch_path =
+          Path.join(System.tmp_dir!(), "current_patch_#{System.unique_integer([:positive])}.diff")
 
-      try do
-        case System.cmd("patch", ["--batch", "--forward", path, patch_path],
-               stderr_to_stdout: true
-             ) do
-          {_output, 0} ->
-            {:ok, %Current.EffectResult.FilePatch{path: path}}
+        spawn_link(fn ->
+          :timer.sleep(10_000)
+          :ok = File.rm(patch_path)
+        end)
 
-          {output, exit_code} ->
+        :ok = File.write!(patch_path, intent.diff)
+
+        {output, exit_code} =
+          System.cmd("patch", ["--batch", "--forward", path, patch_path], stderr_to_stdout: true)
+
+        case exit_code do
+          0 ->
+            after_contents = File.read!(path)
+            {:ok, after_artifact_id} = Current.ArtifactStore.put(after_contents)
+
+            {:ok,
+             %Current.EffectResult.FilePatch{
+               path: path,
+               before_artifact_id: before_artifact_id,
+               after_artifact_id: after_artifact_id
+             }}
+
+          _ ->
             {:error, "patch failed with exit code #{exit_code}: #{String.trim(output)}"}
         end
-      after
-        File.rm(patch_path)
-      end
     end
   end
 
@@ -88,9 +101,28 @@ defmodule Current.EffectApplicator do
         {:error, "delete_file failed for #{intent.path}: not a regular file"}
 
       _ ->
-        case delete_file(intent.path) do
-          :ok -> {:ok, %Current.EffectResult.DeleteFile{path: intent.path}}
-          {:error, reason} -> {:error, reason}
+        case File.read(intent.path) do
+          {:ok, contents} ->
+            {:ok, before_artifact_id} = Current.ArtifactStore.put(contents)
+
+            case delete_file(intent.path) do
+              :ok ->
+                {:ok,
+                 %Current.EffectResult.DeleteFile{
+                   path: intent.path,
+                   before_artifact_id: before_artifact_id
+                 }}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+
+          {:error, :enoent} ->
+            # file doesn't exist — treat as already deleted, nothing to snapshot
+            {:ok, %Current.EffectResult.DeleteFile{path: intent.path, before_artifact_id: nil}}
+
+          {:error, reason} ->
+            {:error, "delete_file failed to read #{intent.path}: #{inspect(reason)}"}
         end
     end
   end
@@ -146,10 +178,17 @@ defmodule Current.EffectApplicator do
   end
 
   def apply(%Current.Intent.Grep{} = intent, _prior_results) do
-    pattern = intent.pattern
     paths = intent.paths
+    pattern = intent.pattern
 
     with :ok <- validate_paths_exist(paths) do
+      searched_artifact_ids =
+        Enum.map(paths, fn path ->
+          {:ok, contents} = File.read(path)
+          {:ok, artifact_id} = Current.ArtifactStore.put(contents)
+          artifact_id
+        end)
+
       matches =
         paths
         |> Enum.flat_map(fn path ->
@@ -165,7 +204,11 @@ defmodule Current.EffectApplicator do
           end)
         end)
 
-      {:ok, %Current.EffectResult.Grep{matches: matches}}
+      {:ok,
+       %Current.EffectResult.Grep{
+         matches: matches,
+         searched_artifact_ids: searched_artifact_ids
+       }}
     end
   end
 
@@ -203,21 +246,23 @@ defmodule Current.EffectApplicator do
   defp run_command_with_redirect(cmd, args, stdout_path, stderr_path) do
     executable = System.find_executable(cmd)
 
-    if executable == nil do
-      {:error, "command not found: #{cmd}"}
-    else
-      script = """
-      exec "$1" "${@:4}" > "$2" 2> "$3"
-      """
+    case executable do
+      nil ->
+        {:error, "command not found: #{cmd}"}
 
-      {_output, exit_code} =
-        System.cmd(
-          "bash",
-          ["-c", script, "current-runner", executable, stdout_path, stderr_path | args],
-          stderr_to_stdout: true
-        )
+      _ ->
+        script = """
+        exec "$1" "${@:4}" > "$2" 2> "$3"
+        """
 
-      {:ok, exit_code}
+        {_output, exit_code} =
+          System.cmd(
+            "bash",
+            ["-c", script, "current-runner", executable, stdout_path, stderr_path | args],
+            stderr_to_stdout: true
+          )
+
+        {:ok, exit_code}
     end
   rescue
     e ->

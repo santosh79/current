@@ -1,21 +1,9 @@
-defmodule Current.EffectResult.Grep.Match do
-  @enforce_keys [:path, :line, :text]
-  defstruct [:path, :line, :text]
-
-  @type t :: %__MODULE__{
-          path: String.t(),
-          line: pos_integer(),
-          text: String.t()
-        }
-end
-
 defmodule Current.EffectResult.Grep do
-  alias Current.EffectResult.Grep.Match
-
-  @enforce_keys [:matches]
-  defstruct [:matches]
+  @enforce_keys [:matches, :searched_artifact_ids]
+  defstruct [:matches, :searched_artifact_ids]
 
   @type t :: %__MODULE__{
-          matches: [Match.t()]
+          matches: [Current.EffectResult.Grep.Match.t()],
+          searched_artifact_ids: [Current.Id.t()]
         }
 end
