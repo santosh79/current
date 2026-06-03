@@ -34,30 +34,31 @@ defmodule Current.EffectApplicator do
         patch_path =
           Path.join(System.tmp_dir!(), "current_patch_#{System.unique_integer([:positive])}.diff")
 
-        spawn_link(fn ->
-          :timer.sleep(10_000)
+        try do
+          :ok = File.write!(patch_path, intent.diff)
+
+          {output, exit_code} =
+            System.cmd("patch", ["--batch", "--forward", path, patch_path],
+              stderr_to_stdout: true
+            )
+
+          case exit_code do
+            0 ->
+              after_contents = File.read!(path)
+              {:ok, after_artifact_id} = Current.ArtifactStore.put(after_contents)
+
+              {:ok,
+               %Current.EffectResult.FilePatch{
+                 path: path,
+                 before_artifact_id: before_artifact_id,
+                 after_artifact_id: after_artifact_id
+               }}
+
+            _ ->
+              {:error, "patch failed with exit code #{exit_code}: #{String.trim(output)}"}
+          end
+        after
           :ok = File.rm(patch_path)
-        end)
-
-        :ok = File.write!(patch_path, intent.diff)
-
-        {output, exit_code} =
-          System.cmd("patch", ["--batch", "--forward", path, patch_path], stderr_to_stdout: true)
-
-        case exit_code do
-          0 ->
-            after_contents = File.read!(path)
-            {:ok, after_artifact_id} = Current.ArtifactStore.put(after_contents)
-
-            {:ok,
-             %Current.EffectResult.FilePatch{
-               path: path,
-               before_artifact_id: before_artifact_id,
-               after_artifact_id: after_artifact_id
-             }}
-
-          _ ->
-            {:error, "patch failed with exit code #{exit_code}: #{String.trim(output)}"}
         end
     end
   end
