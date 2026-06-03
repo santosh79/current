@@ -154,6 +154,23 @@ defmodule Current.Workflow do
   end
 
   @impl true
+  def handle_info(
+        {:proposal_produced, proposal},
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    updated_workflow = %{
+      workflow
+      | proposal: proposal,
+        status: :validating,
+        updated_at: DateTime.utc_now()
+    }
+
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:proposal_produced, updated_workflow})
+    {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  @impl true
   def handle_cast(
         :start_planning,
         %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
@@ -166,11 +183,8 @@ defmodule Current.Workflow do
     }
 
     :ok = WorkflowStore.put(updated_workflow)
-
     send(orchestrator_pid, {:proposal_production_started, updated_workflow})
-
-    updated_workflow = produce_proposal(state, updated_workflow)
-
+    :ok = produce_proposal(state, updated_workflow)
     {:noreply, %{state | workflow: updated_workflow}}
   end
 
@@ -189,7 +203,6 @@ defmodule Current.Workflow do
 
         :ok = WorkflowStore.put(updated_workflow)
         send(orchestrator_pid, {:proposal_decision_recorded, decision, updated_workflow})
-
         {:noreply, %{state | workflow: updated_workflow}}
 
       _ ->
@@ -212,7 +225,6 @@ defmodule Current.Workflow do
 
         :ok = WorkflowStore.put(updated_workflow)
         send(orchestrator_pid, {:proposal_decision_recorded, decision, updated_workflow})
-
         {:noreply, %{state | workflow: updated_workflow}}
 
       _ ->
@@ -246,7 +258,7 @@ defmodule Current.Workflow do
       rescue
         e ->
           reason = Exception.message(e)
-          first_intent = List.first(workflow.proposal.intents)
+          [first_intent | _] = workflow.proposal.intents
           send(orchestrator_pid, {:effect_failed, updated_workflow, first_intent, reason})
       end
     end)
@@ -322,22 +334,19 @@ defmodule Current.Workflow do
   end
 
   defp produce_proposal(
-         %{request: req, orchestrator_pid: orchestrator_pid},
+         %{request: req, orchestrator_pid: _orchestrator_pid},
          %Current.Workflow{} = workflow
        ) do
     builder = :persistent_term.get(:proposal_builder, Current.ProposalBuilder)
-    {:ok, proposal} = builder.build(req, workflow.id)
+    workflow_pid = self()
 
-    updated_workflow = %{
-      workflow
-      | proposal: proposal,
-        status: :validating,
-        updated_at: DateTime.utc_now()
-    }
+    spawn_link(fn ->
+      {:ok, proposal} = builder.build(req, workflow.id)
+      send(workflow_pid, {:proposal_produced, proposal})
+      :ok
+    end)
 
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:proposal_produced, updated_workflow})
-    updated_workflow
+    :ok
   end
 
   # SantoshTODO: Stop Hardcoding
