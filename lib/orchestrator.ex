@@ -68,6 +68,57 @@ defmodule Current.WorkflowOrchestrator do
       {:proposal_produced, workflow.task_id, workflow, workflow.proposal}
     )
 
+    case Current.IntentValidator.validate(workflow.proposal) do
+      :ok ->
+        GenServer.cast(state.workflow_pid, :mark_proposal_validated)
+
+      {:error, %Current.Error.ValidationError{} = error} ->
+        GenServer.cast(state.workflow_pid, {:mark_proposal_validation_failed, error})
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:proposal_validated, %Current.Workflow{} = workflow}, state)
+      when is_pid(state.workflow_pid) do
+    :ok =
+      append_event(%Event.ProposalValidated{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        proposal: workflow.proposal,
+        timestamp: DateTime.utc_now()
+      })
+
+    notify_listeners(
+      state.listeners,
+      {:proposal_validated, workflow.task_id, workflow, workflow.proposal}
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {:proposal_validation_failed, %Current.Workflow{} = workflow,
+         %Current.Error.ValidationError{} = error},
+        state
+      )
+      when is_pid(state.workflow_pid) do
+    :ok =
+      append_event(%Event.ProposalValidationFailed{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        proposal: workflow.proposal,
+        error: error,
+        timestamp: DateTime.utc_now()
+      })
+
+    notify_listeners(
+      state.listeners,
+      {:proposal_validation_failed, workflow.task_id, workflow, error}
+    )
+
     {:noreply, state}
   end
 

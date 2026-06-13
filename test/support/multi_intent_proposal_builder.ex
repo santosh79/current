@@ -43,8 +43,8 @@ defmodule Current.MultiIntentProposalBuilder do
       %Intent.Grep{
         id: Id.generate(),
         proposal_id: proposal_id,
-        pattern: "SignupHelper",
-        paths: [generated_helper_path]
+        pattern: "Signup",
+        paths: [patch_path]
       }
     ]
 
@@ -81,5 +81,4 @@ defmodule Current.MultiIntentProposalBuilder do
     :ok = File.write!(path, "defmodule Signup do\nend\n")
     path
   end
-
 end

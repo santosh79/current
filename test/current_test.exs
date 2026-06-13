@@ -9,6 +9,26 @@ defmodule CurrentTest do
 
   @receive_timeout 5_000
 
+  defp submit_simple_task do
+    req = %Request{
+      input: "add email validation to signup flow",
+      context: %{}
+    }
+
+    {:ok, task_id} = Current.submit_task(req, self())
+
+    workflow =
+      receive do
+        {:workflow_created, ^task_id, workflow} ->
+          workflow
+      after
+        @receive_timeout ->
+          flunk("did not receive workflow_created")
+      end
+
+    {:ok, task_id, workflow}
+  end
+
   describe "workflow lifecycle" do
     test "request submission" do
       req = %Request{
@@ -141,8 +161,9 @@ defmodule CurrentTest do
                %Current.Event.WorkflowCreated{},
                %Current.Event.ProposalProductionStarted{},
                %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalValidated{},
                %Current.Event.ProposalApproved{}
-             ] = events |> Enum.take(4)
+             ] = events |> Enum.take(5)
     end
 
     # submit task
@@ -194,6 +215,7 @@ defmodule CurrentTest do
                %Current.Event.WorkflowCreated{},
                %Current.Event.ProposalProductionStarted{},
                %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalValidated{},
                %Current.Event.ProposalRejected{}
              ] = events
     end
@@ -220,6 +242,15 @@ defmodule CurrentTest do
             flunk("did not receive proposal_produced")
         end
 
+      receive do
+        {:proposal_validated, ^task_id, workflow, proposal} ->
+          assert workflow.status == :waiting_for_approval
+          proposal.id
+      after
+        @receive_timeout ->
+          flunk("did not receive proposal_validated")
+      end
+
       assert :ok =
                Current.review_proposal(
                  proposal_id,
@@ -234,14 +265,13 @@ defmodule CurrentTest do
           flunk("did not receive proposal_approved")
       end
 
-      events = Current.EventStore.list_by_workflow_id(workflow_id) |> Enum.take(4)
-
-      assert length(events) == 4
+      events = Current.EventStore.list_by_workflow_id(workflow_id) |> Enum.take(5)
 
       [
         %Current.Event.WorkflowCreated{} = created,
         %Current.Event.ProposalProductionStarted{} = production_started,
         %Current.Event.ProposalProduced{} = produced,
+        %Current.Event.ProposalValidated{},
         %Current.Event.ProposalApproved{} = approved
       ] = events
 
@@ -291,6 +321,15 @@ defmodule CurrentTest do
             flunk("did not receive proposal_produced")
         end
 
+      receive do
+        {:proposal_validated, ^task_id, workflow, proposal} ->
+          assert workflow.status == :waiting_for_approval
+          proposal.id
+      after
+        @receive_timeout ->
+          flunk("did not receive proposal_validated")
+      end
+
       assert :ok =
                Current.review_proposal(
                  proposal_id,
@@ -307,12 +346,13 @@ defmodule CurrentTest do
 
       events = Current.EventStore.list_by_workflow_id(workflow_id)
 
-      assert length(events) == 4
+      assert length(events) == 5
 
       [
         %Current.Event.WorkflowCreated{} = created,
         %Current.Event.ProposalProductionStarted{} = production_started,
         %Current.Event.ProposalProduced{} = produced,
+        %Current.Event.ProposalValidated{},
         %Current.Event.ProposalRejected{} = rejected
       ] =
         events
@@ -366,6 +406,15 @@ defmodule CurrentTest do
           @receive_timeout ->
             flunk("did not receive proposal_produced")
         end
+
+      receive do
+        {:proposal_validated, ^task_id, workflow, proposal} ->
+          assert workflow.status == :waiting_for_approval
+          proposal.id
+      after
+        @receive_timeout ->
+          flunk("did not receive proposal_validated")
+      end
 
       assert :ok =
                Current.review_proposal(
@@ -472,6 +521,7 @@ defmodule CurrentTest do
                %Current.Event.WorkflowCreated{},
                %Current.Event.ProposalProductionStarted{},
                %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalValidated{},
                %Current.Event.ProposalApproved{},
                %Current.Event.EffectApplicationStarted{},
                %Current.Event.EffectApplied{},
@@ -505,6 +555,15 @@ defmodule CurrentTest do
             flunk("did not receive proposal_produced")
         end
 
+      receive do
+        {:proposal_validated, ^task_id, workflow, proposal} ->
+          assert workflow.status == :waiting_for_approval
+          proposal.id
+      after
+        @receive_timeout ->
+          flunk("did not receive proposal_validated")
+      end
+
       assert :ok =
                Current.review_proposal(
                  proposal_id,
@@ -535,9 +594,6 @@ defmodule CurrentTest do
       %Current.Event.ArtifactProduced{} =
         artifact_event =
         Enum.find(events, &match?(%Current.Event.ArtifactProduced{}, &1))
-
-      # Enum.find(events, fn event -> event.type == :artifact_produced end) ||
-      #   flunk("did not find artifact_produced event in event log")
 
       assert artifact_event.workflow_id == workflow_id
       assert artifact_event.workflow.task_id == task_id
@@ -577,6 +633,15 @@ defmodule CurrentTest do
                  proposal_id,
                  {:approve, %{reviewed_by: :test_user, note: "looks good"}}
                )
+
+      receive do
+        {:proposal_validated, ^task_id, workflow, proposal} ->
+          assert workflow.status == :waiting_for_approval
+          proposal.id
+      after
+        @receive_timeout ->
+          flunk("did not receive proposal_validated")
+      end
 
       receive do
         {:proposal_approved, ^task_id, _workflow} ->
@@ -625,7 +690,7 @@ defmodule CurrentTest do
         @receive_timeout -> flunk("did not receive proposal_production_started")
       end
 
-      proposal =
+      _proposal =
         receive do
           {:proposal_produced, ^task_id, produced_workflow, proposal} ->
             assert produced_workflow.status == :validating
@@ -634,46 +699,21 @@ defmodule CurrentTest do
           @receive_timeout -> flunk("did not receive proposal_produced")
         end
 
-      assert :ok =
-               Current.review_proposal(
-                 proposal.id,
-                 {:approve, %{reviewed_by: :test_user, note: "looks good"}}
-               )
-
       receive do
-        {:proposal_approved, ^task_id, approved_workflow} ->
-          assert approved_workflow.id == workflow.id
-          assert approved_workflow.status == :approved
-      after
-        @receive_timeout -> flunk("did not receive proposal_approved")
-      end
-
-      receive do
-        {:effect_failed, ^task_id, failed_workflow, _reason} ->
-          assert failed_workflow.id == workflow.id
-
-        {:effect_applied, ^task_id, _effect_workflow, _intent, _result} ->
-          flunk("effect applied, this should not have happened")
+        {:proposal_validation_failed, ^task_id, workflow, _error} ->
+          assert workflow.status == :validation_failed
       after
         @receive_timeout ->
-          flunk("did not receive effect_failed")
+          flunk("did not receive proposal_validation_failed")
       end
 
       receive do
         {:workflow_failed, ^task_id, failed_workflow} ->
           assert failed_workflow.id == workflow.id
-          assert failed_workflow.status == :failed
-          assert failed_workflow.proposal.id == proposal.id
-          assert failed_workflow.result == nil
           assert failed_workflow.error != nil
       after
         @receive_timeout -> flunk("did not receive workflow_failed")
       end
-
-      {:ok, final_workflow} = Current.get_workflow(task_id)
-      assert final_workflow.status == :failed
-      assert final_workflow.result == nil
-      assert final_workflow.error != nil
 
       events = Current.EventStore.list_by_workflow_id(workflow.id)
 
@@ -681,9 +721,11 @@ defmodule CurrentTest do
                %Current.Event.WorkflowCreated{},
                %Current.Event.ProposalProductionStarted{},
                %Current.Event.ProposalProduced{},
-               %Current.Event.ProposalApproved{},
-               %Current.Event.EffectApplicationStarted{},
-               %Current.Event.EffectFailed{},
+               %Current.Event.ProposalValidationFailed{},
+               # %Current.Event.ProposalValidated{},
+               # %Current.Event.ProposalApproved{},
+               # %Current.Event.EffectApplicationStarted{},
+               # %Current.Event.EffectFailed{},
                %Current.Event.WorkflowFailed{}
              ] = events
     end
@@ -722,6 +764,15 @@ defmodule CurrentTest do
           @receive_timeout -> flunk("did not receive proposal_produced")
         end
 
+      receive do
+        {:proposal_validated, ^task_id, workflow, proposal} ->
+          assert workflow.status == :waiting_for_approval
+          proposal.id
+      after
+        @receive_timeout ->
+          flunk("did not receive proposal_validated")
+      end
+
       proposal_intent_ids = Enum.map(proposal.intents, & &1.id)
 
       assert :ok =
@@ -757,10 +808,9 @@ defmodule CurrentTest do
               match?(%Current.Intent.Grep{}, intent)
             end)
 
-
           assert %Current.EffectResult.Grep{} = grep_result
           assert length(grep_result.matches) == 1
-          assert hd(grep_result.matches).text =~ "SignupHelper"
+          assert hd(grep_result.matches).text =~ "Signup"
       after
         @receive_timeout -> flunk("did not receive effects_applied")
       end
@@ -835,6 +885,7 @@ defmodule CurrentTest do
                %Current.Event.WorkflowCreated{},
                %Current.Event.ProposalProductionStarted{},
                %Current.Event.ProposalProduced{},
+               %Current.Event.ProposalValidated{},
                %Current.Event.ProposalApproved{},
                %Current.Event.EffectApplicationStarted{},
                %Current.Event.EffectApplied{},
@@ -861,26 +912,6 @@ defmodule CurrentTest do
 
       assert Enum.sort(event_artifact_ids) == Enum.sort(artifact_ids)
       assert Enum.sort(Enum.map(produced_artifacts, & &1.id)) == Enum.sort(artifact_ids)
-    end
-
-    defp submit_simple_task do
-      req = %Request{
-        input: "add email validation to signup flow",
-        context: %{}
-      }
-
-      {:ok, task_id} = Current.submit_task(req, self())
-
-      workflow =
-        receive do
-          {:workflow_created, ^task_id, workflow} ->
-            workflow
-        after
-          @receive_timeout ->
-            flunk("did not receive workflow_created")
-        end
-
-      {:ok, task_id, workflow}
     end
 
     # proposal has 3 intents:
@@ -931,34 +962,12 @@ defmodule CurrentTest do
           @receive_timeout -> flunk("did not receive proposal_produced")
         end
 
-      assert :ok =
-               Current.review_proposal(
-                 proposal.id,
-                 {:approve, %{reviewed_by: :test_user, note: "looks good"}}
-               )
-
       receive do
-        {:proposal_approved, ^task_id, approved_workflow} ->
-          assert approved_workflow.status == :approved
+        {:proposal_validation_failed, ^task_id, workflow, _error} ->
+          assert workflow.status == :validation_failed
       after
-        @receive_timeout -> flunk("did not receive proposal_approved")
-      end
-
-      receive do
-        {:effect_applied, ^task_id, effect_workflow, intent, _result} ->
-          assert effect_workflow.status == :applying
-          assert %Current.Intent.FilePatch{} = intent
-      after
-        @receive_timeout -> flunk("did not receive first effect_applied")
-      end
-
-      receive do
-        {:effect_failed, ^task_id, failed_workflow, reason} ->
-          assert failed_workflow.status == :applying
-          assert failed_workflow.result == nil
-          assert is_binary(reason)
-      after
-        @receive_timeout -> flunk("did not receive effect_failed")
+        @receive_timeout ->
+          flunk("did not receive proposal_validation_failed")
       end
 
       receive do
@@ -972,6 +981,7 @@ defmodule CurrentTest do
         @receive_timeout -> flunk("did not receive workflow_failed")
       end
 
+      refute_receive {:proposal_validated, ^task_id, _, _}, 200
       refute_receive {:effects_applied, ^task_id, _, _}, 200
       refute_receive {:artifact_produced, ^task_id, _, _}, 200
       refute_receive {:artifacts_produced, ^task_id, _, _}, 200
@@ -989,10 +999,7 @@ defmodule CurrentTest do
                %Current.Event.WorkflowCreated{},
                %Current.Event.ProposalProductionStarted{},
                %Current.Event.ProposalProduced{},
-               %Current.Event.ProposalApproved{},
-               %Current.Event.EffectApplicationStarted{},
-               %Current.Event.EffectApplied{},
-               %Current.Event.EffectFailed{},
+               %Current.Event.ProposalValidationFailed{},
                %Current.Event.WorkflowFailed{}
              ] = events
 

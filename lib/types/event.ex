@@ -4,6 +4,8 @@ defmodule Current.Event do
           | Current.Event.ProposalProductionStarted.t()
           | Current.Event.ProposalProduced.t()
           | Current.Event.ProposalApproved.t()
+          | Current.Event.ProposalValidated.t()
+          | Current.Event.ProposalValidationFailed.t()
           | Current.Event.ProposalRejected.t()
           | Current.Event.EffectApplicationStarted.t()
           | Current.Event.EffectApplied.t()
@@ -19,6 +21,8 @@ defmodule Current.Event do
     Current.Event.WorkflowCreated,
     Current.Event.ProposalProductionStarted,
     Current.Event.ProposalProduced,
+    Current.Event.ProposalValidated,
+    Current.Event.ProposalValidationFailed,
     Current.Event.ProposalApproved,
     Current.Event.ProposalRejected,
     Current.Event.EffectApplicationStarted,

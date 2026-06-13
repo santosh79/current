@@ -124,11 +124,11 @@ defmodule Current.Intent do
           | Current.Intent.Report.t()
 
   @known_modules [
-    Current.Intent.FilePatch,
+    Current.Intent.ReadFile,
     Current.Intent.WriteFile,
     Current.Intent.DeleteFile,
+    Current.Intent.FilePatch,
     Current.Intent.RunCommand,
-    Current.Intent.ReadFile,
     Current.Intent.Glob,
     Current.Intent.Grep,
     Current.Intent.Claim,

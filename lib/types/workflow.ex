@@ -30,6 +30,7 @@ defmodule Current.Workflow do
           | :planning
           | :validating
           | :waiting_for_approval
+          | :validation_failed
           | :approved
           | :applying
           | :assembling_result
@@ -185,6 +186,42 @@ defmodule Current.Workflow do
     :ok = WorkflowStore.put(updated_workflow)
     send(orchestrator_pid, {:proposal_production_started, updated_workflow})
     :ok = produce_proposal(state, updated_workflow)
+    {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  @impl true
+  def handle_cast(
+        :mark_proposal_validated,
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    updated_workflow = %{
+      workflow
+      | status: :waiting_for_approval,
+        updated_at: DateTime.utc_now()
+    }
+
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:proposal_validated, updated_workflow})
+
+    {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  @impl true
+  def handle_cast(
+        {:mark_proposal_validation_failed, %Current.Error.ValidationError{} = error},
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    updated_workflow = %{
+      workflow
+      | status: :validation_failed,
+        error: error.reason,
+        updated_at: DateTime.utc_now()
+    }
+
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:proposal_validation_failed, updated_workflow, error})
+    GenServer.cast(self(), {:fail, "proposal validation failed"})
+
     {:noreply, %{state | workflow: updated_workflow}}
   end
 
