@@ -7,4 +7,3 @@ defmodule Current.EffectResult.DeleteFile do
           before_artifact_id: Current.Id.t() | nil
         }
 end
-

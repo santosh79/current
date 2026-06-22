@@ -2,6 +2,7 @@ defmodule Current.Event do
   @type t ::
           Current.Event.WorkflowCreated.t()
           | Current.Event.ProposalProductionStarted.t()
+          | Current.Event.ModeInvalid.t()
           | Current.Event.ProposalProduced.t()
           | Current.Event.ProposalApproved.t()
           | Current.Event.ProposalValidated.t()
@@ -18,6 +19,7 @@ defmodule Current.Event do
           | Current.Event.WorkflowFailed.t()
 
   @known_modules [
+    Current.Event.ModeInvalid,
     Current.Event.WorkflowCreated,
     Current.Event.ProposalProductionStarted,
     Current.Event.ProposalProduced,

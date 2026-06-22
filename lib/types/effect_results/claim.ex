@@ -20,4 +20,3 @@ defmodule Current.EffectResult.Claim do
           evidence: evidence() | nil
         }
 end
-

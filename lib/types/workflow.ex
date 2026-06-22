@@ -18,6 +18,7 @@ defmodule Current.Workflow do
     :proposal,
     :result,
     :events,
+    :mode,
     :started_at,
     :created_at,
     :completed_at,
@@ -35,6 +36,8 @@ defmodule Current.Workflow do
           | :applying
           | :assembling_result
           | :completed
+          | :planned
+          | :invalid_mode
           | :rejected
           | :failed
 
@@ -45,6 +48,7 @@ defmodule Current.Workflow do
           proposal: Current.Proposal.t() | nil,
           result: Current.WorkflowResult.t() | nil,
           events: [Current.Event.t()],
+          mode: Current.Mode.t(),
           created_at: DateTime.t(),
           started_at: DateTime.t() | nil,
           completed_at: DateTime.t() | nil,
@@ -130,6 +134,7 @@ defmodule Current.Workflow do
       id: workflow_id,
       task_id: task_id,
       status: :created,
+      mode: req.mode,
       proposal: nil,
       result: nil,
       events: [],
@@ -187,6 +192,31 @@ defmodule Current.Workflow do
     send(orchestrator_pid, {:proposal_production_started, updated_workflow})
     :ok = produce_proposal(state, updated_workflow)
     {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  def handle_cast(
+        :complete_as_plan,
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    updated_workflow = %{
+      workflow
+      | status: :planned,
+        completed_at: DateTime.utc_now(),
+        updated_at: DateTime.utc_now()
+    }
+
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:workflow_completed, updated_workflow})
+    {:noreply, %{state | workflow: updated_workflow}}
+  end
+
+  def handle_cast(
+        :mark_mode_invalid,
+        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+      ) do
+    send(orchestrator_pid, {:mode_invalid, workflow, workflow.mode})
+    GenServer.cast(self(), {:fail, "invalid mode: #{inspect(workflow.mode)}"})
+    {:noreply, state}
   end
 
   @impl true

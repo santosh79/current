@@ -33,8 +33,32 @@ defmodule Current.WorkflowOrchestrator do
       })
 
     notify_listeners(state.listeners, {:workflow_created, workflow.task_id, workflow})
-    GenServer.cast(workflow_pid, :start_planning)
+
+    case Current.Mode.valid?(workflow.mode) do
+      true ->
+        GenServer.cast(workflow_pid, :start_planning)
+
+      _ ->
+        GenServer.cast(workflow_pid, :mark_mode_invalid)
+    end
+
     {:noreply, %{state | workflow_pid: workflow_pid}}
+  end
+
+  @impl true
+  def handle_info({:mode_invalid, %Current.Workflow{} = workflow, mode}, state)
+      when is_pid(state.workflow_pid) do
+    :ok =
+      append_event(%Event.ModeInvalid{
+        id: Current.Id.generate(),
+        workflow_id: workflow.id,
+        workflow: workflow,
+        mode: mode,
+        timestamp: DateTime.utc_now()
+      })
+
+    notify_listeners(state.listeners, {:mode_invalid, workflow.task_id, workflow, mode})
+    {:noreply, state}
   end
 
   @impl true
@@ -94,6 +118,11 @@ defmodule Current.WorkflowOrchestrator do
       state.listeners,
       {:proposal_validated, workflow.task_id, workflow, workflow.proposal}
     )
+
+    case workflow.mode do
+      :plan -> GenServer.cast(state.workflow_pid, :complete_as_plan)
+      _ -> :ok
+    end
 
     {:noreply, state}
   end
