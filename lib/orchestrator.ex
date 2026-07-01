@@ -13,13 +13,34 @@ defmodule Current.WorkflowOrchestrator do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     listeners = Keyword.get(opts, :listeners, [])
-    GenServer.start_link(__MODULE__, %{listeners: listeners, workflow_pid: nil})
+    task_id = Keyword.get(opts, :task_id, [])
+    req = Keyword.get(opts, :req, [])
+
+    {:ok, pid} = GenServer.start_link(__MODULE__, %{})
+    send(pid, {:long_init, listeners, task_id, req})
+    {:ok, pid}
   end
 
   ## Server callbacks
 
   @impl true
-  def init(state), do: {:ok, state}
+  def init(_args) do
+    {:ok, %{}}
+  end
+
+  def handle_info({:long_init, listeners, task_id, req}, _state) do
+    {:ok, workflow_pid, workflow_id} = Current.Workflow.create(task_id, req, self())
+
+    :ok =
+      Current.RuntimeRegistry.put(workflow_id, %{
+        workflow_pid: workflow_pid,
+        orchestrator_pid: self()
+      })
+
+    state = %{listeners: listeners, workflow_pid: workflow_pid}
+
+    {:noreply, state}
+  end
 
   @impl true
   def handle_info({:workflow_created, workflow_pid, %Current.Workflow{} = workflow}, state)
@@ -42,7 +63,8 @@ defmodule Current.WorkflowOrchestrator do
         GenServer.cast(workflow_pid, :mark_mode_invalid)
     end
 
-    {:noreply, %{state | workflow_pid: workflow_pid}}
+    # {:noreply, %{state | workflow_pid: workflow_pid}}
+    {:noreply, state}
   end
 
   @impl true

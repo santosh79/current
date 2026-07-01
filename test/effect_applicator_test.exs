@@ -157,7 +157,7 @@ defmodule Current.EffectApplicatorTest do
 
       # these will fail — struct doesn't have these fields yet
       assert is_binary(result.contents_artifact_id)
-      assert :ok = Current.Id.validate(result.contents_artifact_id)
+      :ok = Current.Id.validate(result.contents_artifact_id)
       assert result.bytes == byte_size(contents)
 
       # contents must actually be retrievable from the store

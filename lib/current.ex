@@ -1,7 +1,7 @@
 defmodule Current do
   use GenServer
 
-  alias Current.{Request, Id, Workflow, WorkflowOrchestrator, WorkflowStore, RuntimeRegistry}
+  alias Current.{Request, Id, WorkflowOrchestrator, WorkflowStore, RuntimeRegistry}
 
   @type decision ::
           {:approve, metadata :: map()}
@@ -62,16 +62,8 @@ defmodule Current do
   def handle_call({:submit_task, %Request{} = req, caller_pid}, _from, state) do
     task_id = Id.generate()
 
-    spawn_link(fn ->
-      {:ok, orchestrator_pid} = WorkflowOrchestrator.start_link(listeners: [caller_pid])
-      {:ok, workflow_pid, workflow_id} = Workflow.create(task_id, req, orchestrator_pid)
-
-      :ok =
-        RuntimeRegistry.put(workflow_id, %{
-          workflow_pid: workflow_pid,
-          orchestrator_pid: orchestrator_pid
-        })
-    end)
+    {:ok, _orchestrator_pid} =
+      WorkflowOrchestrator.start_link(listeners: [caller_pid], task_id: task_id, req: req)
 
     {:reply, {:ok, task_id}, state}
   end

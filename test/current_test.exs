@@ -722,10 +722,6 @@ defmodule CurrentTest do
                %Current.Event.ProposalProductionStarted{},
                %Current.Event.ProposalProduced{},
                %Current.Event.ProposalValidationFailed{},
-               # %Current.Event.ProposalValidated{},
-               # %Current.Event.ProposalApproved{},
-               # %Current.Event.EffectApplicationStarted{},
-               # %Current.Event.EffectFailed{},
                %Current.Event.WorkflowFailed{}
              ] = events
     end
@@ -938,26 +934,13 @@ defmodule CurrentTest do
 
       {:ok, task_id} = Current.submit_task(req, self())
 
-      workflow =
-        receive do
-          {:workflow_created, ^task_id, workflow} -> workflow
-        after
-          @receive_timeout -> flunk("did not receive workflow_created")
-        end
-
-      receive do
-        {:proposal_production_started, ^task_id, _workflow} -> :ok
-      after
-        @receive_timeout -> flunk("did not receive proposal_production_started")
-      end
-
-      proposal =
+      {proposal, workflow} =
         receive do
           {:proposal_produced, ^task_id, produced_workflow, proposal} ->
             assert produced_workflow.status == :validating
             assert length(proposal.intents) == 3
 
-            proposal
+            {proposal, produced_workflow}
         after
           @receive_timeout -> flunk("did not receive proposal_produced")
         end
@@ -1036,11 +1019,11 @@ defmodule CurrentTest do
           @receive_timeout -> flunk("did not receive proposal_produced")
         end
 
-      assert :ok =
-               Current.review_proposal(
-                 proposal.id,
-                 {:approve, %{reviewed_by: :test_user, note: "looks good"}}
-               )
+      :ok =
+        Current.review_proposal(
+          proposal.id,
+          {:approve, %{reviewed_by: :test_user, note: "looks good"}}
+        )
 
       receive do
         {:proposal_approved, ^task_id, _workflow} -> :ok
@@ -1061,8 +1044,8 @@ defmodule CurrentTest do
           # stdout and stderr are artifact ids, not raw strings
           assert is_binary(result.stdout_artifact_id)
           assert is_binary(result.stderr_artifact_id)
-          assert :ok = Current.Id.validate(result.stdout_artifact_id)
-          assert :ok = Current.Id.validate(result.stderr_artifact_id)
+          :ok = Current.Id.validate(result.stdout_artifact_id)
+          :ok = Current.Id.validate(result.stderr_artifact_id)
 
           # they are different artifacts
           assert result.stdout_artifact_id != result.stderr_artifact_id
