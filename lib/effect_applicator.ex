@@ -38,7 +38,7 @@ defmodule Current.EffectApplicator do
           :ok = File.write!(patch_path, intent.diff)
 
           {output, exit_code} =
-            System.cmd("patch", ["--batch", "--forward", path, patch_path],
+            System.cmd("patch", ["--batch", "--forward", "--fuzz=0", path, patch_path],
               stderr_to_stdout: true
             )
 
