@@ -16,12 +16,19 @@ defmodule Current.EventStore do
     end
   end
 
+  @doc """
+  All events for a workflow stream, oldest first.
+
+  Not every event carries a `workflow_id` — `TaskCreated` is a task-level fact —
+  so the filter uses `Map.get/2` rather than struct dot-access (which raises
+  `KeyError` for structs without the field and would crash the Agent).
+  """
   @spec list_by_workflow_id(Current.Id.t()) :: [Current.Event.t()]
   def list_by_workflow_id(workflow_id) do
     Agent.get(__MODULE__, fn events ->
       events
       |> Enum.reverse()
-      |> Enum.filter(fn event -> event.workflow_id == workflow_id end)
+      |> Enum.filter(fn event -> Map.get(event, :workflow_id) == workflow_id end)
     end)
   end
 end

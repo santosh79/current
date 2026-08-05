@@ -1,7 +1,14 @@
 defmodule Current do
   use GenServer
 
-  alias Current.{Request, Id, WorkflowOrchestrator, WorkflowStore, RuntimeRegistry}
+  alias Current.{
+    Request,
+    Id,
+    WorkflowOrchestrator,
+    WorkflowReducer,
+    WorkflowStore,
+    RuntimeRegistry
+  }
 
   @type decision ::
           {:approve, metadata :: map()}
@@ -32,6 +39,24 @@ defmodule Current do
           {:ok, Current.Workflow.status()} | {:error, :not_found}
   def get_status(task_id) do
     GenServer.call(__MODULE__, {:get_status, task_id})
+  end
+
+  @doc """
+  Rebuild a workflow purely from its event log.
+
+  `get_workflow/1` reads the `WorkflowStore` projection; this bypasses the
+  projection entirely and folds the ordered event stream through
+  `Current.WorkflowReducer.replay/1`. Because every transition in the system is
+  event-sourced, the two are always equal — this function exists to make that
+  guarantee observable (and testable).
+  """
+  @spec replay_workflow(Current.Id.t()) ::
+          {:ok, Current.Workflow.t()} | {:error, :not_found}
+  def replay_workflow(workflow_id) do
+    case Current.EventStore.list_by_workflow_id(workflow_id) do
+      [] -> {:error, :not_found}
+      events -> {:ok, WorkflowReducer.replay(events)}
+    end
   end
 
   @spec review_proposal(Current.Id.t(), decision()) ::

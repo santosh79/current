@@ -1,11 +1,10 @@
 defmodule Current.Event.ModeInvalid do
-  @enforce_keys [:id, :workflow_id, :workflow, :mode, :timestamp]
-  defstruct [:id, :workflow_id, :workflow, :mode, :timestamp]
+  @enforce_keys [:id, :workflow_id, :mode, :timestamp]
+  defstruct [:id, :workflow_id, :mode, :timestamp]
 
   @type t :: %__MODULE__{
           id: Current.Id.t(),
           workflow_id: Current.Id.t(),
-          workflow: Current.Workflow.t(),
           mode: term(),
           timestamp: DateTime.t()
         }

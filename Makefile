@@ -2,12 +2,31 @@ DOCS_DIR := docs
 README := README.md
 OUTPUT := combined.md
 CODE_OUTPUT := combined_code.txt
+TESTS_OUTPUT := combined_tests.txt
 
-.PHONY: all clean code
+.PHONY: all clean code tests
 
 all: $(OUTPUT)
 
 code: $(CODE_OUTPUT)
+
+tests: $(TESTS_OUTPUT)
+
+$(TESTS_OUTPUT):
+	@echo "Generating $(TESTS_OUTPUT)..."
+	@rm -f $(TESTS_OUTPUT)
+	@for file in $$(find test -type f -name '*_test.exs' | sort); do \
+		echo "# $$file" >> $(TESTS_OUTPUT); \
+		echo "" >> $(TESTS_OUTPUT); \
+		echo '```elixir' >> $(TESTS_OUTPUT); \
+		cat $$file >> $(TESTS_OUTPUT); \
+		echo "" >> $(TESTS_OUTPUT); \
+		echo '```' >> $(TESTS_OUTPUT); \
+		echo "" >> $(TESTS_OUTPUT); \
+		echo "---" >> $(TESTS_OUTPUT); \
+		echo "" >> $(TESTS_OUTPUT); \
+	done
+	@echo "Done."
 
 $(CODE_OUTPUT):
 	@echo "Generating $(CODE_OUTPUT)..."
@@ -42,5 +61,5 @@ $(OUTPUT):
 	@echo "Done."
 
 clean:
-	rm -f $(OUTPUT) $(CODE_OUTPUT)
+	rm -f $(OUTPUT) $(CODE_OUTPUT) $(TESTS_OUTPUT)
 

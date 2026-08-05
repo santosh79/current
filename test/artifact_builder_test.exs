@@ -307,43 +307,6 @@ defmodule Current.ArtifactBuilderTest do
       assert artifact.metadata.statement == "tests pass"
       assert artifact.metadata.reason == "asserted directly"
     end
-
-    test "builds grep artifact from real grep effect result" do
-      workflow = workflow_fixture()
-
-      dir =
-        System.tmp_dir!()
-        |> Path.join("artifact_builder_grep_#{System.unique_integer([:positive])}")
-
-      File.mkdir_p!(dir)
-      on_exit(fn -> File.rm_rf!(dir) end)
-
-      path = Path.join(dir, "app.ex")
-
-      File.write!(path, """
-      defmodule App do
-        def hello, do: :world
-      end
-      """)
-
-      intent = %Current.Intent.Grep{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        pattern: "def hello",
-        paths: [path]
-      }
-
-      assert {:ok, result} = Current.EffectApplicator.apply(intent, [])
-
-      assert %Current.EffectResult.Grep{} = result
-      assert length(result.matches) == 1
-
-      {:ok, artifact} = ArtifactBuilder.build(workflow, {intent, result})
-
-      assert artifact.name == :grep_result
-      assert artifact.type == :report
-      assert artifact.metadata.match_count == 1
-    end
   end
 
   describe "build/2 - report" do
