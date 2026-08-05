@@ -18,8 +18,12 @@ defmodule Current.SecondIntentFailsProposalBuilder do
       )
 
     :ok = File.mkdir_p!(dir)
-    path = Path.join(dir, "stub.ex")
-    :ok = File.write!(path, "defmodule Stub do\nend\n")
+
+    patch_path = Path.join(dir, "stub.ex")
+    :ok = File.write!(patch_path, "defmodule Stub do\nend\n")
+
+    already_existing_path = Path.join(dir, "already_existing.ex")
+    :ok = File.write!(already_existing_path, "defmodule Existing do\nend\n")
 
     good_diff = """
     --- a/stub.ex
@@ -30,27 +34,24 @@ defmodule Current.SecondIntentFailsProposalBuilder do
      end
     """
 
-    missing_file_path = "/tmp/current_missing_file_#{System.unique_integer([:positive])}.ex"
-
-    missing_file_path_intent = %Intent.ReadFile{
-      id: Id.generate(),
-      proposal_id: proposal_id,
-      path: missing_file_path
-    }
-
     intents = [
       %Intent.FilePatch{
         id: Id.generate(),
         proposal_id: proposal_id,
-        path: path,
+        path: patch_path,
         diff: good_diff
       },
-      missing_file_path_intent,
+      %Intent.WriteFile{
+        id: Id.generate(),
+        proposal_id: proposal_id,
+        path: already_existing_path,
+        contents: "defmodule Replacement do\nend\n"
+      },
       %Intent.RunCommand{
         id: Id.generate(),
         proposal_id: proposal_id,
         cmd: "echo",
-        args: ["hello"]
+        args: ["this should never run"]
       }
     ]
 
@@ -59,7 +60,7 @@ defmodule Current.SecondIntentFailsProposalBuilder do
        id: proposal_id,
        workflow_id: workflow_id,
        intents: intents,
-       justification: "Proposed changes for request: #{inspect(req.input)}",
+       justification: "Second effect fails for request: #{inspect(req.input)}",
        claims: [],
        dependencies: []
      }}

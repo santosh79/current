@@ -2,12 +2,16 @@ defmodule Current.Workflow do
   use GenServer
 
   alias Current.{
+    ArtifactBuilder,
+    Event,
+    EventStore,
     Id,
     Proposal,
-    WorkflowStore,
+    Request,
     TaskStore,
     Task,
-    Request
+    WorkflowReducer,
+    WorkflowStore
   }
 
   @enforce_keys [:id, :task_id, :status, :created_at]
@@ -62,26 +66,22 @@ defmodule Current.Workflow do
           orchestrator_pid: pid()
         }
 
-  @type workflow_event ::
-          {:workflow_created, pid(), t()}
-          | {:proposal_production_started, t()}
-          | {:proposal_produced, t()}
-          | {:effect_application_started, t()}
-          | {:effect_applied, t(), Current.Intent.t(), map()}
-          | {:effects_applied, t(), [{Current.Intent.t(), map()}]}
-          | {:effect_failed, t(), Current.Intent.t(), String.t()}
-          | {:artifact_produced, t(), Current.Artifact.t()}
-          | {:workflow_result_assembled, t(), Current.WorkflowResult.t()}
-          | {:workflow_completed, t()}
-
+  @typedoc """
+  Commands the orchestrator (process manager) may cast at the aggregate. Each
+  accepted command results in one or more events being emitted.
+  """
   @type workflow_command ::
           :start_planning
-          | :produce_proposal
-          | {:review_proposal, Current.Id.t(), Current.decision()}
+          | :mark_mode_invalid
+          | :mark_proposal_validated
+          | {:mark_proposal_validation_failed, Current.Error.ValidationError.t()}
+          | {:record_proposal_decision, Current.Id.t(), Current.decision()}
           | :apply_effects
-          | :produce_artifact
+          | {:produce_artifacts, [{Current.Intent.t(), Current.EffectApplicator.result()}]}
           | {:assemble_result, [Current.Artifact.t()]}
+          | :complete_as_plan
           | :complete
+          | {:fail, String.t()}
 
   ## Client API
 
@@ -107,11 +107,6 @@ defmodule Current.Workflow do
     {:ok, pid, workflow_id}
   end
 
-  @spec produce_proposal(pid()) :: :ok
-  def produce_proposal(workflow_pid) when is_pid(workflow_pid) do
-    GenServer.cast(workflow_pid, :produce_proposal)
-  end
-
   ## Server callbacks
 
   @impl true
@@ -130,25 +125,21 @@ defmodule Current.Workflow do
       submitted_at: now
     }
 
-    workflow = %__MODULE__{
-      id: workflow_id,
+    :ok = TaskStore.put(task)
+
+    genesis = %Event.WorkflowCreated{
+      id: Id.generate(),
+      workflow_id: workflow_id,
       task_id: task_id,
-      status: :created,
       mode: req.mode,
-      proposal: nil,
-      result: nil,
-      events: [],
-      started_at: nil,
-      created_at: now,
-      completed_at: nil,
-      updated_at: now,
-      error: nil
+      timestamp: now
     }
 
-    :ok = TaskStore.put(task)
-    :ok = WorkflowStore.put(workflow)
+    workflow = WorkflowReducer.apply_event(nil, genesis)
 
-    send(orchestrator_pid, {:workflow_created, self(), workflow})
+    :ok = EventStore.append(genesis)
+    :ok = WorkflowStore.put(workflow)
+    send(orchestrator_pid, {:workflow_event, genesis})
 
     state = %{
       workflow: workflow,
@@ -159,118 +150,98 @@ defmodule Current.Workflow do
     {:ok, state}
   end
 
-  @impl true
-  def handle_info(
-        {:proposal_produced, proposal},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    updated_workflow = %{
-      workflow
-      | proposal: proposal,
-        status: :validating,
-        updated_at: DateTime.utc_now()
-    }
-
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:proposal_produced, updated_workflow})
-    {:noreply, %{state | workflow: updated_workflow}}
-  end
+  ## Commands (from the orchestrator)
 
   @impl true
-  def handle_cast(
-        :start_planning,
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    updated_workflow = %{
-      workflow
-      | status: :planning,
-        started_at: DateTime.utc_now(),
-        updated_at: DateTime.utc_now()
+  def handle_cast(:start_planning, state) do
+    w = state.workflow
+
+    event = %Event.ProposalProductionStarted{
+      id: Id.generate(),
+      workflow_id: w.id,
+      timestamp: DateTime.utc_now()
     }
 
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:proposal_production_started, updated_workflow})
-    :ok = produce_proposal(state, updated_workflow)
-    {:noreply, %{state | workflow: updated_workflow}}
-  end
+    updated_state = emit(state, event)
 
-  def handle_cast(
-        :complete_as_plan,
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    updated_workflow = %{
-      workflow
-      | status: :planned,
-        completed_at: DateTime.utc_now(),
-        updated_at: DateTime.utc_now()
-    }
-
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:workflow_completed, updated_workflow})
-    {:noreply, %{state | workflow: updated_workflow}}
-  end
-
-  def handle_cast(
-        :mark_mode_invalid,
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    send(orchestrator_pid, {:mode_invalid, workflow, workflow.mode})
-    GenServer.cast(self(), {:fail, "invalid mode: #{inspect(workflow.mode)}"})
-    {:noreply, state}
+    :ok = start_proposal_production(state)
+    {:noreply, updated_state}
   end
 
   @impl true
-  def handle_cast(
-        :mark_proposal_validated,
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    updated_workflow = %{
-      workflow
-      | status: :waiting_for_approval,
-        updated_at: DateTime.utc_now()
+  def handle_cast(:mark_mode_invalid, state) do
+    w = state.workflow
+
+    event = %Event.ModeInvalid{
+      id: Id.generate(),
+      workflow_id: w.id,
+      mode: w.mode,
+      timestamp: DateTime.utc_now()
     }
 
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:proposal_validated, updated_workflow})
+    updated_state = emit(state, event)
+    {:noreply, updated_state}
+  end
 
-    {:noreply, %{state | workflow: updated_workflow}}
+  @impl true
+  def handle_cast(:mark_proposal_validated, state) do
+    w = state.workflow
+
+    event = %Event.ProposalValidated{
+      id: Id.generate(),
+      workflow_id: w.id,
+      proposal: w.proposal,
+      timestamp: DateTime.utc_now()
+    }
+
+    updated_state = emit(state, event)
+    {:noreply, updated_state}
   end
 
   @impl true
   def handle_cast(
         {:mark_proposal_validation_failed, %Current.Error.ValidationError{} = error},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
+        state
       ) do
-    updated_workflow = %{
-      workflow
-      | status: :validation_failed,
-        error: error.reason,
-        updated_at: DateTime.utc_now()
-    }
+    w = state.workflow
 
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:proposal_validation_failed, updated_workflow, error})
-    GenServer.cast(self(), {:fail, "proposal validation failed"})
+    event =
+      %Event.ProposalValidationFailed{
+        id: Id.generate(),
+        workflow_id: w.id,
+        proposal: w.proposal,
+        error: error,
+        timestamp: DateTime.utc_now()
+      }
 
-    {:noreply, %{state | workflow: updated_workflow}}
+    updated_state = emit(state, event)
+    {:noreply, updated_state}
   end
 
   @impl true
-  def handle_cast(
-        {:record_proposal_decision, proposal_id, {:approve, _metadata} = decision},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    case workflow.proposal do
-      %Proposal{id: ^proposal_id} ->
-        updated_workflow = %{
-          workflow
-          | status: :approved,
-            updated_at: DateTime.utc_now()
+  def handle_cast({:record_proposal_decision, proposal_id, decision}, state) do
+    w = state.workflow
+
+    case {state.workflow.status, state.workflow.proposal, decision} do
+      {:waiting_for_approval, %Proposal{id: ^proposal_id}, {:approve, _metadata}} ->
+        event = %Event.ProposalApproved{
+          id: Id.generate(),
+          workflow_id: w.id,
+          timestamp: DateTime.utc_now()
         }
 
-        :ok = WorkflowStore.put(updated_workflow)
-        send(orchestrator_pid, {:proposal_decision_recorded, decision, updated_workflow})
-        {:noreply, %{state | workflow: updated_workflow}}
+        updated_state = emit(state, event)
+        {:noreply, updated_state}
+
+      {:waiting_for_approval, %Proposal{id: ^proposal_id}, {:reject, _metadata}} ->
+        event = %Event.ProposalRejected{
+          id: Id.generate(),
+          workflow_id: w.id,
+          timestamp: DateTime.utc_now()
+        }
+
+        updated_state = emit(state, event)
+        {:noreply, updated_state}
 
       _ ->
         {:noreply, state}
@@ -278,142 +249,212 @@ defmodule Current.Workflow do
   end
 
   @impl true
-  def handle_cast(
-        {:record_proposal_decision, proposal_id, {:reject, _metadata} = decision},
-        %{workflow: %Current.Workflow{} = workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    case workflow.proposal do
-      %Proposal{id: ^proposal_id} ->
-        updated_workflow = %{
-          workflow
-          | status: :rejected,
-            updated_at: DateTime.utc_now()
-        }
+  def handle_cast(:apply_effects, state) do
+    w = state.workflow
 
-        :ok = WorkflowStore.put(updated_workflow)
-        send(orchestrator_pid, {:proposal_decision_recorded, decision, updated_workflow})
-        {:noreply, %{state | workflow: updated_workflow}}
-
-      _ ->
-        {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_cast(
-        :apply_effects,
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    updated_workflow = %{workflow | status: :applying, updated_at: DateTime.utc_now()}
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:effect_application_started, updated_workflow})
-
-    spawn_link(fn ->
-      try do
-        case apply_intents_streaming(
-               workflow.proposal.intents,
-               orchestrator_pid,
-               updated_workflow,
-               []
-             ) do
-          {:ok, intent_results} ->
-            send(orchestrator_pid, {:effects_applied, updated_workflow, intent_results})
-
-          {:error, intent, reason} ->
-            send(orchestrator_pid, {:effect_failed, updated_workflow, intent, reason})
-        end
-      rescue
-        e ->
-          reason = Exception.message(e)
-          [first_intent | _] = workflow.proposal.intents
-          send(orchestrator_pid, {:effect_failed, updated_workflow, first_intent, reason})
-      end
-    end)
-
-    {:noreply, %{state | workflow: updated_workflow}}
-  end
-
-  @impl true
-  def handle_cast(
-        {:fail, reason},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    updated_workflow = %{
-      workflow
-      | status: :failed,
-        error: reason,
-        updated_at: DateTime.utc_now()
+    event = %Event.EffectApplicationStarted{
+      id: Id.generate(),
+      workflow_id: w.id,
+      timestamp: DateTime.utc_now()
     }
 
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:workflow_failed, updated_workflow})
-    {:noreply, %{state | workflow: updated_workflow}}
+    updated_state = emit(state, event)
+    :ok = start_effect_application(state)
+    {:noreply, updated_state}
   end
 
   @impl true
-  def handle_cast(
-        {:produce_artifacts, intent_results},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    artifacts =
-      intent_results
-      |> Enum.map(fn ir ->
-        {:ok, art} = Current.ArtifactBuilder.build(workflow, ir)
-        send(orchestrator_pid, {:artifact_produced, workflow, ir, art})
-        art
-      end)
-
-    send(orchestrator_pid, {:artifacts_produced, workflow, artifacts})
-    {:noreply, state}
+  def handle_cast({:produce_artifacts, intent_results}, state) do
+    new_state = gen_artifacts(intent_results, state, [])
+    {:noreply, new_state}
   end
 
   @impl true
-  def handle_cast(
-        {:assemble_result, artifacts},
-        %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state
-      ) do
-    result = build_workflow_result(workflow, artifacts)
+  def handle_cast({:assemble_result, artifacts}, state) do
+    result = build_workflow_result(state.workflow, artifacts)
+    w = state.workflow
 
-    updated_workflow = %{
-      workflow
-      | status: :assembling_result,
-        result: result,
-        updated_at: DateTime.utc_now()
+    event = %Event.WorkflowResultAssembled{
+      id: Id.generate(),
+      workflow_id: w.id,
+      result: result,
+      timestamp: DateTime.utc_now()
     }
 
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:workflow_result_assembled, updated_workflow, result})
-    {:noreply, %{state | workflow: updated_workflow}}
+    updated_state = emit(state, event)
+
+    {:noreply, updated_state}
   end
 
   @impl true
-  def handle_cast(:complete, %{workflow: workflow, orchestrator_pid: orchestrator_pid} = state) do
-    updated_workflow = %{
-      workflow
-      | status: :completed,
-        completed_at: DateTime.utc_now(),
-        updated_at: DateTime.utc_now()
-    }
-
-    :ok = WorkflowStore.put(updated_workflow)
-    send(orchestrator_pid, {:workflow_completed, updated_workflow})
-    {:noreply, %{state | workflow: updated_workflow}}
+  def handle_cast(:complete_as_plan, state) do
+    # The reducer derives :planned from (mode: :plan, WorkflowCompleted).
+    {:noreply, emit_completed(state)}
   end
 
-  defp produce_proposal(
-         %{request: req, orchestrator_pid: _orchestrator_pid},
-         %Current.Workflow{} = workflow
-       ) do
+  @impl true
+  def handle_cast(:complete, state) do
+    {:noreply, emit_completed(state)}
+  end
+
+  @impl true
+  def handle_cast({:fail, reason}, state) do
+    w = state.workflow
+
+    event = %Event.WorkflowFailed{
+      id: Id.generate(),
+      workflow_id: w.id,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    }
+
+    updated_state = emit(state, event)
+
+    {:noreply, updated_state}
+  end
+
+  ## Facts reported by helper processes
+
+  @impl true
+  def handle_info({:proposal_produced, %Proposal{} = proposal}, state) do
+    w = state.workflow
+
+    event = %Event.ProposalProduced{
+      id: Id.generate(),
+      workflow_id: w.id,
+      proposal: proposal,
+      timestamp: DateTime.utc_now()
+    }
+
+    updated_state = emit(state, event)
+
+    {:noreply, updated_state}
+  end
+
+  @impl true
+  def handle_info({:effect_applied, intent, result}, state) do
+    w = state.workflow
+
+    event = %Event.EffectApplied{
+      id: Id.generate(),
+      workflow_id: w.id,
+      intent: intent,
+      result: result,
+      timestamp: DateTime.utc_now()
+    }
+
+    updated_state = emit(state, event)
+
+    {:noreply, updated_state}
+  end
+
+  @impl true
+  def handle_info({:effects_applied, intent_results}, state) do
+    w = state.workflow
+
+    event = %Event.EffectsApplied{
+      id: Id.generate(),
+      workflow_id: w.id,
+      intent_results: intent_results,
+      timestamp: DateTime.utc_now()
+    }
+
+    updated_state = emit(state, event)
+
+    {:noreply, updated_state}
+  end
+
+  @impl true
+  def handle_info({:effect_failed, intent, reason}, state) do
+    w = state.workflow
+
+    event = %Event.EffectFailed{
+      id: Id.generate(),
+      workflow_id: w.id,
+      intent: intent,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    }
+
+    updated_state = emit(state, event)
+    {:noreply, updated_state}
+  end
+
+  ## Event-sourced transition pipeline
+
+  defp emit(%{workflow: workflow, orchestrator_pid: orchestrator_pid} = state, event) do
+    updated_workflow = WorkflowReducer.apply_event(workflow, event)
+
+    :ok = EventStore.append(event)
+    :ok = WorkflowStore.put(updated_workflow)
+    send(orchestrator_pid, {:workflow_event, event})
+    %{state | workflow: updated_workflow}
+  end
+
+  defp emit_completed(state) do
+    w = state.workflow
+
+    event = %Event.WorkflowCompleted{
+      id: Id.generate(),
+      workflow_id: w.id,
+      timestamp: DateTime.utc_now()
+    }
+
+    emit(state, event)
+  end
+
+  ## Helper processes (side effects)
+
+  defp start_proposal_production(%{request: req, workflow: workflow}) do
     builder = :persistent_term.get(:proposal_builder, Current.ProposalBuilder)
     workflow_pid = self()
 
     spawn_link(fn ->
       {:ok, proposal} = builder.build(req, workflow.id)
       send(workflow_pid, {:proposal_produced, proposal})
-      :ok
     end)
 
     :ok
+  end
+
+  defp start_effect_application(%{workflow: workflow}) do
+    workflow_pid = self()
+    intents = workflow.proposal.intents
+
+    spawn_link(fn ->
+      try do
+        case apply_intents_streaming(intents, workflow_pid, []) do
+          {:ok, intent_results} ->
+            send(workflow_pid, {:effects_applied, intent_results})
+
+          {:error, intent, reason} ->
+            send(workflow_pid, {:effect_failed, intent, reason})
+        end
+      rescue
+        e ->
+          [first_intent | _] = intents
+          send(workflow_pid, {:effect_failed, first_intent, Exception.message(e)})
+      end
+    end)
+
+    :ok
+  end
+
+  defp apply_intents_streaming([], _workflow_pid, acc) do
+    {:ok, :lists.reverse(acc)}
+  end
+
+  defp apply_intents_streaming([intent | rest], workflow_pid, acc) do
+    applicator = :persistent_term.get(:effect_applicator, Current.EffectApplicator)
+
+    case applicator.apply(intent, acc) do
+      {:ok, result} ->
+        send(workflow_pid, {:effect_applied, intent, result})
+        apply_intents_streaming(rest, workflow_pid, [{intent, result} | acc])
+
+      {:error, reason} ->
+        {:error, intent, reason}
+    end
   end
 
   # SantoshTODO: Stop Hardcoding
@@ -429,21 +470,36 @@ defmodule Current.Workflow do
     }
   end
 
-  defp apply_intents_streaming([], _orchestrator_pid, _workflow, acc) do
-    {:ok, acc |> :lists.reverse()}
+  defp gen_artifacts([], state, acc) do
+    artifacts = acc |> :lists.reverse()
+    w = state.workflow
+
+    event = %Event.ArtifactsProduced{
+      id: Id.generate(),
+      workflow_id: w.id,
+      artifacts: artifacts,
+      timestamp: DateTime.utc_now()
+    }
+
+    new_state = emit(state, event)
+    new_state
   end
 
-  defp apply_intents_streaming([intent | rest], orchestrator_pid, workflow, acc) do
-    applicator = :persistent_term.get(:effect_applicator, Current.EffectApplicator)
+  defp gen_artifacts([intent_result | rest], state, acc) do
+    {intent, result} = intent_result
+    {:ok, artifact} = ArtifactBuilder.build(state.workflow, intent_result)
+    w = state.workflow
 
-    # <-- pass acc as prior_results
-    case applicator.apply(intent, acc) do
-      {:ok, result} ->
-        send(orchestrator_pid, {:effect_applied, workflow, intent, result})
-        apply_intents_streaming(rest, orchestrator_pid, workflow, [{intent, result} | acc])
+    event = %Event.ArtifactProduced{
+      id: Id.generate(),
+      workflow_id: w.id,
+      intent: intent,
+      result: result,
+      artifact: artifact,
+      timestamp: DateTime.utc_now()
+    }
 
-      {:error, reason} ->
-        {:error, intent, reason}
-    end
+    new_state = emit(state, event)
+    gen_artifacts(rest, new_state, [artifact | acc])
   end
 end

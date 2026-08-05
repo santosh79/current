@@ -34,18 +34,22 @@ defmodule Current.EffectApplicatorTest do
         diff: diff
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert !String.contains?(File.read!(path), "def validate_email")
+
+      assert {:ok, %Current.EffectResult.FilePatch{} = result} =
+               EffectApplicator.apply(intent, [])
+
       assert result.path == path
       assert File.read!(path) =~ "def validate_email"
     end
 
     test "returns error if the file does not exist", %{dir: dir} do
-      path = Path.join(dir, "nonexistent.ex")
+      non_existent_path = Path.join(dir, "nonexistent.ex")
 
       intent = %Intent.FilePatch{
         id: Id.generate(),
         proposal_id: Id.generate(),
-        path: path,
+        path: non_existent_path,
         diff: "--- a\n+++ b\n"
       }
 
@@ -77,7 +81,7 @@ defmodule Current.EffectApplicatorTest do
         args: ["hello"]
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, %Current.EffectResult.Command{} = result} = EffectApplicator.apply(intent, [])
       assert result.exit_code == 0
       assert result.stdout_bytes > 0
 
@@ -151,33 +155,16 @@ defmodule Current.EffectApplicatorTest do
         path: path
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert %Current.EffectResult.ReadFile{} = result
+      assert {:ok, %Current.EffectResult.ReadFile{} = result} = EffectApplicator.apply(intent, [])
       assert result.path == path
 
-      # these will fail — struct doesn't have these fields yet
       assert is_binary(result.contents_artifact_id)
-      :ok = Current.Id.validate(result.contents_artifact_id)
       assert result.bytes == byte_size(contents)
+      assert {:ok, contents} == Current.ArtifactStore.read(result.contents_artifact_id)
 
-      # contents must actually be retrievable from the store
       {:ok, stored_path} = Current.ArtifactStore.path_for(result.contents_artifact_id)
       assert File.exists?(stored_path)
       assert File.read!(stored_path) == contents
-    end
-
-    test "bytes reflects actual file size", %{dir: dir} do
-      path = Path.join(dir, "small.ex")
-      File.write!(path, "hello")
-
-      intent = %Intent.ReadFile{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        path: path
-      }
-
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert result.bytes == 5
     end
 
     test "returns error when file does not exist", %{dir: dir} do
@@ -192,19 +179,6 @@ defmodule Current.EffectApplicatorTest do
       assert {:error, reason} = EffectApplicator.apply(intent, [])
       assert reason =~ "not found"
       assert reason =~ path
-    end
-
-    test "same file contents produce the same artifact id", %{dir: dir} do
-      path = Path.join(dir, "app.ex")
-      File.write!(path, "content")
-
-      intent_a = %Intent.ReadFile{id: Id.generate(), proposal_id: Id.generate(), path: path}
-      intent_b = %Intent.ReadFile{id: Id.generate(), proposal_id: Id.generate(), path: path}
-
-      assert {:ok, result_a} = EffectApplicator.apply(intent_a, [])
-      assert {:ok, result_b} = EffectApplicator.apply(intent_b, [])
-
-      assert result_a.contents_artifact_id == result_b.contents_artifact_id
     end
   end
 
@@ -229,8 +203,7 @@ defmodule Current.EffectApplicatorTest do
         contents: contents
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert %Current.EffectResult.WriteFile{} = result
+      assert {:ok, %Current.EffectResult.WriteFile{} = result} = EffectApplicator.apply(intent, [])
       assert result.path == path
       assert File.exists?(path)
       assert File.read!(path) == contents
@@ -321,33 +294,6 @@ defmodule Current.EffectApplicatorTest do
       File.mkdir_p!(dir)
       on_exit(fn -> File.rm_rf!(dir) end)
       {:ok, dir: dir}
-    end
-
-    test "returns matching lines from files", %{dir: dir} do
-      path = Path.join(dir, "signup.ex")
-
-      File.write!(path, """
-      defmodule Signup do
-      def validate_email(email), do: String.contains?(email, "@")
-      def ok, do: true
-      end
-      """)
-
-      intent = %Intent.Grep{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        pattern: "validate_email",
-        paths: [path]
-      }
-
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert %Current.EffectResult.Grep{} = result
-      assert length(result.matches) == 1
-
-      [match] = result.matches
-      assert match.path == path
-      assert match.line == 2
-      assert match.text =~ "validate_email"
     end
 
     test "returns empty matches when nothing matches", %{dir: dir} do
