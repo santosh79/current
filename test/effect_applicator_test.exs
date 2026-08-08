@@ -256,6 +256,7 @@ defmodule Current.EffectApplicatorTest do
 
     test "succeeds if file does not exist", %{dir: dir} do
       path = Path.join(dir, "missing.ex")
+      refute File.exists?(path)
 
       intent = %Intent.DeleteFile{
         id: Id.generate(),
@@ -299,7 +300,7 @@ defmodule Current.EffectApplicatorTest do
     test "returns empty matches when nothing matches", %{dir: dir} do
       path = Path.join(dir, "signup.ex")
 
-      File.write!(path, """
+      :ok = File.write!(path, """
       defmodule Signup do
       def ok, do: true
       end
@@ -322,39 +323,39 @@ defmodule Current.EffectApplicatorTest do
 
       File.write!(path, """
       alpha
-      beta TODO
-      gamma TODO
+      beta FINDME
+      gamma FINDME
       """)
 
       intent = %Intent.Grep{
         id: Id.generate(),
         proposal_id: Id.generate(),
-        pattern: "TODO",
+        pattern: "FINDME",
         paths: [path]
       }
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
 
       assert [
-               %Current.EffectResult.Grep.Match{line: 2, path: ^path, text: "beta TODO"},
-               %Current.EffectResult.Grep.Match{line: 3, path: ^path, text: "gamma TODO"}
+               %Current.EffectResult.Grep.Match{line: 2, path: ^path, text: "beta FINDME"},
+               %Current.EffectResult.Grep.Match{line: 3, path: ^path, text: "gamma FINDME"}
              ] = result.matches
     end
 
     test "returns one match when a single line contains pattern multiple times", %{dir: dir} do
       path = Path.join(dir, "app.ex")
-      File.write!(path, "TODO TODO TODO")
+      File.write!(path, "FINDME FINDME FINDME")
 
       intent = %Intent.Grep{
         id: Id.generate(),
         proposal_id: Id.generate(),
-        pattern: "TODO",
+        pattern: "FINDME",
         paths: [path]
       }
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
 
-      assert [%Current.EffectResult.Grep.Match{path: ^path, line: 1, text: "TODO TODO TODO"}] =
+      assert [%Current.EffectResult.Grep.Match{path: ^path, line: 1, text: "FINDME FINDME FINDME"}] =
                result.matches
     end
 
@@ -451,8 +452,8 @@ defmodule Current.EffectApplicatorTest do
     end
 
     test "returns matches in sorted order", %{dir: dir} do
-      File.write!(Path.join(dir, "z.ex"), "")
-      File.write!(Path.join(dir, "a.ex"), "")
+      :ok = File.write!(Path.join(dir, "z.ex"), "")
+      :ok = File.write!(Path.join(dir, "a.ex"), "")
 
       intent = %Intent.Glob{
         id: Id.generate(),
