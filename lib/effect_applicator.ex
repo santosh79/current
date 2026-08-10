@@ -220,21 +220,7 @@ defmodule Current.EffectApplicator do
   def apply(%Current.Intent.Claim{} = intent, prior_results) do
     case intent.evidence do
       nil ->
-        case intent.expected do
-          expected when is_boolean(expected) ->
-            {:ok,
-             %Current.EffectResult.Claim{
-               verified: expected,
-               statement: intent.statement,
-               reason: "asserted directly"
-             }}
-
-          nil ->
-            {:error, "claim requires either :evidence or :expected"}
-
-          _ ->
-            {:error, "claim expected must be a boolean"}
-        end
+        {:error, "claim requires evidence"}
 
       evidence ->
         verify_evidence(intent.statement, evidence, prior_results)

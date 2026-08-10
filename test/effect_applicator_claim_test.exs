@@ -4,8 +4,8 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
   alias Current.{EffectApplicator, Id, Intent}
 
   describe "apply/2 - claim (stage 0: expected boolean)" do
-    test "returns verified true when expected is true" do
-      intent = %Intent.Claim{
+    test "when no evidence is supplied it returns error" do
+      intent_missing_evidence = %Intent.Claim{
         id: Id.generate(),
         proposal_id: Id.generate(),
         statement: "signup validates email",
@@ -13,50 +13,10 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         evidence: nil
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert result.verified == true
-      assert result.statement == "signup validates email"
-      assert result.reason == "asserted directly"
-    end
+      prior_results = []
 
-    test "returns verified false when expected is false" do
-      intent = %Intent.Claim{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        statement: "signup validates email",
-        expected: false,
-        evidence: nil
-      }
-
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert result.verified == false
-    end
-
-    test "returns error when neither evidence nor expected is present" do
-      intent = %Intent.Claim{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        statement: "signup validates email",
-        expected: nil,
-        evidence: nil
-      }
-
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
-      assert reason =~ "evidence"
-      assert reason =~ "expected"
-    end
-
-    test "returns error when expected is not boolean" do
-      intent = %Intent.Claim{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        statement: "signup validates email",
-        expected: "true",
-        evidence: nil
-      }
-
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
-      assert reason =~ "boolean"
+      assert {:error, "claim requires evidence"} =
+               EffectApplicator.apply(intent_missing_evidence, prior_results)
     end
   end
 
