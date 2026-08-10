@@ -8,8 +8,6 @@ defmodule Current.Workflow do
     Id,
     Proposal,
     Request,
-    TaskStore,
-    Task,
     WorkflowReducer,
     WorkflowStore
   }
@@ -116,16 +114,6 @@ defmodule Current.Workflow do
     req = Keyword.fetch!(opts, :request)
     orchestrator_pid = Keyword.fetch!(opts, :orchestrator_pid)
     now = DateTime.utc_now()
-
-    task = %Task{
-      id: task_id,
-      input: req.input,
-      context: req.context,
-      workflow_id: workflow_id,
-      submitted_at: now
-    }
-
-    :ok = TaskStore.put(task)
 
     genesis = %Event.WorkflowCreated{
       id: Id.generate(),

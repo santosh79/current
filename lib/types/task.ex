@@ -4,7 +4,6 @@ defmodule Current.Task do
     :id,
     :input,
     :context,
-    :workflow_id,
     :submitted_at
   ]
 
@@ -12,7 +11,6 @@ defmodule Current.Task do
           id: Current.Id.t(),
           input: String.t() | map(),
           context: map(),
-          workflow_id: Current.Id.t() | nil,
           submitted_at: DateTime.t()
         }
 

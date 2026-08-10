@@ -20,7 +20,7 @@ defmodule Current.WorkflowOrchestrator do
 
   use GenServer
 
-  alias Current.{Error, Event, EventStore, Id, IntentValidator, Mode, RuntimeRegistry}
+  alias Current.{Error, Event, IntentValidator, Mode, RuntimeRegistry}
 
   @type state :: %{
           listeners: [pid()],
@@ -51,14 +51,6 @@ defmodule Current.WorkflowOrchestrator do
   def handle_info({:long_init, listeners, task_id, %Current.Request{} = req}, _state) do
     # Task-level fact. It has no workflow_id and belongs to the task stream,
     # not the workflow stream, so the reducer never sees it.
-    :ok =
-      append_event(%Event.TaskCreated{
-        id: Id.generate(),
-        task_id: task_id,
-        mode: req.mode,
-        timestamp: DateTime.utc_now()
-      })
-
     {:ok, workflow_pid, workflow_id} = Current.Workflow.create(task_id, req, self())
 
     :ok =
@@ -244,11 +236,6 @@ defmodule Current.WorkflowOrchestrator do
   defp react(_event, _workflow_pid), do: :ok
 
   ## Internals
-
-  defp append_event(event) do
-    :ok = EventStore.append(event)
-    :ok
-  end
 
   defp notify_listeners(listeners, message) do
     Enum.each(listeners, fn pid -> send(pid, message) end)

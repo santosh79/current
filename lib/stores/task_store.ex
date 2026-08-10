@@ -5,10 +5,21 @@ defmodule Current.TaskStore do
     Agent.start_link(fn -> %{} end, name: __MODULE__)
   end
 
-  @spec put(Current.Task.t()) :: :ok
-  def put(task) do
-    Agent.update(__MODULE__, &Map.put(&1, task.id, task))
-    :ok
+  @spec put(Current.Request.t()) :: {:ok, Current.Id.t()}
+  def put(req) do
+    task_id = Current.Id.generate()
+
+    now = DateTime.utc_now()
+
+    task = %Current.Task{
+      id: task_id,
+      input: req.input,
+      context: req.context,
+      submitted_at: now
+    }
+
+    Agent.update(__MODULE__, &Map.put(&1, task_id, task))
+    {:ok, task_id}
   end
 
   @spec get(Current.Id.t()) ::

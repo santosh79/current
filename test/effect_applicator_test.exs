@@ -203,7 +203,9 @@ defmodule Current.EffectApplicatorTest do
         contents: contents
       }
 
-      assert {:ok, %Current.EffectResult.WriteFile{} = result} = EffectApplicator.apply(intent, [])
+      assert {:ok, %Current.EffectResult.WriteFile{} = result} =
+               EffectApplicator.apply(intent, [])
+
       assert result.path == path
       assert File.exists?(path)
       assert File.read!(path) == contents
@@ -300,11 +302,12 @@ defmodule Current.EffectApplicatorTest do
     test "returns empty matches when nothing matches", %{dir: dir} do
       path = Path.join(dir, "signup.ex")
 
-      :ok = File.write!(path, """
-      defmodule Signup do
-      def ok, do: true
-      end
-      """)
+      :ok =
+        File.write!(path, """
+        defmodule Signup do
+        def ok, do: true
+        end
+        """)
 
       intent = %Intent.Grep{
         id: Id.generate(),
@@ -355,7 +358,13 @@ defmodule Current.EffectApplicatorTest do
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
 
-      assert [%Current.EffectResult.Grep.Match{path: ^path, line: 1, text: "FINDME FINDME FINDME"}] =
+      assert [
+               %Current.EffectResult.Grep.Match{
+                 path: ^path,
+                 line: 1,
+                 text: "FINDME FINDME FINDME"
+               }
+             ] =
                result.matches
     end
 

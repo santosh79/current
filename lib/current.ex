@@ -3,7 +3,6 @@ defmodule Current do
 
   alias Current.{
     Request,
-    Id,
     WorkflowOrchestrator,
     WorkflowReducer,
     WorkflowStore,
@@ -85,7 +84,16 @@ defmodule Current do
 
   @impl true
   def handle_call({:submit_task, %Request{} = req, caller_pid}, _from, state) do
-    task_id = Id.generate()
+    {:ok, task_id} = Current.TaskStore.put(req)
+
+    event = %Current.Event.TaskCreated{
+      id: Current.Id.generate(),
+      task_id: task_id,
+      mode: req.mode,
+      timestamp: DateTime.utc_now()
+    }
+
+    :ok = Current.EventStore.append(event)
 
     {:ok, _orchestrator_pid} =
       WorkflowOrchestrator.start_link(listeners: [caller_pid], task_id: task_id, req: req)
