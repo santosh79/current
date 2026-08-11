@@ -98,7 +98,11 @@ defmodule Current.WorkflowReducer do
 
   @spec replay([Event.t()]) :: Workflow.t() | nil
   def replay(events) when is_list(events) do
-    Enum.reduce(events, nil, fn event, acc -> apply_event(acc, event) end)
+    events
+    |> Enum.sort_by(fn event ->
+      event.timestamp
+    end)
+    |> Enum.reduce(nil, fn event, acc -> apply_event(acc, event) end)
   end
 
   defp error_reason(%{reason: reason}), do: reason
