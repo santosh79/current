@@ -27,8 +27,10 @@ defmodule Current.EventStore do
   def list_by_workflow_id(workflow_id) do
     Agent.get(__MODULE__, fn events ->
       events
-      |> Enum.reverse()
       |> Enum.filter(fn event -> Map.get(event, :workflow_id) == workflow_id end)
+      |> Enum.sort_by(fn(event) ->
+        event.timestamp
+      end)
     end)
   end
 end
