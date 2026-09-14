@@ -68,8 +68,8 @@ defmodule Current.WorkflowExecutionTest do
     approve(proposal)
 
     receive do
-      {:effects_applied,
-       %Event.EffectsApplied{workflow_id: ^workflow_id, intent_results: intent_results}} ->
+      {:effect_application_complete,
+       %Event.EffectApplicationComplete{workflow_id: ^workflow_id, intent_results: intent_results}} ->
         assert length(intent_results) == 5
 
         {_glob_intent, glob_result} =
@@ -78,7 +78,8 @@ defmodule Current.WorkflowExecutionTest do
           end)
 
         assert %Current.EffectResult.Glob{} = glob_result
-        assert length(glob_result.matches) == 2
+        matches = fetch_matches(glob_result.matches_artifact_id)
+        assert length(matches) == 2
 
         {_grep_intent, grep_result} =
           Enum.find(intent_results, fn {intent, _result} ->
@@ -86,46 +87,21 @@ defmodule Current.WorkflowExecutionTest do
           end)
 
         assert %Current.EffectResult.Grep{} = grep_result
-        assert length(grep_result.matches) == 1
-        assert hd(grep_result.matches).text =~ "Signup"
+        matches = fetch_matches(grep_result.matches_artifact_id)
+        assert length(matches) == 1
+        assert hd(matches).text =~ "Signup"
     after
       @receive_timeout ->
-        flunk("did not receive effects_applied")
-    end
-
-    artifacts =
-      for _ <- 1..5 do
-        receive do
-          {:artifact_produced,
-           %Event.ArtifactProduced{workflow_id: ^workflow_id, artifact: artifact}} ->
-            assert artifact.intent_id in proposal_intent_ids
-            assert File.exists?(artifact.storage.path)
-            artifact
-        after
-          @receive_timeout ->
-            flunk("did not receive artifact_produced")
-        end
-      end
-
-    artifact_ids = Enum.map(artifacts, & &1.id)
-    artifact_intent_ids = Enum.map(artifacts, & &1.intent_id)
-
-    assert Enum.sort(artifact_intent_ids) == Enum.sort(proposal_intent_ids)
-    assert length(Enum.uniq(artifact_ids)) == 5
-
-    receive do
-      {:artifacts_produced,
-       %Event.ArtifactsProduced{workflow_id: ^workflow_id, artifacts: produced_artifacts}} ->
-        assert Enum.sort(Enum.map(produced_artifacts, & &1.id)) == Enum.sort(artifact_ids)
-    after
-      @receive_timeout ->
-        flunk("did not receive artifacts_produced")
+        flunk("did not receive effect_application_complete")
     end
 
     receive do
       {:workflow_result_assembled,
        %Event.WorkflowResultAssembled{workflow_id: ^workflow_id, result: result}} ->
-        assert Enum.sort(result.artifacts) == Enum.sort(artifact_ids)
+        assert length(result.intent_results) == 5
+
+        assert Enum.map(result.intent_results, fn {intent, _result} -> intent.id end)
+               |> Enum.sort() == Enum.sort(proposal_intent_ids)
     after
       @receive_timeout ->
         flunk("did not receive workflow_result_assembled")
@@ -141,7 +117,7 @@ defmodule Current.WorkflowExecutionTest do
 
     assert {:ok, final} = Current.get_workflow(task_id)
     assert final.status == :completed
-    assert Enum.sort(final.result.artifacts) == Enum.sort(artifact_ids)
+    assert length(final.result.intent_results) == 5
   end
 
   test "run_command output is stored as content-addressed artifacts and referenced by the workflow artifact" do
@@ -156,36 +132,18 @@ defmodule Current.WorkflowExecutionTest do
 
     result =
       receive do
-        {:effects_applied,
-         %Event.EffectsApplied{
+        {:effect_application_complete,
+         %Event.EffectApplicationComplete{
            workflow_id: ^workflow_id,
            intent_results: [{%Current.Intent.RunCommand{}, result}]
          }} ->
           result
       after
         @receive_timeout ->
-          flunk("did not receive effects_applied")
+          flunk("did not receive effect_application_complete")
       end
 
     assert result.stdout_artifact_id != result.stderr_artifact_id
-
-    command_artifact =
-      receive do
-        {:artifact_produced,
-         %Event.ArtifactProduced{
-           workflow_id: ^workflow_id,
-           artifact: %Current.Artifact{type: :command_result} = artifact
-         }} ->
-          artifact
-      after
-        @receive_timeout ->
-          flunk("did not receive command_result artifact")
-      end
-
-    assert command_artifact.metadata.stdout_artifact_id == result.stdout_artifact_id
-    assert command_artifact.metadata.stderr_artifact_id == result.stderr_artifact_id
-    assert command_artifact.metadata.stdout_bytes == result.stdout_bytes
-    assert command_artifact.metadata.stderr_bytes == result.stderr_bytes
   end
 
   test "effect application stops at the first failing intent and fails the workflow" do
@@ -236,10 +194,13 @@ defmodule Current.WorkflowExecutionTest do
     assert Enum.count(events, &match?(%Event.EffectApplied{}, &1)) == 1
     assert Enum.count(events, &match?(%Event.EffectFailed{}, &1)) == 1
 
-    refute Enum.any?(events, &match?(%Event.EffectsApplied{}, &1))
-    refute Enum.any?(events, &match?(%Event.ArtifactProduced{}, &1))
-    refute Enum.any?(events, &match?(%Event.ArtifactsProduced{}, &1))
+    refute Enum.any?(events, &match?(%Event.EffectApplicationComplete{}, &1))
     refute Enum.any?(events, &match?(%Event.WorkflowResultAssembled{}, &1))
     refute Enum.any?(events, &match?(%Event.WorkflowCompleted{}, &1))
+  end
+
+  defp fetch_matches(artifact_id) do
+    {:ok, encoded} = Current.BlobStore.read(artifact_id)
+    :erlang.binary_to_term(encoded)
   end
 end

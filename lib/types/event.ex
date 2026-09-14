@@ -5,6 +5,7 @@ defmodule Current.Event do
           | Current.Event.ProposalProductionStarted.t()
           | Current.Event.ModeInvalid.t()
           | Current.Event.ProposalProduced.t()
+          | Current.Event.ProposalProductionFailed.t()
           | Current.Event.ProposalApproved.t()
           | Current.Event.ProposalValidated.t()
           | Current.Event.ProposalValidationFailed.t()
@@ -12,9 +13,7 @@ defmodule Current.Event do
           | Current.Event.EffectApplicationStarted.t()
           | Current.Event.EffectApplied.t()
           | Current.Event.EffectFailed.t()
-          | Current.Event.EffectsApplied.t()
-          | Current.Event.ArtifactProduced.t()
-          | Current.Event.ArtifactsProduced.t()
+          | Current.Event.EffectApplicationComplete.t()
           | Current.Event.WorkflowResultAssembled.t()
           | Current.Event.WorkflowCompleted.t()
           | Current.Event.WorkflowFailed.t()
@@ -25,6 +24,7 @@ defmodule Current.Event do
     Current.Event.ProposalProductionStarted,
     Current.Event.ModeInvalid,
     Current.Event.ProposalProduced,
+    Current.Event.ProposalProductionFailed,
     Current.Event.ProposalValidated,
     Current.Event.ProposalValidationFailed,
     Current.Event.ProposalApproved,
@@ -32,13 +32,22 @@ defmodule Current.Event do
     Current.Event.EffectApplicationStarted,
     Current.Event.EffectApplied,
     Current.Event.EffectFailed,
-    Current.Event.EffectsApplied,
-    Current.Event.ArtifactProduced,
-    Current.Event.ArtifactsProduced,
+    Current.Event.EffectApplicationComplete,
     Current.Event.WorkflowResultAssembled,
     Current.Event.WorkflowCompleted,
     Current.Event.WorkflowFailed
   ]
+
+  @spec modules() :: [module()]
+
+  def modules,
+    do: @known_modules
+
+  @spec lifecycle_modules() :: [module()]
+
+  def lifecycle_modules do
+    @known_modules -- [Current.Event.TaskCreated]
+  end
 
   def valid?(%{__struct__: mod}), do: mod in @known_modules
   def valid?(_), do: false

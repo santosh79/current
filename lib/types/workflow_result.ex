@@ -1,10 +1,10 @@
 defmodule Current.WorkflowResult do
-  @enforce_keys [:id, :workflow_id, :type, :artifacts, :created_at]
+  @enforce_keys [:id, :workflow_id, :type, :intent_results, :created_at]
   defstruct [
     :id,
     :workflow_id,
     :type,
-    :artifacts,
+    :intent_results,
     :summary,
     :metadata,
     :created_at
@@ -21,7 +21,7 @@ defmodule Current.WorkflowResult do
           id: Current.Id.t(),
           workflow_id: Current.Id.t(),
           type: type(),
-          artifacts: [Current.Id.t()],
+          intent_results: [{Current.Intent.t(), Current.EffectApplicator.result()}],
           summary: String.t() | nil,
           metadata: map() | nil,
           created_at: DateTime.t()

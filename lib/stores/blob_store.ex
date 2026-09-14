@@ -1,7 +1,7 @@
-defmodule Current.ArtifactStore do
+defmodule Current.BlobStore do
   alias Current.Id
 
-  @base_dir Application.compile_env(:current, :artifact_store_dir, "/tmp/current/artifacts")
+  @base_dir Application.compile_env(:current, :blob_store_dir, "/tmp/current/artifacts")
 
   @spec put(binary()) :: {:ok, Id.t()} | {:error, term()}
   def put(contents) when is_binary(contents) do

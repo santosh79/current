@@ -27,11 +27,13 @@ defmodule Current.EffectApplicatorTest do
         ]
         |> Enum.join("\n")
 
+      {:ok, diff_artifact_id} = Current.BlobStore.put(diff)
+
       intent = %Intent.FilePatch{
         id: Id.generate(),
         proposal_id: Id.generate(),
         path: path,
-        diff: diff
+        diff_artifact_id: diff_artifact_id
       }
 
       assert !String.contains?(File.read!(path), "def validate_email")
@@ -45,12 +47,14 @@ defmodule Current.EffectApplicatorTest do
 
     test "returns error if the file does not exist", %{dir: dir} do
       non_existent_path = Path.join(dir, "nonexistent.ex")
+      diff_contents = "--- a\n+++ b\n"
+      {:ok, diff_artifact_id} = Current.BlobStore.put(diff_contents)
 
       intent = %Intent.FilePatch{
         id: Id.generate(),
         proposal_id: Id.generate(),
         path: non_existent_path,
-        diff: "--- a\n+++ b\n"
+        diff_artifact_id: diff_artifact_id
       }
 
       assert {:error, reason} = EffectApplicator.apply(intent, [])
@@ -60,12 +64,13 @@ defmodule Current.EffectApplicatorTest do
     test "returns error if the diff does not apply cleanly", %{dir: dir} do
       path = Path.join(dir, "app.ex")
       File.write!(path, "defmodule App do\nend\n")
+      {:ok, diff_artifact_id} = Current.BlobStore.put(bad_diff())
 
       intent = %Intent.FilePatch{
         id: Id.generate(),
         proposal_id: Id.generate(),
         path: path,
-        diff: bad_diff()
+        diff_artifact_id: diff_artifact_id
       }
 
       assert {:error, _reason} = EffectApplicator.apply(intent, [])
@@ -85,7 +90,7 @@ defmodule Current.EffectApplicatorTest do
       assert result.exit_code == 0
       assert result.stdout_bytes > 0
 
-      {:ok, stdout_path} = Current.ArtifactStore.path_for(result.stdout_artifact_id)
+      {:ok, stdout_path} = Current.BlobStore.path_for(result.stdout_artifact_id)
       assert File.read!(stdout_path) =~ "hello"
       assert result.stderr_bytes == 0
     end
@@ -102,7 +107,7 @@ defmodule Current.EffectApplicatorTest do
       assert result.exit_code > 0
       assert result.stderr_bytes > 0
 
-      {:ok, stderr_path} = Current.ArtifactStore.path_for(result.stderr_artifact_id)
+      {:ok, stderr_path} = Current.BlobStore.path_for(result.stderr_artifact_id)
       assert File.read!(stderr_path) =~ "No such file or directory"
       assert result.stdout_bytes == 0
     end
@@ -160,9 +165,9 @@ defmodule Current.EffectApplicatorTest do
 
       assert is_binary(result.contents_artifact_id)
       assert result.bytes == byte_size(contents)
-      assert {:ok, contents} == Current.ArtifactStore.read(result.contents_artifact_id)
+      assert {:ok, contents} == Current.BlobStore.read(result.contents_artifact_id)
 
-      {:ok, stored_path} = Current.ArtifactStore.path_for(result.contents_artifact_id)
+      {:ok, stored_path} = Current.BlobStore.path_for(result.contents_artifact_id)
       assert File.exists?(stored_path)
       assert File.read!(stored_path) == contents
     end
@@ -195,12 +200,13 @@ defmodule Current.EffectApplicatorTest do
     test "creates parent dirs and writes contents", %{dir: dir} do
       path = Path.join([dir, "nested", "deep", "generated.ex"])
       contents = "defmodule Generated do\n  def ok, do: true\nend\n"
+      {:ok, contents_artifact_id} = Current.BlobStore.put(contents)
 
       intent = %Intent.WriteFile{
         id: Id.generate(),
         proposal_id: Id.generate(),
         path: path,
-        contents: contents
+        contents_artifact_id: contents_artifact_id
       }
 
       assert {:ok, %Current.EffectResult.WriteFile{} = result} =
@@ -215,12 +221,14 @@ defmodule Current.EffectApplicatorTest do
       path = Path.join(dir, "existing.ex")
       File.mkdir_p!(Path.dirname(path))
       File.write!(path, "original")
+      contents = "new contents"
+      {:ok, contents_artifact_id} = Current.BlobStore.put(contents)
 
       intent = %Intent.WriteFile{
         id: Id.generate(),
         proposal_id: Id.generate(),
         path: path,
-        contents: "new contents"
+        contents_artifact_id: contents_artifact_id
       }
 
       assert {:error, reason} = EffectApplicator.apply(intent, [])
@@ -318,7 +326,8 @@ defmodule Current.EffectApplicatorTest do
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
       assert %Current.EffectResult.Grep{} = result
-      assert result.matches == []
+      matches = fetch_matches(result.matches_artifact_id)
+      assert matches == []
     end
 
     test "returns one match per matching line", %{dir: dir} do
@@ -338,11 +347,12 @@ defmodule Current.EffectApplicatorTest do
       }
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
+      matches = fetch_matches(result.matches_artifact_id)
 
       assert [
                %Current.EffectResult.Grep.Match{line: 2, path: ^path, text: "beta FINDME"},
                %Current.EffectResult.Grep.Match{line: 3, path: ^path, text: "gamma FINDME"}
-             ] = result.matches
+             ] = matches
     end
 
     test "returns one match when a single line contains pattern multiple times", %{dir: dir} do
@@ -357,6 +367,7 @@ defmodule Current.EffectApplicatorTest do
       }
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
+      matches = fetch_matches(result.matches_artifact_id)
 
       assert [
                %Current.EffectResult.Grep.Match{
@@ -364,8 +375,7 @@ defmodule Current.EffectApplicatorTest do
                  line: 1,
                  text: "FINDME FINDME FINDME"
                }
-             ] =
-               result.matches
+             ] = matches
     end
 
     test "returns error when a searched file does not exist", %{dir: dir} do
@@ -407,10 +417,11 @@ defmodule Current.EffectApplicatorTest do
       }
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
+      matches = fetch_matches(result.matches_artifact_id)
       assert %Current.EffectResult.Glob{} = result
-      assert length(result.matches) == 2
-      assert Path.join(dir, "foo.ex") in result.matches
-      assert Path.join(dir, "bar.ex") in result.matches
+      assert length(matches) == 2
+      assert Path.join(dir, "foo.ex") in matches
+      assert Path.join(dir, "bar.ex") in matches
     end
 
     test "returns empty list when no files match", %{dir: dir} do
@@ -424,7 +435,8 @@ defmodule Current.EffectApplicatorTest do
       }
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert result.matches == []
+      matches = fetch_matches(result.matches_artifact_id)
+      assert matches == []
     end
 
     test "matches files recursively with ** pattern", %{dir: dir} do
@@ -441,9 +453,10 @@ defmodule Current.EffectApplicatorTest do
       }
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert length(result.matches) == 2
-      assert Path.join(dir, "top.ex") in result.matches
-      assert Path.join(subdir, "nested.ex") in result.matches
+      matches = fetch_matches(result.matches_artifact_id)
+      assert length(matches) == 2
+      assert Path.join(dir, "top.ex") in matches
+      assert Path.join(subdir, "nested.ex") in matches
     end
 
     test "returns error when base_dir does not exist", %{dir: dir} do
@@ -472,7 +485,8 @@ defmodule Current.EffectApplicatorTest do
       }
 
       assert {:ok, result} = EffectApplicator.apply(intent, [])
-      assert result.matches == [Path.join(dir, "a.ex"), Path.join(dir, "z.ex")]
+      matches = fetch_matches(result.matches_artifact_id)
+      assert matches == [Path.join(dir, "a.ex"), Path.join(dir, "z.ex")]
     end
 
     test "returns error when pattern is absolute", %{dir: dir} do
@@ -498,5 +512,10 @@ defmodule Current.EffectApplicatorTest do
       " end"
     ]
     |> Enum.join("\n")
+  end
+
+  defp fetch_matches(artifact_id) do
+    {:ok, encoded} = Current.BlobStore.read(artifact_id)
+    :erlang.binary_to_term(encoded)
   end
 end

@@ -1,11 +1,27 @@
 defmodule Current.Event.TaskCreated do
-  @enforce_keys [:id, :task_id, :timestamp]
-  defstruct [:id, :task_id, :mode, :timestamp]
+  use Current.Event.Versioned, version: 1
+
+  @enforce_keys [:id, :task_id, :input, :context, :mode, :submitted_at, :timestamp]
+
+  defstruct [
+    :id,
+    :task_id,
+    :input,
+    :context,
+    :mode,
+    :submitted_at,
+    :timestamp,
+    version: @schema_version
+  ]
 
   @type t :: %__MODULE__{
           id: Current.Id.t(),
           task_id: Current.Id.t(),
+          input: String.t() | map(),
+          context: map(),
           mode: Current.Mode.t(),
-          timestamp: DateTime.t()
+          submitted_at: DateTime.t(),
+          timestamp: DateTime.t(),
+          version: pos_integer()
         }
 end

@@ -1,244 +1,634 @@
 defmodule Current.WorkflowOrchestrator do
-  @moduledoc """
-  Process manager for a single workflow.
-
-  With the event-sourced model, the orchestrator no longer builds events or
-  copies workflow state — the `Current.Workflow` aggregate owns the stream
-  (event → reduce → append → project). The orchestrator has exactly two jobs,
-  both driven by the `{:workflow_event, event}` messages the aggregate sends:
-
-    * **Notify** — translate each event into the listener message tuple that
-      callers of `Current.submit_task/2` subscribe to (`notification/1`).
-    * **React** — encode the workflow *policy*: which command to cast at the
-      aggregate next, given the event that just happened (`react/2`). Examples:
-      a produced proposal gets validated; an approved proposal triggers effect
-      application; a validation failure fails the workflow.
-
-  It also appends the task-level `TaskCreated` event (task stream, not workflow
-  stream) and routes external proposal decisions to the aggregate.
-  """
-
   use GenServer
 
-  alias Current.{Error, Event, IntentValidator, Mode, RuntimeRegistry}
+  alias Current.{
+    Error,
+    Event,
+    EventStore,
+    Id,
+    IntentValidator,
+    Mode,
+    Proposal,
+    Request,
+    Task,
+    Workflow,
+    WorkflowReducer
+  }
 
   @type state :: %{
           listeners: [pid()],
-          workflow_pid: pid() | nil
+          workflow_id: Current.Id.t(),
+          request: Request.t(),
+          task_id: Current.Id.t(),
+          replayed: MapSet.t(Current.Id.t()),
+          proposal_production: %{pid: pid(), timer: reference()} | nil
         }
+
+  @type start_arg ::
+          {Event.TaskCreated.t(), [pid()]}
+          | {:resume, Workflow.t(), Task.t()}
+
+  @default_proposal_timeout_ms 30_000
 
   ## Client API
 
-  @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts) do
-    listeners = Keyword.get(opts, :listeners, [])
-    task_id = Keyword.fetch!(opts, :task_id)
-    req = Keyword.fetch!(opts, :req)
+  @spec start_link(start_arg()) :: GenServer.on_start()
+  def start_link({%Event.TaskCreated{}, listeners} = arg) when is_list(listeners),
+    do: GenServer.start_link(__MODULE__, arg)
 
-    {:ok, pid} = GenServer.start_link(__MODULE__, %{})
-    send(pid, {:long_init, listeners, task_id, req})
-    {:ok, pid}
+  def start_link({:resume, %Workflow{}, %Task{}} = arg),
+    do: GenServer.start_link(__MODULE__, arg)
+
+  @spec child_spec(start_arg()) :: Supervisor.child_spec()
+  def child_spec(arg) do
+    %{
+      id: make_ref(),
+      start: {__MODULE__, :start_link, [arg]},
+      restart: :temporary,
+      type: :worker
+    }
   end
 
-  ## Server callbacks
-
   @impl true
-  def init(_args) do
-    {:ok, %{listeners: [], workflow_pid: nil}}
-  end
+  def init({%Event.TaskCreated{} = event, listeners}) do
+    request = %Request{
+      input: event.input,
+      context: event.context,
+      mode: event.mode
+    }
 
-  @impl true
-  def handle_info({:long_init, listeners, task_id, %Current.Request{} = req}, _state) do
-    # Task-level fact. It has no workflow_id and belongs to the task stream,
-    # not the workflow stream, so the reducer never sees it.
-    {:ok, workflow_pid, workflow_id} = Current.Workflow.create(task_id, req, self())
+    workflow_id = Id.generate()
 
     :ok =
-      RuntimeRegistry.put(workflow_id, %{
-        workflow_pid: workflow_pid,
-        orchestrator_pid: self()
-      })
+      Current.EventNotifier.subscribe(
+        self(),
+        workflow_id,
+        :all
+      )
 
-    {:noreply, %{listeners: listeners, workflow_pid: workflow_pid}}
+    workflow_created = %Event.WorkflowCreated{
+      id: Id.generate(),
+      workflow_id: workflow_id,
+      task_id: event.task_id,
+      mode: event.mode,
+      timestamp: DateTime.utc_now()
+    }
+
+    :ok = propose(workflow_created)
+
+    {:ok,
+     %{
+       listeners: listeners,
+       task_id: event.task_id,
+       request: request,
+       workflow_id: workflow_id,
+       replayed: MapSet.new(),
+       proposal_production: nil
+     }}
+  end
+
+  def init({:resume, %Workflow{} = workflow, %Task{} = task}) do
+    :ok = Current.EventNotifier.subscribe(self(), workflow.id, :all)
+
+    state = %{
+      listeners: [],
+      task_id: task.id,
+      request: %Request{input: task.input, context: task.context, mode: task.mode},
+      workflow_id: workflow.id,
+      replayed: MapSet.new(),
+      proposal_production: nil
+    }
+
+    {:ok, state, {:continue, :resume}}
   end
 
   @impl true
-  def handle_info({:workflow_event, event}, state) when is_pid(state.workflow_pid) do
-    case notification(event) do
-      nil ->
-        :ok
+  def handle_continue(:resume, state) do
+    events = EventStore.list_by_workflow_id(state.workflow_id)
+    {:ok, workflow} = WorkflowReducer.replay(events)
+    state = %{state | replayed: MapSet.new(events, & &1.id)}
+    resume(workflow, events, state)
+  end
 
-      message ->
-        :ok = notify_listeners(state.listeners, message)
-        :ok = react(event, state.workflow_pid)
+  ## Committed workflow events
+  @impl true
+  def handle_info({:event_committed, %Current.EventStore.Entry{event: event}}, state) do
+    if MapSet.member?(state.replayed, event.id) do
+      {:noreply, state}
+    else
+      notify(state.listeners, event)
+      react(event, state)
+    end
+  end
+
+  ## Helper-process results
+
+  ## Proposal builder results
+
+  def handle_info({:proposal_produced, _}, %{proposal_production: nil} = state),
+    do: {:noreply, state}
+
+  def handle_info({:proposal_production_failed, _}, %{proposal_production: nil} = state),
+    do: {:noreply, state}
+
+  def handle_info({:proposal_production_failed, reason}, state) do
+    state = clear_proposal_production(state)
+
+    propose(%Event.ProposalProductionFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {:proposal_production_timeout, pid},
+        %{proposal_production: %{pid: pid}} = state
+      ) do
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+
+    propose(%Event.ProposalProductionFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      reason: "proposal production timed out after #{proposal_production_timeout_ms()}ms",
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, %{state | proposal_production: nil}}
+  end
+
+  def handle_info({:proposal_production_timeout, _stale_pid}, state), do: {:noreply, state}
+
+  def handle_info({:proposal_produced, %Proposal{} = proposal}, state) do
+    state = clear_proposal_production(state)
+
+    propose(%Event.ProposalProduced{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      proposal: proposal,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  def handle_info({:effect_applied, intent, result}, state) do
+    propose(%Event.EffectApplied{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      intent: intent,
+      result: result,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  def handle_info({:effect_application_complete, intent_results}, state) do
+    propose(%Event.EffectApplicationComplete{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      intent_results: intent_results,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  def handle_info({:effect_failed, intent, reason}, state) do
+    propose(%Event.EffectFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      intent: intent,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  ## Resume policy
+
+  defp resume(%Workflow{status: :applying}, events, state) do
+    case List.last(events) do
+      %Event.EffectApplicationStarted{} ->
+        fail_interrupted_effects(state)
+
+      %Event.EffectApplied{} ->
+        fail_interrupted_effects(state)
+
+      %Event.EffectFailed{} = event ->
+        react(event, state)
+
+      # EffectApplicationComplete is the last thing durable before WorkflowResultAssembled.
+      # Building the result is a pure, synchronous function of intent_results --
+      # nothing external was left in flight, so this is just a normal react/2,
+      # safe to redo even if it already happened once before the crash.
+      %Event.EffectApplicationComplete{} = event ->
+        react(event, state)
     end
 
     {:noreply, state}
   end
 
-  @impl true
-  def handle_info({:proposal_decision_made, proposal_id, decision}, state)
-      when is_pid(state.workflow_pid) do
-    GenServer.cast(state.workflow_pid, {:record_proposal_decision, proposal_id, decision})
+  defp resume(_workflow, events, state), do: react(List.last(events), state)
+
+  ## Policy: committed event -> next operation
+
+  defp react(%Event.WorkflowCreated{mode: mode}, state) do
+    case Mode.valid?(mode) do
+      true ->
+        propose(%Event.ProposalProductionStarted{
+          id: Id.generate(),
+          workflow_id: state.workflow_id,
+          timestamp: DateTime.utc_now()
+        })
+
+      false ->
+        propose(%Event.ModeInvalid{
+          id: Id.generate(),
+          workflow_id: state.workflow_id,
+          mode: mode,
+          timestamp: DateTime.utc_now()
+        })
+    end
+
     {:noreply, state}
   end
 
-  ## Listener notifications (event -> listener tuple, nil to skip)
-
-  defp notification(%Event.WorkflowCreated{workflow_id: _w_id} = event) do
-    {:workflow_created, event}
+  defp react(%Event.ProposalProductionStarted{}, state) do
+    {:noreply, start_proposal_production(state)}
   end
 
-  defp notification(%Event.ProposalProductionStarted{workflow_id: _w_id} = event) do
-    {:proposal_production_started, event}
+  defp react(%Event.ModeInvalid{mode: mode}, state) do
+    propose(%Event.WorkflowFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      reason: "invalid mode: #{inspect(mode)}",
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
   end
 
-  defp notification(%Event.ModeInvalid{workflow_id: _w_id} = event) do
-    {:mode_invalid, event}
+  defp react(%Event.ProposalProduced{proposal: proposal}, state) do
+    event =
+      case IntentValidator.validate(proposal) do
+        :ok ->
+          %Event.ProposalValidated{
+            id: Id.generate(),
+            workflow_id: state.workflow_id,
+            proposal: proposal,
+            timestamp: DateTime.utc_now()
+          }
+
+        {:error, %Error.ValidationError{} = error} ->
+          %Event.ProposalValidationFailed{
+            id: Id.generate(),
+            workflow_id: state.workflow_id,
+            proposal: proposal,
+            error: error,
+            timestamp: DateTime.utc_now()
+          }
+      end
+
+    propose(event)
+
+    {:noreply, state}
   end
 
-  defp notification(%Event.ProposalProduced{workflow_id: _w_id} = event) do
-    {:proposal_produced, event}
-  end
-
-  defp notification(%Event.ProposalValidated{workflow_id: _w_id} = event) do
-    {:proposal_validated, event}
-  end
-
-  defp notification(%Event.ProposalValidationFailed{workflow_id: _w_id, error: _error} = event) do
-    {:proposal_validation_failed, event}
-  end
-
-  defp notification(%Event.ProposalApproved{workflow_id: _w_id} = event) do
-    {:proposal_approved, event}
-  end
-
-  defp notification(%Event.ProposalRejected{workflow_id: _w_id} = event) do
-    {:proposal_rejected, event}
-  end
-
-  defp notification(%Event.EffectApplicationStarted{}), do: nil
-
-  defp notification(
-         %Event.EffectApplied{workflow_id: _w_id, intent: _intent, result: _result} = event
+  defp react(
+         %Event.ProposalValidated{},
+         state
        ) do
-    {:effect_applied, event}
-  end
+    {:ok, workflow} =
+      Current.WorkflowStore.get(state.workflow_id)
 
-  defp notification(
-         %Event.EffectsApplied{workflow_id: _w_id, intent_results: _intent_results} = event
-       ) do
-    {:effects_applied, event}
-  end
-
-  defp notification(%Event.EffectFailed{workflow_id: _w_id, reason: _reason} = event) do
-    {:effect_failed, event}
-  end
-
-  defp notification(%Event.ArtifactProduced{workflow_id: _w_id, artifact: _artifact} = event) do
-    {:artifact_produced, event}
-  end
-
-  defp notification(%Event.ArtifactsProduced{workflow_id: _w_id, artifacts: _artifacts} = event) do
-    {:artifacts_produced, event}
-  end
-
-  defp notification(%Event.WorkflowResultAssembled{workflow_id: _w_id, result: _result} = event) do
-    {:workflow_result_assembled, event}
-  end
-
-  defp notification(%Event.WorkflowCompleted{workflow_id: _w_id} = event) do
-    {:workflow_completed, event}
-  end
-
-  defp notification(%Event.WorkflowFailed{workflow_id: _w_id} = event) do
-    {:workflow_failed, event}
-  end
-
-  ## Policy (event -> next command for the aggregate)
-
-  defp react(%Event.WorkflowCreated{workflow_id: w_id} = _event, workflow_pid) do
-    {:ok, w} = Current.WorkflowStore.get(w_id)
-
-    case Mode.valid?(w.mode) do
-      true -> GenServer.cast(workflow_pid, :start_planning)
-      _ -> GenServer.cast(workflow_pid, :mark_mode_invalid)
-    end
-
-    :ok
-  end
-
-  defp react(%Event.ModeInvalid{mode: mode}, workflow_pid) do
-    GenServer.cast(workflow_pid, {:fail, "invalid mode: #{inspect(mode)}"})
-    :ok
-  end
-
-  defp react(%Event.ProposalProduced{workflow_id: w_id}, workflow_pid) do
-    {:ok, w} = Current.WorkflowStore.get(w_id)
-
-    case IntentValidator.validate(w.proposal) do
-      :ok ->
-        GenServer.cast(workflow_pid, :mark_proposal_validated)
-
-      {:error, %Error.ValidationError{} = error} ->
-        GenServer.cast(workflow_pid, {:mark_proposal_validation_failed, error})
-    end
-
-    :ok
-  end
-
-  defp react(%Event.ProposalValidated{workflow_id: w_id}, workflow_pid) do
-    {:ok, w} = Current.WorkflowStore.get(w_id)
-
-    case w.mode do
+    case workflow.mode do
       :plan ->
-        GenServer.cast(workflow_pid, :complete_as_plan)
+        propose_completed(state)
 
       :apply ->
         :ok
     end
 
+    {:noreply, state}
+  end
+
+  defp react(%Event.ProposalValidationFailed{}, state) do
+    propose(%Event.WorkflowFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      reason: "proposal validation failed",
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  defp react(%Event.ProposalProductionFailed{reason: reason}, state) do
+    propose(%Event.WorkflowFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  defp react(%Event.ProposalApproved{}, state) do
+    propose(%Event.EffectApplicationStarted{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  defp react(%Event.EffectApplicationStarted{}, state) do
+    start_effect_application(state)
+    {:noreply, state}
+  end
+
+  defp react(%Event.EffectApplicationComplete{intent_results: intent_results}, state) do
+    result = build_workflow_result(state.workflow_id, intent_results)
+
+    propose(%Event.WorkflowResultAssembled{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      result: result,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  defp react(%Event.EffectFailed{reason: reason}, state) do
+    propose(%Event.WorkflowFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  defp react(%Event.WorkflowResultAssembled{}, state) do
+    propose_completed(state)
+    {:noreply, state}
+  end
+
+  defp react(%Event.ProposalRejected{}, state) do
+    {:noreply, state}
+  end
+
+  defp react(%Event.EffectApplied{}, state) do
+    {:noreply, state}
+  end
+
+  defp react(%Event.WorkflowFailed{}, state) do
+    {:noreply, state}
+  end
+
+  defp react(%Event.WorkflowCompleted{}, state) do
+    {:noreply, state}
+  end
+
+  ## Proposal production
+
+  defp proposal_production_timeout_ms do
+    Application.get_env(:current, :proposal_production_timeout_ms, @default_proposal_timeout_ms)
+  end
+
+  defp start_proposal_production(state) do
+    builder = :persistent_term.get(:proposal_builder, Current.ProposalBuilder)
+    orchestrator = self()
+    request = state.request
+    workflow_id = state.workflow_id
+
+    pid =
+      spawn_link(fn ->
+        outcome =
+          try do
+            builder.build(request, workflow_id)
+          catch
+            kind, reason -> {:crashed, Exception.format_banner(kind, reason)}
+          end
+
+        message =
+          case outcome do
+            {:ok, %Proposal{} = proposal} ->
+              {:proposal_produced, proposal}
+
+            {:error, reason} ->
+              {:proposal_production_failed,
+               "proposal builder returned an error: #{inspect(reason)}"}
+
+            {:crashed, banner} ->
+              {:proposal_production_failed, "proposal builder crashed: #{banner}"}
+
+            other ->
+              {:proposal_production_failed,
+               "proposal builder returned an unexpected value: #{inspect(other)}"}
+          end
+
+        send(orchestrator, message)
+      end)
+
+    timer =
+      Process.send_after(
+        self(),
+        {:proposal_production_timeout, pid},
+        proposal_production_timeout_ms()
+      )
+
+    %{state | proposal_production: %{pid: pid, timer: timer}}
+  end
+
+  defp clear_proposal_production(%{proposal_production: nil} = state), do: state
+
+  defp clear_proposal_production(%{proposal_production: %{timer: timer}} = state) do
+    Process.cancel_timer(timer)
+    %{state | proposal_production: nil}
+  end
+
+  ## Effect application
+
+  defp start_effect_application(state) do
+    orchestrator = self()
+    {:ok, workflow} = Current.WorkflowStore.get(state.workflow_id)
+
+    intents = workflow.proposal.intents
+
+    spawn_link(fn ->
+      try do
+        case apply_intents_streaming(
+               intents,
+               orchestrator,
+               []
+             ) do
+          {:ok, intent_results} ->
+            send(
+              orchestrator,
+              {:effect_application_complete, intent_results}
+            )
+
+          {:error, intent, reason} ->
+            send(
+              orchestrator,
+              {:effect_failed, intent, reason}
+            )
+        end
+      rescue
+        e ->
+          [first_intent | _] = intents
+
+          send(
+            orchestrator,
+            {:effect_failed, first_intent, Exception.message(e)}
+          )
+      end
+    end)
+
     :ok
   end
 
-  defp react(%Event.ProposalValidationFailed{}, workflow_pid) do
-    GenServer.cast(workflow_pid, {:fail, "proposal validation failed"})
-    :ok
+  defp apply_intents_streaming([], _orchestrator, acc) do
+    {:ok, :lists.reverse(acc)}
   end
 
-  defp react(%Event.ProposalApproved{}, workflow_pid) do
-    GenServer.cast(workflow_pid, :apply_effects)
-    :ok
+  defp apply_intents_streaming(
+         [intent | rest],
+         orchestrator,
+         acc
+       ) do
+    applicator =
+      :persistent_term.get(
+        :effect_applicator,
+        Current.EffectApplicator
+      )
+
+    case applicator.apply(intent, acc) do
+      {:ok, result} ->
+        send(
+          orchestrator,
+          {:effect_applied, intent, result}
+        )
+
+        apply_intents_streaming(
+          rest,
+          orchestrator,
+          [{intent, result} | acc]
+        )
+
+      {:error, reason} ->
+        {:error, intent, reason}
+    end
   end
 
-  defp react(%Event.EffectsApplied{intent_results: intent_results}, workflow_pid) do
-    GenServer.cast(workflow_pid, {:produce_artifacts, intent_results})
-    :ok
+  ## Result
+
+  defp build_workflow_result(workflow_id, intent_results) do
+    %Current.WorkflowResult{
+      id: Id.generate(),
+      workflow_id: workflow_id,
+      type: :result_bundle,
+      intent_results: intent_results,
+      summary: nil,
+      metadata: %{},
+      created_at: DateTime.utc_now()
+    }
   end
 
-  defp react(%Event.EffectFailed{reason: reason}, workflow_pid) do
-    GenServer.cast(workflow_pid, {:fail, reason})
-    :ok
+  defp propose_completed(state) do
+    propose(%Event.WorkflowCompleted{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      timestamp: DateTime.utc_now()
+    })
   end
 
-  defp react(%Event.ArtifactsProduced{artifacts: artifacts}, workflow_pid) do
-    GenServer.cast(workflow_pid, {:assemble_result, artifacts})
-    :ok
+  defp propose(event) do
+    :ok = Current.Consensus.propose(event)
   end
 
-  defp react(%Event.WorkflowResultAssembled{}, workflow_pid) do
-    GenServer.cast(workflow_pid, :complete)
-    :ok
+  ## External notifications
+
+  defp notify(listeners, event) do
+    case notification(event) do
+      nil ->
+        :ok
+
+      message ->
+        Enum.each(listeners, &send(&1, message))
+    end
   end
 
-  # Terminal or fact-only events (:proposal_rejected, :workflow_completed,
-  # :workflow_failed, per-effect facts, ...) trigger no further commands.
-  defp react(_event, _workflow_pid), do: :ok
+  defp notification(%Event.WorkflowCreated{} = event),
+    do: {:workflow_created, event}
 
-  ## Internals
+  defp notification(%Event.ProposalProductionStarted{} = event),
+    do: {:proposal_production_started, event}
 
-  defp notify_listeners(listeners, message) do
-    Enum.each(listeners, fn pid -> send(pid, message) end)
+  defp notification(%Event.ModeInvalid{} = event),
+    do: {:mode_invalid, event}
+
+  defp notification(%Event.ProposalProduced{} = event),
+    do: {:proposal_produced, event}
+
+  defp notification(%Event.ProposalValidated{} = event),
+    do: {:proposal_validated, event}
+
+  defp notification(%Event.ProposalValidationFailed{} = event),
+    do: {:proposal_validation_failed, event}
+
+  defp notification(%Event.ProposalApproved{} = event),
+    do: {:proposal_approved, event}
+
+  defp notification(%Event.ProposalRejected{} = event),
+    do: {:proposal_rejected, event}
+
+  defp notification(%Event.ProposalProductionFailed{} = event),
+    do: {:proposal_production_failed, event}
+
+  defp notification(%Event.EffectApplicationStarted{}),
+    do: nil
+
+  defp notification(%Event.EffectApplied{} = event),
+    do: {:effect_applied, event}
+
+  defp notification(%Event.EffectApplicationComplete{} = event),
+    do: {:effect_application_complete, event}
+
+  defp notification(%Event.EffectFailed{} = event),
+    do: {:effect_failed, event}
+
+  defp notification(%Event.WorkflowResultAssembled{} = event),
+    do: {:workflow_result_assembled, event}
+
+  defp notification(%Event.WorkflowCompleted{} = event),
+    do: {:workflow_completed, event}
+
+  defp notification(%Event.WorkflowFailed{} = event),
+    do: {:workflow_failed, event}
+
+  defp fail_interrupted_effects(state) do
+    propose(%Event.WorkflowFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      reason:
+        "effect application interrupted by runtime restart; " <>
+          "one or more effects may have executed without a durable completion record",
+      timestamp: DateTime.utc_now()
+    })
+
     :ok
   end
 end

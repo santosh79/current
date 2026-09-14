@@ -1,77 +1,82 @@
 defmodule Current.WorkflowStoreTest do
   use ExUnit.Case, async: false
 
-  alias Current.{Id, Proposal, Workflow, WorkflowStore}
+  alias Current.Id
 
-  defp workflow(overrides \\ %{}) do
-    now = DateTime.utc_now()
-
-    defaults = %{
-      id: Id.generate(),
-      task_id: Id.generate(),
-      status: :waiting_for_approval,
-      proposal: nil,
-      result: nil,
-      events: [],
-      mode: :apply,
-      started_at: now,
-      created_at: now,
-      completed_at: nil,
-      updated_at: now,
-      error: nil
-    }
-
-    struct!(Workflow, Map.merge(defaults, overrides))
-  end
-
-  test "put/get round trip preserves workflow" do
-    workflow = workflow()
-    assert :ok = WorkflowStore.put(workflow)
-    assert {:ok, ^workflow} = WorkflowStore.get(workflow.id)
-  end
-
-  test "put replaces the projection for an existing workflow id" do
-    workflow = workflow(%{status: :created})
-    updated = %{workflow | status: :completed, completed_at: DateTime.utc_now()}
-
-    assert :ok = WorkflowStore.put(workflow)
-    assert :ok = WorkflowStore.put(updated)
-    assert {:ok, ^updated} = WorkflowStore.get(workflow.id)
-  end
-
-  test "get_by_task_id finds the workflow for a task" do
-    workflow = workflow()
-    assert :ok = WorkflowStore.put(workflow)
-    assert {:ok, ^workflow} = WorkflowStore.get_by_task_id(workflow.task_id)
-  end
-
-  test "get_status_by_task_id returns the projected status" do
-    workflow = workflow(%{status: :planned, mode: :plan})
-    assert :ok = WorkflowStore.put(workflow)
-    assert {:ok, :planned} = WorkflowStore.get_status_by_task_id(workflow.task_id)
-  end
-
-  test "get_by_proposal_id finds a workflow by its proposal" do
+  test "projects committed workflow events into ETS" do
     workflow_id = Id.generate()
+    task_id = Id.generate()
 
-    proposal = %Proposal{
+    created = %Current.Event.WorkflowCreated{
       id: Id.generate(),
       workflow_id: workflow_id,
-      intents: []
+      task_id: task_id,
+      mode: :apply,
+      timestamp: DateTime.utc_now()
     }
 
-    workflow = workflow(%{id: workflow_id, proposal: proposal})
+    assert :ok = Current.EventNotifier.subscribe(self(), :workflow_created)
+    assert :ok = Current.EventStore.append(created)
+    assert :ok == Current.WorkflowStore.sync()
 
-    assert :ok = WorkflowStore.put(workflow)
-    assert {:ok, ^workflow} = WorkflowStore.get_by_proposal_id(proposal.id)
+    # Event was sent from this process before this call, so this acts
+    # as a mailbox barrier for WorkflowStore.
+    :sys.get_state(Current.WorkflowStore)
+
+    assert [
+             {{:workflow, ^workflow_id}, workflow}
+           ] =
+             :ets.lookup(
+               Current.WorkflowStore,
+               {:workflow, workflow_id}
+             )
+
+    assert workflow.id == workflow_id
+    assert workflow.task_id == task_id
+    assert workflow.status == :created
+
+    assert [
+             {{:task, ^task_id}, ^workflow_id}
+           ] =
+             :ets.lookup(
+               Current.WorkflowStore,
+               {:task, task_id}
+             )
   end
 
-  test "lookup functions return not_found when no workflow matches" do
-    unknown = "sha256:" <> String.duplicate("b", 64)
+  test "advances its EventStore cursor incrementally" do
+    before =
+      :sys.get_state(Current.WorkflowStore).last_position
 
-    assert {:error, :not_found} = WorkflowStore.get(unknown)
-    assert {:error, :not_found} = WorkflowStore.get_by_task_id(unknown)
-    assert {:error, :not_found} = WorkflowStore.get_status_by_task_id(unknown)
-    assert {:error, :not_found} = WorkflowStore.get_by_proposal_id(unknown)
+    workflow_id = Id.generate()
+    task_id = Id.generate()
+
+    created =
+      %Current.Event.WorkflowCreated{
+        id: Id.generate(),
+        workflow_id: workflow_id,
+        task_id: task_id,
+        mode: :apply,
+        timestamp: DateTime.utc_now()
+      }
+
+    assert :ok ==
+             Current.EventStore.append(created)
+
+    assert :ok ==
+             Current.WorkflowStore.sync()
+
+    after_sync =
+      :sys.get_state(Current.WorkflowStore).last_position
+
+    assert after_sync > before
+
+    assert {:ok, workflow} =
+             Current.WorkflowStore.get(workflow_id)
+
+    assert workflow.id == workflow_id
+
+    # A read with nothing new in EventStore does not move the cursor.
+    assert :sys.get_state(Current.WorkflowStore).last_position >= after_sync
   end
 end
