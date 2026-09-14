@@ -1,10 +1,15 @@
 defmodule Current.Event.ProposalApproved do
-  @enforce_keys [:id, :workflow_id, :timestamp]
-  defstruct [:id, :workflow_id, :timestamp]
+  use Current.Event.Versioned, version: 1
+
+  @enforce_keys [:id, :workflow_id, :proposal_id, :metadata, :timestamp]
+  defstruct [:id, :workflow_id, :proposal_id, :metadata, :timestamp, version: @schema_version]
 
   @type t :: %__MODULE__{
           id: Current.Id.t(),
           workflow_id: Current.Id.t(),
-          timestamp: DateTime.t()
+          proposal_id: Current.Id.t(),
+          metadata: map(),
+          timestamp: DateTime.t(),
+          version: pos_integer()
         }
 end

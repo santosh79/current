@@ -28,37 +28,12 @@ defmodule Current.EffectApplicator do
         {:error, "file not found: #{path}"}
 
       _ ->
-        before_contents = File.read!(path)
-        {:ok, before_artifact_id} = Current.ArtifactStore.put(before_contents)
+        case System.find_executable("patch") do
+          nil ->
+            {:error, "patch executable not found on PATH"}
 
-        patch_path =
-          Path.join(System.tmp_dir!(), "current_patch_#{System.unique_integer([:positive])}.diff")
-
-        try do
-          :ok = File.write!(patch_path, intent.diff)
-
-          {output, exit_code} =
-            System.cmd("patch", ["--batch", "--forward", "--fuzz=0", path, patch_path],
-              stderr_to_stdout: true
-            )
-
-          case exit_code do
-            0 ->
-              after_contents = File.read!(path)
-              {:ok, after_artifact_id} = Current.ArtifactStore.put(after_contents)
-
-              {:ok,
-               %Current.EffectResult.FilePatch{
-                 path: path,
-                 before_artifact_id: before_artifact_id,
-                 after_artifact_id: after_artifact_id
-               }}
-
-            _ ->
-              {:error, "patch failed with exit code #{exit_code}: #{String.trim(output)}"}
-          end
-        after
-          :ok = File.rm(patch_path)
+          patch_executable ->
+            apply_patch(intent, path, patch_executable)
         end
     end
   end
@@ -66,7 +41,7 @@ defmodule Current.EffectApplicator do
   def apply(%Current.Intent.ReadFile{} = intent, _prior_results) do
     case File.read(intent.path) do
       {:ok, contents} ->
-        {:ok, artifact_id} = Current.ArtifactStore.put(contents)
+        {:ok, artifact_id} = Current.BlobStore.put(contents)
 
         {:ok,
          %Current.EffectResult.ReadFile{
@@ -89,9 +64,19 @@ defmodule Current.EffectApplicator do
         {:error, "file already exists: #{intent.path}"}
 
       false ->
-        case write_file(intent.path, intent.contents) do
-          :ok -> {:ok, %Current.EffectResult.WriteFile{path: intent.path}}
-          {:error, reason} -> {:error, "write_file failed for #{intent.path}: #{inspect(reason)}"}
+        case Current.BlobStore.read(intent.contents_artifact_id) do
+          {:error, :not_found} ->
+            {:error,
+             "contents artifact not found for intent #{intent.id}: #{intent.contents_artifact_id}"}
+
+          {:ok, contents} ->
+            case write_file(intent.path, contents) do
+              {:error, reason} ->
+                {:error, "write_file failed for #{intent.path}: #{inspect(reason)}"}
+
+              :ok ->
+                {:ok, %Current.EffectResult.WriteFile{path: intent.path}}
+            end
         end
     end
   end
@@ -104,7 +89,7 @@ defmodule Current.EffectApplicator do
       _ ->
         case File.read(intent.path) do
           {:ok, contents} ->
-            {:ok, before_artifact_id} = Current.ArtifactStore.put(contents)
+            {:ok, before_artifact_id} = Current.BlobStore.put(contents)
 
             case delete_file(intent.path) do
               :ok ->
@@ -140,8 +125,8 @@ defmodule Current.EffectApplicator do
           stdout = File.read!(stdout_path)
           stderr = File.read!(stderr_path)
 
-          with {:ok, stdout_artifact_id} <- Current.ArtifactStore.put(stdout),
-               {:ok, stderr_artifact_id} <- Current.ArtifactStore.put(stderr) do
+          with {:ok, stdout_artifact_id} <- Current.BlobStore.put(stdout),
+               {:ok, stderr_artifact_id} <- Current.BlobStore.put(stderr) do
             {:ok,
              %Current.EffectResult.Command{
                exit_code: exit_code,
@@ -174,7 +159,14 @@ defmodule Current.EffectApplicator do
 
       true ->
         matches = Path.join(base_dir, pattern) |> Path.wildcard() |> Enum.sort()
-        {:ok, %Current.EffectResult.Glob{matches: matches}}
+        encoded = :erlang.term_to_binary(matches)
+        {:ok, matches_artifact_id} = Current.BlobStore.put(encoded)
+
+        {:ok,
+         %Current.EffectResult.Glob{
+           matches_artifact_id: matches_artifact_id,
+           match_count: length(matches)
+         }}
     end
   end
 
@@ -186,7 +178,7 @@ defmodule Current.EffectApplicator do
       searched_artifact_ids =
         Enum.map(paths, fn path ->
           {:ok, contents} = File.read(path)
-          {:ok, artifact_id} = Current.ArtifactStore.put(contents)
+          {:ok, artifact_id} = Current.BlobStore.put(contents)
           artifact_id
         end)
 
@@ -205,9 +197,13 @@ defmodule Current.EffectApplicator do
           end)
         end)
 
+      encoded = :erlang.term_to_binary(matches)
+      {:ok, matches_artifact_id} = Current.BlobStore.put(encoded)
+
       {:ok,
        %Current.EffectResult.Grep{
-         matches: matches,
+         matches_artifact_id: matches_artifact_id,
+         match_count: length(matches),
          searched_artifact_ids: searched_artifact_ids
        }}
     end
@@ -315,9 +311,8 @@ defmodule Current.EffectApplicator do
          value,
          %Current.EffectResult.Grep{} = result
        ) do
-    count = length(result.matches)
-    verified = count > value
-    reason = "grep produced #{count} match(es), expected more than #{value}"
+    verified = result.match_count > value
+    reason = "grep produced #{result.match_count} match(es), expected more than #{value}"
 
     {:ok,
      %Current.EffectResult.Claim{
@@ -335,9 +330,8 @@ defmodule Current.EffectApplicator do
          value,
          %Current.EffectResult.Glob{} = result
        ) do
-    count = length(result.matches)
-    verified = count > value
-    reason = "glob produced #{count} match(es), expected more than #{value}"
+    verified = result.match_count > value
+    reason = "glob produced #{result.match_count} match(es), expected more than #{value}"
 
     {:ok,
      %Current.EffectResult.Claim{
@@ -355,9 +349,8 @@ defmodule Current.EffectApplicator do
          value,
          %Current.EffectResult.Grep{} = result
        ) do
-    count = length(result.matches)
-    verified = count == value
-    reason = "grep produced #{count} match(es), expected exactly #{value}"
+    verified = result.match_count == value
+    reason = "grep produced #{result.match_count} match(es), expected exactly #{value}"
 
     {:ok,
      %Current.EffectResult.Claim{
@@ -389,5 +382,49 @@ defmodule Current.EffectApplicator do
 
   defp evaluate_condition(_statement, _evidence, condition, _value, result) do
     {:error, "condition #{condition} is not supported for #{result.__struct__}"}
+  end
+
+  defp apply_patch(intent, path, patch_executable) do
+    case Current.BlobStore.read(intent.diff_artifact_id) do
+      {:error, :not_found} ->
+        {:error, "diff artifact not found for intent #{intent.id}: #{intent.diff_artifact_id}"}
+
+      {:ok, diff} ->
+        before_contents = File.read!(path)
+        {:ok, before_artifact_id} = Current.BlobStore.put(before_contents)
+
+        patch_path =
+          Path.join(
+            System.tmp_dir!(),
+            "current_patch_#{System.unique_integer([:positive])}.diff"
+          )
+
+        try do
+          :ok = File.write!(patch_path, diff)
+
+          {_output, exit_code} =
+            System.cmd(patch_executable, ["--batch", "--forward", "--fuzz=0", path, patch_path],
+              stderr_to_stdout: true
+            )
+
+          case exit_code do
+            0 ->
+              after_contents = File.read!(path)
+              {:ok, after_artifact_id} = Current.BlobStore.put(after_contents)
+
+              {:ok,
+               %Current.EffectResult.FilePatch{
+                 path: path,
+                 before_artifact_id: before_artifact_id,
+                 after_artifact_id: after_artifact_id
+               }}
+
+            _ ->
+              {:error, "effect patch: #{intent.id} failed with exit code #{exit_code}"}
+          end
+        after
+          :ok = File.rm(patch_path)
+        end
+    end
   end
 end

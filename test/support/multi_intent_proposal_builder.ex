@@ -15,6 +15,13 @@ defmodule Current.MultiIntentProposalBuilder do
     patch_path = create_existing_signup_file(dir)
     generated_test_path = Path.join(dir, "signup_test.exs")
     generated_helper_path = Path.join(dir, "signup_helper.ex")
+    write_file_1_contents = "defmodule SignupTest do\n  use ExUnit.Case\nend\n"
+    {:ok, write_file_1_contents_artifact_id} = Current.BlobStore.put(write_file_1_contents)
+
+    write_file_2_contents =
+      "defmodule SignupHelper do\n  def sample_email, do: \"test@example.com\"\nend\n"
+
+    {:ok, write_file_2_contents_artifact_id} = Current.BlobStore.put(write_file_2_contents)
 
     intents = [
       %Intent.ReadFile{
@@ -26,13 +33,13 @@ defmodule Current.MultiIntentProposalBuilder do
         id: Id.generate(),
         proposal_id: proposal_id,
         path: generated_test_path,
-        contents: "defmodule SignupTest do\n  use ExUnit.Case\nend\n"
+        contents_artifact_id: write_file_1_contents_artifact_id
       },
       %Intent.WriteFile{
         id: Id.generate(),
         proposal_id: proposal_id,
         path: generated_helper_path,
-        contents: "defmodule SignupHelper do\n  def sample_email, do: \"test@example.com\"\nend\n"
+        contents_artifact_id: write_file_2_contents_artifact_id
       },
       %Intent.Glob{
         id: Id.generate(),
@@ -66,10 +73,14 @@ defmodule Current.MultiIntentProposalBuilder do
   end
 
   defp make_test_dir do
+    suffix =
+      Current.Id.generate()
+      |> String.replace(":", "-")
+
     dir =
       Path.join(
         System.tmp_dir!(),
-        "current_multi_#{System.unique_integer([:positive])}"
+        "current_multi_#{suffix}"
       )
 
     :ok = File.mkdir_p!(dir)

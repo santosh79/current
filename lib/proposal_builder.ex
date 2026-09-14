@@ -21,11 +21,13 @@ defmodule Current.ProposalBuilder do
      end
     """
 
+    {:ok, diff_artifact_id} = Current.BlobStore.put(diff)
+
     intent = %Intent.FilePatch{
       id: Id.generate(),
       proposal_id: proposal_id,
       path: path,
-      diff: diff
+      diff_artifact_id: diff_artifact_id
     }
 
     proposal = %Proposal{

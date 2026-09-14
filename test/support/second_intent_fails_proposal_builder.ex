@@ -3,6 +3,21 @@ defmodule Current.SecondIntentFailsProposalBuilder do
 
   alias Current.{Id, Intent, Proposal, Request}
 
+  defp make_test_dir do
+    suffix =
+      Current.Id.generate()
+      |> String.replace(":", "-")
+
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "current_multi_#{suffix}"
+      )
+
+    :ok = File.mkdir_p!(dir)
+    dir
+  end
+
   @impl true
   def build(%Request{} = req, workflow_id) do
     unless Mix.env() == :test do
@@ -11,13 +26,7 @@ defmodule Current.SecondIntentFailsProposalBuilder do
 
     proposal_id = Id.generate()
 
-    dir =
-      Path.join(
-        System.tmp_dir!(),
-        "current_second_intent_fails_#{System.unique_integer([:positive])}"
-      )
-
-    :ok = File.mkdir_p!(dir)
+    dir = make_test_dir()
 
     patch_path = Path.join(dir, "stub.ex")
     :ok = File.write!(patch_path, "defmodule Stub do\nend\n")
@@ -34,18 +43,22 @@ defmodule Current.SecondIntentFailsProposalBuilder do
      end
     """
 
+    {:ok, good_diff_artifact_id} = Current.BlobStore.put(good_diff)
+    contents = "defmodule Replacement do\nend\n"
+    {:ok, write_file_contents_artifact_id} = Current.BlobStore.put(contents)
+
     intents = [
       %Intent.FilePatch{
         id: Id.generate(),
         proposal_id: proposal_id,
         path: patch_path,
-        diff: good_diff
+        diff_artifact_id: good_diff_artifact_id
       },
       %Intent.WriteFile{
         id: Id.generate(),
         proposal_id: proposal_id,
         path: already_existing_path,
-        contents: "defmodule Replacement do\nend\n"
+        contents_artifact_id: write_file_contents_artifact_id
       },
       %Intent.RunCommand{
         id: Id.generate(),

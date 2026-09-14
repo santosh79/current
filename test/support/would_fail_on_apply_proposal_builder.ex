@@ -22,23 +22,19 @@ defmodule Current.WouldFailOnApplyProposalBuilder do
 
     proposal_id = Id.generate()
 
-    dir =
-      Path.join(
-        System.tmp_dir!(),
-        "current_would_fail_#{System.unique_integer([:positive])}"
-      )
-
-    File.mkdir_p!(dir)
+    dir = make_test_dir()
     path = Path.join(dir, "existing.ex")
 
     # Create the file first — the WriteFile intent will fail because it already exists
     File.write!(path, "defmodule Existing do\nend\n")
+    contents = "defmodule Existing do\n  def ok, do: true\nend\n"
+    {:ok, content_artifact_id} = Current.BlobStore.put(contents)
 
     intent = %Intent.WriteFile{
       id: Id.generate(),
       proposal_id: proposal_id,
       path: path,
-      contents: "defmodule Existing do\n  def ok, do: true\nend\n"
+      contents_artifact_id: content_artifact_id
     }
 
     {:ok,
@@ -50,5 +46,20 @@ defmodule Current.WouldFailOnApplyProposalBuilder do
        claims: [],
        dependencies: []
      }}
+  end
+
+  defp make_test_dir do
+    suffix =
+      Current.Id.generate()
+      |> String.replace(":", "-")
+
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "current_multi_#{suffix}"
+      )
+
+    :ok = File.mkdir_p!(dir)
+    dir
   end
 end

@@ -137,8 +137,63 @@ defmodule CurrentTest do
       assert workflow.result == nil
       assert workflow.completed_at == nil
 
+      refute_receive {:proposal_approved, %Event.ProposalApproved{workflow_id: ^workflow_id}}, 200
+
       refute_receive {:workflow_completed, %Event.WorkflowCompleted{workflow_id: ^workflow_id}},
                      200
+    end
+
+    test "reviewing an already-rejected proposal returns an invalid transition error" do
+      {:ok, _task_id, workflow_id, proposal} = submit_and_await_valid_proposal()
+
+      assert :ok = Current.review_proposal(proposal.id, {:reject, %{reviewed_by: :test_user}})
+
+      receive do
+        {:proposal_rejected, %Event.ProposalRejected{workflow_id: ^workflow_id}} -> :ok
+      after
+        @receive_timeout -> flunk("did not receive proposal_rejected")
+      end
+
+      failed_before = length(Current.Consensus.FailedEventsLog.all())
+
+      assert {:error, {:invalid_transition, :rejected, Event.ProposalApproved}} =
+               Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :test_user}})
+
+      assert {:error, {:invalid_transition, :rejected, Event.ProposalRejected}} =
+               Current.review_proposal(proposal.id, {:reject, %{reviewed_by: :test_user}})
+
+      # Nothing was proposed, so nothing could have been rejected at commit time.
+      assert length(Current.Consensus.FailedEventsLog.all()) == failed_before
+    end
+
+    test "reviewing a plan-mode proposal returns an invalid transition error" do
+      req = %Request{input: "add email validation", context: %{}, mode: :plan}
+      {:ok, task_id} = Current.submit_task(req, self())
+
+      workflow_id =
+        receive do
+          {:workflow_created, %Event.WorkflowCreated{task_id: ^task_id, workflow_id: workflow_id}} ->
+            workflow_id
+        after
+          @receive_timeout -> flunk("did not receive workflow_created")
+        end
+
+      proposal =
+        receive do
+          {:proposal_produced, %Event.ProposalProduced{workflow_id: ^workflow_id, proposal: p}} ->
+            p
+        after
+          @receive_timeout -> flunk("did not receive proposal_produced")
+        end
+
+      receive do
+        {:workflow_completed, %Event.WorkflowCompleted{workflow_id: ^workflow_id}} -> :ok
+      after
+        @receive_timeout -> flunk("did not receive workflow_completed")
+      end
+
+      assert {:error, {:invalid_transition, :planned, Event.ProposalApproved}} =
+               Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :test_user}})
     end
   end
 
@@ -181,6 +236,134 @@ defmodule CurrentTest do
       assert workflow.status == :failed
       assert workflow.error == "proposal validation failed"
       assert workflow.result == nil
+    end
+
+    test "a proposal builder that raises fails the workflow instead of the orchestrator" do
+      :persistent_term.put(:proposal_builder, Current.RaisingProposalBuilder)
+      on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
+
+      {:ok, task_id} = Current.submit_task(request(), self())
+      reason = await_proposal_production_failure(task_id)
+      assert reason =~ "crashed"
+      assert reason =~ "model exploded"
+    end
+
+    test "a proposal builder that returns an error fails the workflow" do
+      :persistent_term.put(:proposal_builder, Current.ErrorReturningProposalBuilder)
+      on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
+
+      {:ok, task_id} = Current.submit_task(request(), self())
+      reason = await_proposal_production_failure(task_id)
+      assert reason =~ "rate_limited"
+    end
+
+    test "a proposal builder that hangs is killed and the workflow fails" do
+      :persistent_term.put(:proposal_builder, Current.BlockingProposalBuilder)
+      Application.put_env(:current, :proposal_production_timeout_ms, 100)
+
+      on_exit(fn ->
+        :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
+        Application.delete_env(:current, :proposal_production_timeout_ms)
+      end)
+
+      {:ok, task_id} = Current.submit_task(request(), self())
+      reason = await_proposal_production_failure(task_id)
+      assert reason =~ "timed out after 100ms"
+    end
+  end
+
+  test "subscriptions are removed automatically when subscriber exits" do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        :ok = Current.EventNotifier.subscribe(self(), :task_created)
+        send(parent, :subscribed)
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    receive do
+      :subscribed -> :ok
+    end
+
+    assert Registry.lookup(Current.EventRegistry, :task_created)
+           |> Enum.any?(fn {registered_pid, _} ->
+             registered_pid == pid
+           end)
+
+    ref = Process.monitor(pid)
+    send(pid, :stop)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}
+
+    assert_eventually(fn ->
+      Registry.lookup(Current.EventRegistry, :task_created)
+      |> Enum.all?(fn {registered_pid, _} ->
+        registered_pid != pid
+      end)
+    end)
+  end
+
+  test "one process matching several keys receives one notification" do
+    {:ok, _task_id, workflow_id, proposal} = submit_and_await_valid_proposal()
+    :ok = Current.EventNotifier.subscribe(self(), :all)
+    :ok = Current.EventNotifier.subscribe(self(), :workflow_completed)
+    :ok = Current.EventNotifier.subscribe(self(), workflow_id, :all)
+    :ok = Current.EventNotifier.subscribe(self(), workflow_id, :workflow_completed)
+
+    :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :test_user}})
+
+    assert_receive {:event_committed,
+                    %Current.EventStore.Entry{event: %Current.Event.WorkflowCompleted{}}}
+
+    refute_receive {:event_committed,
+                    %Current.EventStore.Entry{event: %Current.Event.WorkflowCompleted{}}},
+                   50
+  end
+
+  defp await_proposal_production_failure(task_id) do
+    workflow_id =
+      receive do
+        {:workflow_created, %Event.WorkflowCreated{task_id: ^task_id, workflow_id: workflow_id}} ->
+          workflow_id
+      after
+        @receive_timeout -> flunk("did not receive workflow_created")
+      end
+
+    reason =
+      receive do
+        {:proposal_production_failed,
+         %Event.ProposalProductionFailed{workflow_id: ^workflow_id, reason: reason}} ->
+          reason
+      after
+        @receive_timeout -> flunk("did not receive proposal_production_failed")
+      end
+
+    receive do
+      {:workflow_failed, %Event.WorkflowFailed{workflow_id: ^workflow_id}} -> :ok
+    after
+      @receive_timeout -> flunk("did not receive workflow_failed")
+    end
+
+    assert {:ok, %{status: :failed, error: error, result: nil}} = Current.get_workflow(task_id)
+    assert error == reason
+    reason
+  end
+
+  defp assert_eventually(fun, attempts \\ 50)
+
+  defp assert_eventually(_fun, 0) do
+    flunk("condition did not become true")
+  end
+
+  defp assert_eventually(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(10)
+      assert_eventually(fun, attempts - 1)
     end
   end
 end

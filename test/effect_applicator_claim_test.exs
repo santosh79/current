@@ -30,13 +30,8 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
       }
 
       grep_result = %Current.EffectResult.Grep{
-        matches: [
-          %Current.EffectResult.Grep.Match{
-            path: "signup.ex",
-            line: 2,
-            text: "def validate_email"
-          }
-        ],
+        matches_artifact_id: "sha256:placeholder",
+        match_count: 1,
         searched_artifact_ids: []
       }
 
@@ -75,7 +70,12 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         paths: []
       }
 
-      grep_result = %Current.EffectResult.Grep{matches: [], searched_artifact_ids: []}
+      grep_result = %Current.EffectResult.Grep{
+        matches_artifact_id: "sha256:placeholder",
+        match_count: 0,
+        searched_artifact_ids: []
+      }
+
       prior_results = [{grep_intent, grep_result}]
 
       intent = %Intent.Claim{
@@ -159,7 +159,11 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         base_dir: "."
       }
 
-      glob_result = %Current.EffectResult.Glob{matches: ["lib/app.ex"]}
+      glob_result = %Current.EffectResult.Glob{
+        matches_artifact_id: "sha256:placeholder",
+        match_count: 1
+      }
+
       prior_results = [{glob_intent, glob_result}]
 
       intent = %Intent.Claim{
