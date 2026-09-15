@@ -9,6 +9,7 @@ defmodule Current.WorkflowOrchestrator do
     IntentValidator,
     Mode,
     Proposal,
+    ProposalProductionError,
     Request,
     Task,
     Workflow,
@@ -27,8 +28,6 @@ defmodule Current.WorkflowOrchestrator do
   @type start_arg ::
           {Event.TaskCreated.t(), [pid()]}
           | {:resume, Workflow.t(), Task.t()}
-
-  @default_proposal_timeout_ms 30_000
 
   ## Client API
 
@@ -131,41 +130,18 @@ defmodule Current.WorkflowOrchestrator do
   def handle_info({:proposal_production_failed, _}, %{proposal_production: nil} = state),
     do: {:noreply, state}
 
-  def handle_info({:proposal_production_failed, reason}, state) do
-    state = clear_proposal_production(state)
-
+  def handle_info({:proposal_production_failed, %ProposalProductionError{} = error}, state) do
     propose(%Event.ProposalProductionFailed{
       id: Id.generate(),
       workflow_id: state.workflow_id,
-      reason: reason,
+      error: error,
       timestamp: DateTime.utc_now()
     })
 
     {:noreply, state}
   end
 
-  def handle_info(
-        {:proposal_production_timeout, pid},
-        %{proposal_production: %{pid: pid}} = state
-      ) do
-    Process.unlink(pid)
-    Process.exit(pid, :kill)
-
-    propose(%Event.ProposalProductionFailed{
-      id: Id.generate(),
-      workflow_id: state.workflow_id,
-      reason: "proposal production timed out after #{proposal_production_timeout_ms()}ms",
-      timestamp: DateTime.utc_now()
-    })
-
-    {:noreply, %{state | proposal_production: nil}}
-  end
-
-  def handle_info({:proposal_production_timeout, _stale_pid}, state), do: {:noreply, state}
-
   def handle_info({:proposal_produced, %Proposal{} = proposal}, state) do
-    state = clear_proposal_production(state)
-
     propose(%Event.ProposalProduced{
       id: Id.generate(),
       workflow_id: state.workflow_id,
@@ -330,11 +306,11 @@ defmodule Current.WorkflowOrchestrator do
     {:noreply, state}
   end
 
-  defp react(%Event.ProposalProductionFailed{reason: reason}, state) do
+  defp react(%Event.ProposalProductionFailed{error: error}, state) do
     propose(%Event.WorkflowFailed{
       id: Id.generate(),
       workflow_id: state.workflow_id,
-      reason: reason,
+      reason: ProposalProductionError.message(error),
       timestamp: DateTime.utc_now()
     })
 
@@ -403,10 +379,6 @@ defmodule Current.WorkflowOrchestrator do
 
   ## Proposal production
 
-  defp proposal_production_timeout_ms do
-    Application.get_env(:current, :proposal_production_timeout_ms, @default_proposal_timeout_ms)
-  end
-
   defp start_proposal_production(state) do
     builder = :persistent_term.get(:proposal_builder, Current.ProposalBuilder)
     orchestrator = self()
@@ -415,48 +387,19 @@ defmodule Current.WorkflowOrchestrator do
 
     pid =
       spawn_link(fn ->
-        outcome =
-          try do
-            builder.build(request, workflow_id)
-          catch
-            kind, reason -> {:crashed, Exception.format_banner(kind, reason)}
-          end
-
         message =
-          case outcome do
+          case builder.build(request, workflow_id) do
             {:ok, %Proposal{} = proposal} ->
               {:proposal_produced, proposal}
 
-            {:error, reason} ->
-              {:proposal_production_failed,
-               "proposal builder returned an error: #{inspect(reason)}"}
-
-            {:crashed, banner} ->
-              {:proposal_production_failed, "proposal builder crashed: #{banner}"}
-
-            other ->
-              {:proposal_production_failed,
-               "proposal builder returned an unexpected value: #{inspect(other)}"}
+            {:error, %ProposalProductionError{} = err} ->
+              {:proposal_production_failed, err}
           end
 
         send(orchestrator, message)
       end)
 
-    timer =
-      Process.send_after(
-        self(),
-        {:proposal_production_timeout, pid},
-        proposal_production_timeout_ms()
-      )
-
-    %{state | proposal_production: %{pid: pid, timer: timer}}
-  end
-
-  defp clear_proposal_production(%{proposal_production: nil} = state), do: state
-
-  defp clear_proposal_production(%{proposal_production: %{timer: timer}} = state) do
-    Process.cancel_timer(timer)
-    %{state | proposal_production: nil}
+    %{state | proposal_production: %{pid: pid}}
   end
 
   ## Effect application

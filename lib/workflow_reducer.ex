@@ -1,6 +1,5 @@
 defmodule Current.WorkflowReducer do
-  alias Current.Workflow
-  alias Current.Event
+  alias Current.{ProposalProductionError, Workflow, Event}
 
   @doc """
   Apply a single event to the current workflow state, returning the next state.
@@ -81,7 +80,13 @@ defmodule Current.WorkflowReducer do
   end
 
   defp apply_event_helper(%Workflow{status: :planning} = w, %Event.ProposalProductionFailed{} = e) do
-    {:ok, %{w | status: :proposal_production_failed, error: e.reason, updated_at: e.timestamp}}
+    {:ok,
+     %{
+       w
+       | status: :proposal_production_failed,
+         error: ProposalProductionError.message(e.error),
+         updated_at: e.timestamp
+     }}
   end
 
   # --- Validation ----------------------------------------------------------
@@ -134,7 +139,10 @@ defmodule Current.WorkflowReducer do
 
   # Fact-only events: present in the log, but they do not move workflow status.
   defp apply_event_helper(%Workflow{status: :applying} = w, %Event.EffectApplied{}), do: {:ok, w}
-  defp apply_event_helper(%Workflow{status: :applying} = w, %Event.EffectApplicationComplete{}), do: {:ok, w}
+
+  defp apply_event_helper(%Workflow{status: :applying} = w, %Event.EffectApplicationComplete{}),
+    do: {:ok, w}
+
   defp apply_event_helper(%Workflow{status: :applying} = w, %Event.EffectFailed{}), do: {:ok, w}
 
   # --- Result assembly -----------------------------------------------------

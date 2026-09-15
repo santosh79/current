@@ -234,16 +234,18 @@ defmodule Current.WorkflowReducerTest do
           timestamp: ts(fixture, 1)
         })
 
+      error = %Current.ProposalProductionError{stage: :timeout, reason: "timed out"}
+
       {:ok, w} =
         WorkflowReducer.apply_event(w1, %Event.ProposalProductionFailed{
           id: event_id(),
           workflow_id: fixture.workflow_id,
-          reason: "timed out",
+          error: error,
           timestamp: ts(fixture, 2)
         })
 
       assert w.status == :proposal_production_failed
-      assert w.error == "timed out"
+      assert w.error == Current.ProposalProductionError.message(error)
       assert w.updated_at == ts(fixture, 2)
     end
   end

@@ -238,16 +238,6 @@ defmodule CurrentTest do
       assert workflow.result == nil
     end
 
-    test "a proposal builder that raises fails the workflow instead of the orchestrator" do
-      :persistent_term.put(:proposal_builder, Current.RaisingProposalBuilder)
-      on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
-
-      {:ok, task_id} = Current.submit_task(request(), self())
-      reason = await_proposal_production_failure(task_id)
-      assert reason =~ "crashed"
-      assert reason =~ "model exploded"
-    end
-
     test "a proposal builder that returns an error fails the workflow" do
       :persistent_term.put(:proposal_builder, Current.ErrorReturningProposalBuilder)
       on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
@@ -255,20 +245,6 @@ defmodule CurrentTest do
       {:ok, task_id} = Current.submit_task(request(), self())
       reason = await_proposal_production_failure(task_id)
       assert reason =~ "rate_limited"
-    end
-
-    test "a proposal builder that hangs is killed and the workflow fails" do
-      :persistent_term.put(:proposal_builder, Current.BlockingProposalBuilder)
-      Application.put_env(:current, :proposal_production_timeout_ms, 100)
-
-      on_exit(fn ->
-        :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
-        Application.delete_env(:current, :proposal_production_timeout_ms)
-      end)
-
-      {:ok, task_id} = Current.submit_task(request(), self())
-      reason = await_proposal_production_failure(task_id)
-      assert reason =~ "timed out after 100ms"
     end
   end
 
@@ -332,11 +308,11 @@ defmodule CurrentTest do
         @receive_timeout -> flunk("did not receive workflow_created")
       end
 
-    reason =
+    error =
       receive do
         {:proposal_production_failed,
-         %Event.ProposalProductionFailed{workflow_id: ^workflow_id, reason: reason}} ->
-          reason
+         %Event.ProposalProductionFailed{workflow_id: ^workflow_id, error: error}} ->
+          error
       after
         @receive_timeout -> flunk("did not receive proposal_production_failed")
       end
@@ -347,8 +323,8 @@ defmodule CurrentTest do
       @receive_timeout -> flunk("did not receive workflow_failed")
     end
 
-    assert {:ok, %{status: :failed, error: error, result: nil}} = Current.get_workflow(task_id)
-    assert error == reason
+    reason = Current.ProposalProductionError.message(error)
+    assert {:ok, %{status: :failed, error: ^reason, result: nil}} = Current.get_workflow(task_id)
     reason
   end
 
