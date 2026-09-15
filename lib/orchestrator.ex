@@ -127,6 +127,18 @@ defmodule Current.WorkflowOrchestrator do
   def handle_info({:proposal_produced, _}, %{proposal_production: nil} = state),
     do: {:noreply, state}
 
+  def handle_info({:proposal_produced, %Proposal{} = proposal, raw_output_blob_id}, state) do
+    propose(%Event.ProposalProduced{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      proposal: proposal,
+      raw_output_blob_id: raw_output_blob_id,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
   def handle_info({:proposal_production_failed, _}, %{proposal_production: nil} = state),
     do: {:noreply, state}
 
@@ -135,17 +147,6 @@ defmodule Current.WorkflowOrchestrator do
       id: Id.generate(),
       workflow_id: state.workflow_id,
       error: error,
-      timestamp: DateTime.utc_now()
-    })
-
-    {:noreply, state}
-  end
-
-  def handle_info({:proposal_produced, %Proposal{} = proposal}, state) do
-    propose(%Event.ProposalProduced{
-      id: Id.generate(),
-      workflow_id: state.workflow_id,
-      proposal: proposal,
       timestamp: DateTime.utc_now()
     })
 
@@ -390,7 +391,11 @@ defmodule Current.WorkflowOrchestrator do
         message =
           case builder.build(request, workflow_id) do
             {:ok, %Proposal{} = proposal} ->
-              {:proposal_produced, proposal}
+              raw_output_blob_id = nil
+              {:proposal_produced, proposal, raw_output_blob_id}
+
+            {:ok, %Proposal{} = proposal, raw_output_blob_id} ->
+              {:proposal_produced, proposal, raw_output_blob_id}
 
             {:error, %ProposalProductionError{} = err} ->
               {:proposal_production_failed, err}
