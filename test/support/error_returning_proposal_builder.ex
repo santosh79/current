@@ -1,6 +1,6 @@
 defmodule Current.ErrorReturningProposalBuilder do
   @behaviour Current.ProposalBuilder
-  alias Current.ProposalProductionError
+  alias Current.Error.ProposalProductionError
 
   @impl true
   def build(_req, _workflow_id),

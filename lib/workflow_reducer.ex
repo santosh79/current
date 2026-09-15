@@ -1,5 +1,5 @@
 defmodule Current.WorkflowReducer do
-  alias Current.{ProposalProductionError, Workflow, Event}
+  alias Current.{Error.ProposalProductionError, Workflow, Event}
 
   @doc """
   Apply a single event to the current workflow state, returning the next state.

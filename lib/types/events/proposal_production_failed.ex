@@ -7,7 +7,7 @@ defmodule Current.Event.ProposalProductionFailed do
   @type t :: %__MODULE__{
           id: Current.Id.t(),
           workflow_id: Current.Id.t(),
-          error: Current.ProposalProductionError.t() | nil,
+          error: Current.Error.ProposalProductionError.t() | nil,
           timestamp: DateTime.t(),
           version: pos_integer()
         }
@@ -22,6 +22,6 @@ defmodule Current.Event.ProposalProductionFailed do
   def upcast(%{reason: reason} = fields, 1) do
     fields
     |> Map.delete(:reason)
-    |> Map.put(:error, %Current.ProposalProductionError{stage: nil, reason: reason})
+    |> Map.put(:error, %Current.Error.ProposalProductionError{stage: nil, reason: reason})
   end
 end

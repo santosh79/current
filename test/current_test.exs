@@ -3,7 +3,7 @@ defmodule CurrentTest do
 
   doctest Current
 
-  alias Current.{Event, Proposal, Request}
+  alias Current.{Event, Proposal, Request, Error.ProposalProductionError}
 
   @receive_timeout 5_000
 
@@ -323,7 +323,7 @@ defmodule CurrentTest do
       @receive_timeout -> flunk("did not receive workflow_failed")
     end
 
-    reason = Current.ProposalProductionError.message(error)
+    reason = ProposalProductionError.message(error)
     assert {:ok, %{status: :failed, error: ^reason, result: nil}} = Current.get_workflow(task_id)
     reason
   end

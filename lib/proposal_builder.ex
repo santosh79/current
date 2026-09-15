@@ -1,7 +1,8 @@
 defmodule Current.ProposalBuilder do
-  alias Current.{Id, Intent, Proposal, ProposalProductionError, Request}
+  alias Current.{Id, Intent, Proposal, Error.ProposalProductionError, Request}
 
-  @callback build(Request.t(), Current.Id.t()) :: {:ok, Proposal.t()} | {:error, ProposalProductionError.t()}
+  @callback build(Request.t(), Current.Id.t()) ::
+              {:ok, Proposal.t()} | {:error, ProposalProductionError.t()}
 
   # SantoshTODO: Stop Hardcoding — replace with LLM-driven proposal generation
   def build(%Request{} = req, workflow_id) do

@@ -9,7 +9,7 @@ defmodule Current.WorkflowOrchestrator do
     IntentValidator,
     Mode,
     Proposal,
-    ProposalProductionError,
+    Error.ProposalProductionError,
     Request,
     Task,
     Workflow,

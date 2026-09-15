@@ -1,4 +1,4 @@
-defmodule Current.ProposalProductionError do
+defmodule Current.Error.ProposalProductionError do
   @enforce_keys [:stage, :reason]
   defstruct [:stage, :reason, :raw_output_blob_id]
 
