@@ -128,6 +128,9 @@ defmodule Current.Intent do
     Current.Intent.Report
   ]
 
+  @spec modules() :: [module()]
+  def modules, do: @known_modules
+
   def valid?(%{__struct__: mod}), do: mod in @known_modules
   def valid?(_), do: false
 end

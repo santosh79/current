@@ -1,36 +1,138 @@
 defmodule Current.IntentValidator do
-  alias Current.{Intent, Proposal, Error.ValidationError}
+  @moduledoc """
+  Validates a decoded Proposal's intents before they become durable.
+
+  This is deliberately narrower than "will this succeed when applied":
+  validation protects the contract (referenced blobs exist, structural
+  shape is sane, claims only cite earlier intents whose condition they
+  could ever evaluate), not the world's future state. Whether a target
+  file happens to already exist, or a command's executable happens to be
+  on this box's PATH, can change between validation and apply -- those
+  stay effect-time-only failures (see EffectApplicator), exactly as they
+  already were before this module covered every intent type.
+
+  Every member of Current.Intent.t() must have an explicit clause below.
+  There is no catch-all: an intent type with no clause is a compile-time
+  gap this module should never silently accept.
+  """
+
+  alias Current.{BlobStore, Intent, Proposal}
+  alias Current.Error.ValidationError
 
   @spec validate(Proposal.t()) :: :ok | {:error, ValidationError.t()}
-  def validate(%Proposal{intents: intents}) when is_list(intents) do
-    case Enum.find_value(intents, &validate_intent/1) do
-      nil -> :ok
-      error -> {:error, error}
+  def validate(%Proposal{intents: intents}) do
+    validate_helper(intents, %{})
+  end
+
+  ## --- ReadFile -------------------------------------------------------
+
+  defp validate_intent(%Intent.ReadFile{id: id, path: path}, _seen_intents) do
+    case File.regular?(path) do
+      true ->
+        nil
+
+      _ ->
+        %ValidationError{
+          intent_id: id,
+          reason: "read_file path does not exist",
+          details: %{path: path}
+        }
     end
   end
 
-  def validate(_proposal) do
-    {:error,
-     %ValidationError{
-       intent_id: nil,
-       reason: "invalid proposal",
-       details: %{}
-     }}
-  end
+  ## --- WriteFile --------------------------------------------------------
+  # Whether `path` already exists is apply-time only (EffectApplicator
+  # already handles it) -- it can change between now and apply, so
+  # validating it here would just be a race with no real payoff.
 
-  defp validate_intent(%Intent.ReadFile{id: id, path: path}) do
-    if File.regular?(path) do
-      nil
-    else
-      %ValidationError{
-        intent_id: id,
-        reason: "read_file path does not exist",
-        details: %{path: path}
-      }
+  defp validate_intent(%Intent.WriteFile{id: id, contents_artifact_id: blob_id}, _seen_intents) do
+    case BlobStore.path_for(blob_id) do
+      {:ok, _path} ->
+        nil
+
+      {:error, :not_found} ->
+        %ValidationError{
+          intent_id: id,
+          reason: "write_file contents blob does not exist",
+          details: %{contents_artifact_id: blob_id}
+        }
     end
   end
 
-  defp validate_intent(%Intent.Grep{id: id, paths: paths}) do
+  ## --- DeleteFile -------------------------------------------------------
+  # No existence check: EffectApplicator already treats a missing target
+  # as "already deleted" rather than an error, so there's nothing here
+  # for validation to usefully reject ahead of time.
+
+  defp validate_intent(%Intent.DeleteFile{id: id, path: path}, _seen_intents) do
+    case is_binary(path) and path != "" do
+      true ->
+        nil
+
+      _ ->
+        %ValidationError{
+          intent_id: id,
+          reason: "delete_file path must be a non-empty string",
+          details: %{path: path}
+        }
+    end
+  end
+
+  ## --- FilePatch ----------------------------------------------------
+
+  defp validate_intent(
+         %Intent.FilePatch{id: id, path: path, diff_artifact_id: blob_id},
+         _seen_intents
+       ) do
+    cond do
+      not File.regular?(path) ->
+        %ValidationError{
+          intent_id: id,
+          reason: "file_patch path does not exist",
+          details: %{path: path}
+        }
+
+      match?({:error, :not_found}, BlobStore.path_for(blob_id)) ->
+        %ValidationError{
+          intent_id: id,
+          reason: "file_patch diff blob does not exist",
+          details: %{diff_artifact_id: blob_id}
+        }
+
+      true ->
+        nil
+    end
+  end
+
+  ## --- RunCommand -------------------------------------------------------
+  # Deliberately no System.find_executable/1 check: what's on PATH here,
+  # at validation time, may not be what's on PATH wherever/whenever this
+  # gets applied. "command not found" stays an EffectApplicator failure.
+
+  defp validate_intent(%Intent.RunCommand{id: id, cmd: cmd, args: args}, _seen_intents) do
+    cond do
+      not (is_binary(cmd) and cmd != "") ->
+        %ValidationError{
+          intent_id: id,
+          reason: "run_command cmd must be a non-empty string",
+          details: %{cmd: cmd}
+        }
+
+      not (is_list(args) and Enum.all?(args, &is_binary/1)) ->
+        %ValidationError{
+          intent_id: id,
+          reason: "run_command args must be a list of strings",
+          details: %{args: args}
+        }
+
+      true ->
+        nil
+    end
+  end
+
+  ## --- Grep -------------------------------------------------------------
+
+  defp validate_intent(%Intent.Grep{id: id, paths: paths}, _seen_intents) do
     case Enum.find(paths, &(not File.regular?(&1))) do
       nil ->
         nil
@@ -44,12 +146,14 @@ defmodule Current.IntentValidator do
     end
   end
 
-  defp validate_intent(%Intent.Glob{id: id, pattern: pattern, base_dir: base_dir}) do
+  ## --- Glob -------------------------------------------------------------
+
+  defp validate_intent(%Intent.Glob{id: id, pattern: pattern, base_dir: base_dir}, _seen_intents) do
     cond do
-      Path.type(pattern) == :absolute ->
+      not is_binary(pattern) or Path.type(pattern) == :absolute ->
         %ValidationError{
           intent_id: id,
-          reason: "glob pattern must be relative",
+          reason: "glob pattern must be a relative path",
           details: %{pattern: pattern}
         }
 
@@ -65,5 +169,86 @@ defmodule Current.IntentValidator do
     end
   end
 
-  defp validate_intent(_intent), do: nil
+  ## --- Claim --------------------------------------------------------------
+  # Structural only: does the evidence shape make sense, does it point at
+  # an intent that already ran (by proposal order), and could this
+  # condition ever be evaluated against *that kind* of intent at all?
+  # Whether the *result* actually satisfies the condition is
+  # EffectApplicator's job at apply time -- this is "can this claim in
+  # principle be evaluated," not "will it pass."
+
+  defp validate_intent(%Intent.Claim{id: id, evidence: nil}, _seen_intents) do
+    %ValidationError{
+      intent_id: id,
+      reason: "claim requires evidence",
+      details: %{}
+    }
+  end
+
+  defp validate_intent(%Intent.Claim{id: id, evidence: evidence}, seen_intents) do
+    source_intent_id = evidence_field(evidence, :source_intent_id)
+    condition = evidence_field(evidence, :condition)
+
+    cond do
+      is_nil(source_intent_id) ->
+        %ValidationError{
+          intent_id: id,
+          reason: "claim evidence missing source_intent_id",
+          details: %{evidence: evidence}
+        }
+
+      not Map.has_key?(seen_intents, source_intent_id) ->
+        %ValidationError{
+          intent_id: id,
+          reason: "claim references an intent that does not precede it in the proposal",
+          details: %{source_intent_id: source_intent_id}
+        }
+
+      not condition_compatible?(condition, Map.fetch!(seen_intents, source_intent_id)) ->
+        source_intent = Map.fetch!(seen_intents, source_intent_id)
+
+        %ValidationError{
+          intent_id: id,
+          reason:
+            "claim condition #{inspect(condition)} can never be evaluated against " <>
+              "#{inspect(source_intent.__struct__)}",
+          details: %{condition: condition, source_intent_id: source_intent_id}
+        }
+
+      true ->
+        nil
+    end
+  end
+
+  defp validate_intent(%Intent.Report{}, _seen_intents), do: nil
+
+  defp validate_helper([], _seen_intents) do
+    :ok
+  end
+
+  defp validate_helper([intent | rest], seen_intents) do
+    case validate_intent(intent, seen_intents) do
+      %ValidationError{} = error ->
+        {:error, error}
+
+      nil ->
+        seen_intents = Map.put(seen_intents, intent.id, intent)
+        validate_helper(rest, seen_intents)
+    end
+  end
+
+  defp evidence_field(evidence, key) when is_map(evidence), do: Map.get(evidence, key)
+  defp evidence_field(_evidence, _key), do: nil
+
+  # Mirrors exactly the (condition, result-type) pairs EffectApplicator's
+  # evaluate_condition/5 supports. If a pair is added there, it must be
+  # added here too, or a technically-valid claim will always fail at
+  # apply time with "condition not supported" instead of being caught here.
+  defp condition_compatible?(:match_count_greater_than, %Intent.Grep{}), do: true
+  defp condition_compatible?(:match_count_greater_than, %Intent.Glob{}), do: true
+  defp condition_compatible?(:match_count_equals, %Intent.Grep{}), do: true
+  defp condition_compatible?(:exit_code_equals, %Intent.RunCommand{}), do: true
+  defp condition_compatible?(_condition, _intent), do: false
+
+  ## --- Report -------------------------------------------------------------
 end
