@@ -36,7 +36,8 @@ defmodule Current.EventNotifier do
                  :effect_application_complete,
                  :workflow_result_assembled,
                  :workflow_completed,
-                 :workflow_failed
+                 :workflow_failed,
+                 :workflow_abandoned
                ])
 
   @spec subscribe(pid(), atom()) ::
@@ -140,4 +141,5 @@ defmodule Current.EventNotifier do
   defp event_type(%Event.WorkflowResultAssembled{}), do: :workflow_result_assembled
   defp event_type(%Event.WorkflowCompleted{}), do: :workflow_completed
   defp event_type(%Event.WorkflowFailed{}), do: :workflow_failed
+  defp event_type(%Event.WorkflowAbandoned{}), do: :workflow_abandoned
 end

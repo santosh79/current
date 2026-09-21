@@ -22,91 +22,79 @@ defmodule Current.WorkflowOrchestrator do
           request: Request.t(),
           task_id: Current.Id.t(),
           replayed: MapSet.t(Current.Id.t()),
-          proposal_production: %{pid: pid(), timer: reference()} | nil
+          proposal_production: pid() | nil
         }
 
-  @type start_arg ::
-          {Event.TaskCreated.t(), [pid()]}
-          | {:resume, Workflow.t(), Task.t()}
+  @type start_arg :: {Current.Id.t(), Task.t(), [pid()]}
 
   ## Client API
 
   @spec start_link(start_arg()) :: GenServer.on_start()
-  def start_link({%Event.TaskCreated{}, listeners} = arg) when is_list(listeners),
-    do: GenServer.start_link(__MODULE__, arg)
+  def start_link({workflow_id, %Task{}, listeners} = arg)
+      when is_binary(workflow_id) and is_list(listeners),
+      do: GenServer.start_link(__MODULE__, arg)
 
-  def start_link({:resume, %Workflow{}, %Task{}} = arg),
-    do: GenServer.start_link(__MODULE__, arg)
+  @doc """
+  Like start_link/1, but does not link the caller. WorkflowRunner uses
+  this (supervising via Process.monitor/1 instead) so an orchestrator
+  crash arrives as a :DOWN message WorkflowRunner's own handle_info/2
+  controls the response to, rather than an :EXIT signal propagating
+  automatically and killing WorkflowRunner before its retry logic runs.
+  """
+  @spec start(start_arg()) :: GenServer.on_start()
+  def start({workflow_id, %Task{}, listeners} = arg)
+      when is_binary(workflow_id) and is_list(listeners),
+      do: GenServer.start(__MODULE__, arg)
 
   @spec child_spec(start_arg()) :: Supervisor.child_spec()
-  def child_spec(arg) do
+  def child_spec({workflow_id, %Task{}, _listeners} = arg) do
     %{
-      id: make_ref(),
+      id: workflow_id,
       start: {__MODULE__, :start_link, [arg]},
-      restart: :temporary,
+      restart: :transient,
       type: :worker
     }
   end
 
   @impl true
-  def init({%Event.TaskCreated{} = event, listeners}) do
-    request = %Request{
-      input: event.input,
-      context: event.context,
-      mode: event.mode
-    }
-
-    workflow_id = Id.generate()
-
-    :ok =
-      Current.EventNotifier.subscribe(
-        self(),
-        workflow_id,
-        :all
-      )
-
-    workflow_created = %Event.WorkflowCreated{
-      id: Id.generate(),
-      workflow_id: workflow_id,
-      task_id: event.task_id,
-      mode: event.mode,
-      timestamp: DateTime.utc_now()
-    }
-
-    :ok = propose(workflow_created)
-
-    {:ok,
-     %{
-       listeners: listeners,
-       task_id: event.task_id,
-       request: request,
-       workflow_id: workflow_id,
-       replayed: MapSet.new(),
-       proposal_production: nil
-     }}
-  end
-
-  def init({:resume, %Workflow{} = workflow, %Task{} = task}) do
-    :ok = Current.EventNotifier.subscribe(self(), workflow.id, :all)
+  def init({workflow_id, %Task{} = task, listeners}) do
+    :ok = Current.EventNotifier.subscribe(self(), workflow_id, :all)
 
     state = %{
-      listeners: [],
+      listeners: listeners,
       task_id: task.id,
       request: %Request{input: task.input, context: task.context, mode: task.mode},
-      workflow_id: workflow.id,
+      workflow_id: workflow_id,
       replayed: MapSet.new(),
       proposal_production: nil
     }
 
-    {:ok, state, {:continue, :resume}}
+    {:ok, state, {:continue, :recover}}
   end
 
   @impl true
-  def handle_continue(:resume, state) do
-    events = EventStore.list_by_workflow_id(state.workflow_id)
-    {:ok, workflow} = WorkflowReducer.replay(events)
-    state = %{state | replayed: MapSet.new(events, & &1.id)}
-    resume(workflow, events, state)
+  def handle_continue(:recover, state) do
+    case EventStore.list_by_workflow_id(state.workflow_id) do
+      [] ->
+        # Genesis: nothing to replay yet. Already subscribed above, so
+        # the commit notification for this proposal drives react/2
+        # normally from here on -- no special-casing past this point.
+        :ok =
+          propose(%Event.WorkflowCreated{
+            id: Id.generate(),
+            workflow_id: state.workflow_id,
+            task_id: state.task_id,
+            mode: state.request.mode,
+            timestamp: DateTime.utc_now()
+          })
+
+        {:noreply, state}
+
+      events ->
+        {:ok, workflow} = WorkflowReducer.replay(events)
+        state = %{state | replayed: MapSet.new(events, & &1.id)}
+        recover(workflow, events, state)
+    end
   end
 
   ## Committed workflow events
@@ -188,9 +176,9 @@ defmodule Current.WorkflowOrchestrator do
     {:noreply, state}
   end
 
-  ## Resume policy
+  ## Recover policy
 
-  defp resume(%Workflow{status: :applying}, events, state) do
+  defp recover(%Workflow{status: :applying}, events, state) do
     case List.last(events) do
       %Event.EffectApplicationStarted{} ->
         fail_interrupted_effects(state)
@@ -212,7 +200,7 @@ defmodule Current.WorkflowOrchestrator do
     {:noreply, state}
   end
 
-  defp resume(_workflow, events, state), do: react(List.last(events), state)
+  defp recover(_workflow, events, state), do: react(List.last(events), state)
 
   ## Policy: committed event -> next operation
 
@@ -362,26 +350,28 @@ defmodule Current.WorkflowOrchestrator do
     {:noreply, state}
   end
 
-  defp react(%Event.ProposalRejected{}, state) do
-    {:noreply, state}
-  end
-
   defp react(%Event.EffectApplied{}, state) do
     {:noreply, state}
   end
 
+  defp react(%Event.ProposalRejected{}, state) do
+    {:stop, :normal, state}
+  end
+
   defp react(%Event.WorkflowFailed{}, state) do
-    {:noreply, state}
+    {:stop, :normal, state}
   end
 
   defp react(%Event.WorkflowCompleted{}, state) do
-    {:noreply, state}
+    {:stop, :normal, state}
   end
 
   ## Proposal production
 
   defp start_proposal_production(state) do
-    builder = :persistent_term.get(:proposal_builder, Current.ProposalBuilder)
+    builder = Application.fetch_env!(:current, :proposal_builder)
+    client = Application.fetch_env!(:current, :llm_client)
+
     orchestrator = self()
     request = state.request
     workflow_id = state.workflow_id
@@ -389,7 +379,7 @@ defmodule Current.WorkflowOrchestrator do
     pid =
       spawn_link(fn ->
         message =
-          case builder.build(request, workflow_id) do
+          case builder.build(request, workflow_id, client) do
             {:ok, %Proposal{} = proposal} ->
               raw_output_blob_id = nil
               {:proposal_produced, proposal, raw_output_blob_id}
@@ -404,7 +394,7 @@ defmodule Current.WorkflowOrchestrator do
         send(orchestrator, message)
       end)
 
-    %{state | proposal_production: %{pid: pid}}
+    %{state | proposal_production: pid}
   end
 
   ## Effect application
@@ -457,11 +447,7 @@ defmodule Current.WorkflowOrchestrator do
          orchestrator,
          acc
        ) do
-    applicator =
-      :persistent_term.get(
-        :effect_applicator,
-        Current.EffectApplicator
-      )
+    applicator = Application.fetch_env!(:current, :effect_applicator)
 
     case applicator.apply(intent, acc) do
       {:ok, result} ->

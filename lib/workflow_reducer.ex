@@ -184,6 +184,22 @@ defmodule Current.WorkflowReducer do
     {:ok, ww}
   end
 
+  # WorkflowAbandoned is the runtime's own signal that no further automatic
+  # progress is possible on this workflow -- distinct from WorkflowFailed
+  # (a normal pipeline step concluding in failure). WorkflowRunner.give_up/2
+  # proposes this after an orchestrator crash-loops past its retry budget,
+  # which can happen from any point in a workflow's lifecycle, not only the
+  # specific statuses WorkflowFailed's own transitions were designed around.
+  defp apply_event_helper(%Workflow{} = w, %Event.WorkflowAbandoned{} = e) do
+    case Workflow.terminal?(w) do
+      true ->
+        {:error, {:invalid_transition, w.status, Event.WorkflowAbandoned}}
+
+      _ ->
+        {:ok, %{w | status: :abandoned, error: e.reason, updated_at: e.timestamp}}
+    end
+  end
+
   defp apply_event_helper(workflow, event) do
     {:error, {:invalid_transition, workflow.status, event.__struct__}}
   end

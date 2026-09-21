@@ -2,7 +2,7 @@ defmodule Current.TaskDispatcher do
   use GenServer
   require Logger
 
-  alias Current.{EventStore, TaskStore, Workflow, WorkflowOrchestrator, WorkflowStore}
+  alias Current.{EventStore, Id, TaskStore, Workflow, WorkflowStore}
   alias Current.Event.TaskCreated
   alias Current.EventStore.Entry
 
@@ -23,14 +23,7 @@ defmodule Current.TaskDispatcher do
 
   @impl true
   def handle_call({:register_listener, task_id, pid}, _from, state) do
-    listeners =
-      Map.update(
-        state.listeners,
-        task_id,
-        MapSet.new([pid]),
-        &MapSet.put(&1, pid)
-      )
-
+    listeners = Map.update(state.listeners, task_id, MapSet.new([pid]), &MapSet.put(&1, pid))
     {:reply, :ok, %{state | listeners: listeners}}
   end
 
@@ -75,18 +68,25 @@ defmodule Current.TaskDispatcher do
 
   def handle_info(_message, state), do: {:noreply, state}
 
-  # `dispatched` closes the boot race: a TaskCreated committed after the
-  # subscribe in init/1 but before the scan above is seen by both paths.
   defp dispatch(%TaskCreated{task_id: task_id} = event, state) do
     if MapSet.member?(state.dispatched, task_id) do
       state
     else
       listeners = state.listeners |> Map.get(task_id, MapSet.new()) |> MapSet.to_list()
+      workflow_id = Id.generate()
+
+      task = %Current.Task{
+        id: event.task_id,
+        input: event.input,
+        context: event.context,
+        mode: event.mode,
+        submitted_at: event.submitted_at
+      }
 
       {:ok, _pid} =
         DynamicSupervisor.start_child(
           Current.WorkflowSupervisor,
-          {WorkflowOrchestrator, {event, listeners}}
+          {Current.WorkflowRunner, {workflow_id, task, listeners}}
         )
 
       %{
@@ -103,12 +103,10 @@ defmodule Current.TaskDispatcher do
         {:ok, _pid} =
           DynamicSupervisor.start_child(
             Current.WorkflowSupervisor,
-            {WorkflowOrchestrator, {:resume, workflow, task}}
+            {Current.WorkflowRunner, {workflow.id, task, []}}
           )
 
       {:error, :not_found} ->
-        # Workflow events that were proposed without a TaskCreated (tests do
-        # this) have nothing to resume from.
         Logger.warning(
           "not resuming workflow #{workflow.id} (#{workflow.status}): " <>
             "task #{workflow.task_id} not found"

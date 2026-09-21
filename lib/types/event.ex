@@ -17,6 +17,7 @@ defmodule Current.Event do
           | Current.Event.WorkflowResultAssembled.t()
           | Current.Event.WorkflowCompleted.t()
           | Current.Event.WorkflowFailed.t()
+          | Current.Event.WorkflowAbandoned.t()
 
   @known_modules [
     Current.Event.TaskCreated,
@@ -35,7 +36,8 @@ defmodule Current.Event do
     Current.Event.EffectApplicationComplete,
     Current.Event.WorkflowResultAssembled,
     Current.Event.WorkflowCompleted,
-    Current.Event.WorkflowFailed
+    Current.Event.WorkflowFailed,
+    Current.Event.WorkflowAbandoned
   ]
 
   @spec modules() :: [module()]

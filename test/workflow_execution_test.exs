@@ -54,10 +54,11 @@ defmodule Current.WorkflowExecutionTest do
   end
 
   test "a five-intent proposal produces one artifact per intent and completes" do
-    :persistent_term.put(:proposal_builder, Current.MultiIntentProposalBuilder)
+    previous_builder = Application.fetch_env!(:current, :proposal_builder)
+    :ok = Application.put_env(:current, :proposal_builder, Current.MultiIntentProposalBuilder)
 
     on_exit(fn ->
-      :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
+      :ok = Application.put_env(:current, :proposal_builder, previous_builder)
     end)
 
     {:ok, task_id, workflow_id, proposal} = submit_and_await_valid_proposal()
@@ -121,10 +122,11 @@ defmodule Current.WorkflowExecutionTest do
   end
 
   test "run_command output is stored as content-addressed artifacts and referenced by the workflow artifact" do
-    :persistent_term.put(:proposal_builder, Current.RunCommandProposalBuilder)
+    previous_builder = Application.fetch_env!(:current, :proposal_builder)
+    :ok = Application.put_env(:current, :proposal_builder, Current.RunCommandProposalBuilder)
 
     on_exit(fn ->
-      :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
+      :ok = Application.put_env(:current, :proposal_builder, previous_builder)
     end)
 
     {:ok, _task_id, workflow_id, proposal} = submit_and_await_valid_proposal()
@@ -147,11 +149,14 @@ defmodule Current.WorkflowExecutionTest do
   end
 
   test "effect application stops at the first failing intent and fails the workflow" do
-    :persistent_term.put(:proposal_builder, Current.SecondIntentFailsProposalBuilder)
+    previous_builder = Application.fetch_env!(:current, :proposal_builder)
+
+    :ok =
+      Application.put_env(:current, :proposal_builder, Current.SecondIntentFailsProposalBuilder)
 
     on_exit(fn ->
-      :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
-      :persistent_term.put(:effect_applicator, Current.EffectApplicator)
+      :ok =
+        Application.put_env(:current, :proposal_builder, previous_builder)
     end)
 
     {:ok, task_id, workflow_id, proposal} = submit_and_await_valid_proposal()

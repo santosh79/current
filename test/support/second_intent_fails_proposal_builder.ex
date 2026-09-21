@@ -19,7 +19,7 @@ defmodule Current.SecondIntentFailsProposalBuilder do
   end
 
   @impl true
-  def build(%Request{} = req, workflow_id) do
+  def build(%Request{} = req, workflow_id, _client_module) do
     unless Mix.env() == :test do
       raise "SecondIntentFailsProposalBuilder must only be used in test environment"
     end

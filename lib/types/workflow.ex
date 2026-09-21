@@ -29,6 +29,8 @@ defmodule Current.Workflow do
           | :invalid_mode
           | :rejected
           | :failed
+          | :proposal_production_failed
+          | :abandoned
 
   @statuses [
     :created,
@@ -43,7 +45,9 @@ defmodule Current.Workflow do
     :planned,
     :invalid_mode,
     :rejected,
-    :failed
+    :failed,
+    :proposal_production_failed,
+    :abandoned
   ]
 
   @spec statuses() :: [status()]
@@ -63,7 +67,7 @@ defmodule Current.Workflow do
           updated_at: DateTime.t() | nil,
           error: String.t() | nil
         }
-  @terminal_statuses [:completed, :planned, :rejected, :failed]
+  @terminal_statuses [:completed, :planned, :rejected, :failed, :abandoned]
 
   @spec terminal?(t()) :: boolean()
   def terminal?(%__MODULE__{status: status}), do: status in @terminal_statuses

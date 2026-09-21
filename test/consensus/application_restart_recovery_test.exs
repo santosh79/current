@@ -388,23 +388,32 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
   end
 
   test "a workflow interrupted while planning is resumed and completes" do
-    :persistent_term.put(:proposal_builder, Current.BlockingProposalBuilder)
-    on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
+    previous_builder = Application.fetch_env!(:current, :proposal_builder)
+
+    on_exit(fn ->
+      :ok = Application.put_env(:current, :proposal_builder, previous_builder)
+    end)
+
+    :ok = Application.put_env(:current, :proposal_builder, Current.BlockingProposalBuilder)
 
     {:ok, task_id} =
       Current.submit_task(%Request{input: "resume me", context: %{}, mode: :plan}, self())
 
     :ok = await_status(task_id, :planning)
 
-    :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
+    :ok = Application.put_env(:current, :proposal_builder, Current.FakeProposalBuilder)
     crash_log_and_await_runtime_rebuild()
 
     :ok = await_status(task_id, :planned)
   end
 
   test "a workflow interrupted mid effect application fails rather than re-applying effects" do
-    :persistent_term.put(:effect_applicator, Current.BlockingEffectApplicator)
-    on_exit(fn -> :persistent_term.put(:effect_applicator, Current.EffectApplicator) end)
+    previous_effect_applicator = Application.fetch_env!(:current, :effect_applicator)
+    :ok = Application.put_env(:current, :effect_applicator, Current.BlockingEffectApplicator)
+
+    on_exit(fn ->
+      :ok = Application.put_env(:current, :effect_applicator, previous_effect_applicator)
+    end)
 
     {:ok, task_id} = Current.submit_task(%Request{input: "resume me", context: %{}}, self())
     %{^task_id => workflow_id} = await_workflow_created_for([task_id])
@@ -413,7 +422,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     assert :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :recovery_test}})
     :ok = await_status(task_id, :applying)
 
-    :persistent_term.put(:effect_applicator, Current.EffectApplicator)
+    :ok = Application.put_env(:current, :effect_applicator, Current.EffectApplicator)
     crash_log_and_await_runtime_rebuild()
 
     :ok = await_status(task_id, :failed)
@@ -425,13 +434,16 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
   end
 
   test "an effect applied before a mid-effect-application crash is not re-applied on resume" do
-    :persistent_term.put(:proposal_builder, Current.MultiIntentProposalBuilder)
-    :persistent_term.put(:effect_applicator, Current.SteppingEffectApplicator)
+    previous_builder = Application.fetch_env!(:current, :proposal_builder)
+    previous_effect_applicator = Application.fetch_env!(:current, :effect_applicator)
+
+    :ok = Application.put_env(:current, :proposal_builder, Current.MultiIntentProposalBuilder)
+    :ok = Application.put_env(:current, :effect_applicator, Current.SteppingEffectApplicator)
     Process.register(self(), Current.SteppingEffectApplicator.controller_name())
 
     on_exit(fn ->
-      :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
-      :persistent_term.put(:effect_applicator, Current.EffectApplicator)
+      :ok = Application.put_env(:current, :proposal_builder, previous_builder)
+      :ok = Application.put_env(:current, :effect_applicator, previous_effect_applicator)
     end)
 
     {:ok, task_id} =
@@ -714,7 +726,6 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
       )
     end
   end
-
 
   test "a pre-versioning event on disk is upcast when EventStore rebuilds" do
     workflow_id = Id.generate()

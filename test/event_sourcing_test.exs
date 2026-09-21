@@ -97,10 +97,11 @@ defmodule Current.EventSourcingTest do
   end
 
   test "proposal validation failure projection equals replay" do
-    :persistent_term.put(:proposal_builder, Current.FaultyProposalBuilder)
+    previous_builder = Application.fetch_env!(:current, :proposal_builder)
+    :ok = Application.put_env(:current, :proposal_builder, Current.FaultyProposalBuilder)
 
     on_exit(fn ->
-      :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
+      :ok = Application.put_env(:current, :proposal_builder, previous_builder)
     end)
 
     {:ok, task_id} = Current.submit_task(request(), self())
