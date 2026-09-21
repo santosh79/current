@@ -617,7 +617,9 @@ defmodule Current.WorkflowReducerTest do
     :planned,
     :invalid_mode,
     :rejected,
-    :failed
+    :failed,
+    :proposal_production_failed,
+    :abandoned
   ]
 
   defp bare_workflow(fixture, status, mode \\ :apply) do
@@ -646,7 +648,20 @@ defmodule Current.WorkflowReducerTest do
     {Event.WorkflowResultAssembled, [:applying]},
     {Event.WorkflowCompleted, [:assembling_result]},
     {Event.WorkflowFailed,
-     [:invalid_mode, :validation_failed, :applying, :proposal_production_failed]}
+     [:invalid_mode, :validation_failed, :applying, :proposal_production_failed]},
+    {Event.WorkflowAbandoned,
+     [
+       :created,
+       :planning,
+       :validating,
+       :waiting_for_approval,
+       :validation_failed,
+       :approved,
+       :applying,
+       :assembling_result,
+       :invalid_mode,
+       :proposal_production_failed
+     ]}
   ]
 
   describe "transition legality: WorkflowCreated" do

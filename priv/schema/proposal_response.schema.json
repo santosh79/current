@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://current.internal/schema/proposal_response.schema.json",
+  "title": "Proposal response",
+  "description": "The wire shape an agent (LLM) must return when asked to produce a proposal. See docs/wire_schema.md for the human-readable version of this same contract -- keep the two in sync.",
+  "type": "object",
+  "required": ["intents"],
+  "properties": {
+    "justification": {
+      "type": "string"
+    },
+    "claims": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "intents": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/intent" }
+    }
+  },
+
+  "definitions": {
+    "intent": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "description": "Arbitrary caller-chosen name for this intent, resolvable later via a claim's evidence.source_intent_ref. Meaningful only within this one response."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "read_file",
+            "write_file",
+            "delete_file",
+            "file_patch",
+            "run_command",
+            "grep",
+            "glob",
+            "claim",
+            "report"
+          ]
+        }
+      },
+      "allOf": [
+        { "$ref": "#/definitions/intent_fields_by_type" }
+      ]
+    },
+
+    "intent_fields_by_type": {
+      "if": { "properties": { "type": { "const": "read_file" } } },
+      "then": { "$ref": "#/definitions/read_file" },
+      "else": {
+        "if": { "properties": { "type": { "const": "write_file" } } },
+        "then": { "$ref": "#/definitions/write_file" },
+        "else": {
+          "if": { "properties": { "type": { "const": "delete_file" } } },
+          "then": { "$ref": "#/definitions/delete_file" },
+          "else": {
+            "if": { "properties": { "type": { "const": "file_patch" } } },
+            "then": { "$ref": "#/definitions/file_patch" },
+            "else": {
+              "if": { "properties": { "type": { "const": "run_command" } } },
+              "then": { "$ref": "#/definitions/run_command" },
+              "else": {
+                "if": { "properties": { "type": { "const": "grep" } } },
+                "then": { "$ref": "#/definitions/grep" },
+                "else": {
+                  "if": { "properties": { "type": { "const": "glob" } } },
+                  "then": { "$ref": "#/definitions/glob" },
+                  "else": {
+                    "if": { "properties": { "type": { "const": "claim" } } },
+                    "then": { "$ref": "#/definitions/claim" },
+                    "else": {
+                      "if": { "properties": { "type": { "const": "report" } } },
+                      "then": { "$ref": "#/definitions/report" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "read_file": {
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" }
+      }
+    },
+
+    "write_file": {
+      "required": ["path", "contents"],
+      "properties": {
+        "path": { "type": "string" },
+        "contents": { "type": "string" }
+      }
+    },
+
+    "delete_file": {
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" }
+      }
+    },
+
+    "file_patch": {
+      "required": ["path", "diff"],
+      "properties": {
+        "path": { "type": "string" },
+        "diff": { "type": "string" }
+      }
+    },
+
+    "run_command": {
+      "required": ["cmd"],
+      "properties": {
+        "cmd": { "type": "string" },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "grep": {
+      "required": ["pattern", "paths"],
+      "properties": {
+        "pattern": { "type": "string" },
+        "paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "glob": {
+      "required": ["pattern"],
+      "properties": {
+        "pattern": { "type": "string" },
+        "base_dir": { "type": "string" }
+      }
+    },
+
+    "claim": {
+      "required": ["statement"],
+      "properties": {
+        "statement": { "type": "string" },
+        "evidence": { "$ref": "#/definitions/claim_evidence" }
+      }
+    },
+
+    "claim_evidence": {
+      "type": "object",
+      "required": ["source_intent_ref", "condition", "value"],
+      "properties": {
+        "source_intent_ref": { "type": "string" },
+        "condition": {
+          "type": "string",
+          "enum": [
+            "match_count_greater_than",
+            "match_count_equals",
+            "exit_code_equals"
+          ]
+        },
+        "value": {}
+      }
+    },
+
+    "report": {
+      "properties": {
+        "summary": { "type": "string" }
+      }
+    }
+  }
+}
+

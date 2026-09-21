@@ -24,10 +24,13 @@ defmodule Current.PlanModeTest do
   end
 
   test "plan mode with a proposal that would fail on effect application still completes as :planned" do
-    :persistent_term.put(:proposal_builder, Current.WouldFailOnApplyProposalBuilder)
+    previous_builder = Application.fetch_env!(:current, :proposal_builder)
+
+    :ok =
+      Application.put_env(:current, :proposal_builder, Current.WouldFailOnApplyProposalBuilder)
 
     on_exit(fn ->
-      :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
+      :ok = Application.put_env(:current, :proposal_builder, previous_builder)
     end)
 
     req = %Request{input: "add email validation", context: %{}, mode: :plan}

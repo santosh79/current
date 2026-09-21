@@ -199,10 +199,12 @@ defmodule CurrentTest do
 
   describe "workflow failure" do
     test "an invalid proposal fails the workflow" do
-      :persistent_term.put(:proposal_builder, Current.FaultyProposalBuilder)
+      previous_builder = Application.fetch_env!(:current, :proposal_builder)
+
+      :ok = Application.put_env(:current, :proposal_builder, Current.FaultyProposalBuilder)
 
       on_exit(fn ->
-        :persistent_term.put(:proposal_builder, Current.ProposalBuilder)
+        :ok = Application.put_env(:current, :proposal_builder, previous_builder)
       end)
 
       {:ok, task_id} = Current.submit_task(request(), self())
@@ -239,8 +241,14 @@ defmodule CurrentTest do
     end
 
     test "a proposal builder that returns an error fails the workflow" do
-      :persistent_term.put(:proposal_builder, Current.ErrorReturningProposalBuilder)
-      on_exit(fn -> :persistent_term.put(:proposal_builder, Current.ProposalBuilder) end)
+      previous_builder = Application.fetch_env!(:current, :proposal_builder)
+
+      :ok =
+        Application.put_env(:current, :proposal_builder, Current.ErrorReturningProposalBuilder)
+
+      on_exit(fn ->
+        :ok = Application.put_env(:current, :proposal_builder, previous_builder)
+      end)
 
       {:ok, task_id} = Current.submit_task(request(), self())
       reason = await_proposal_production_failure(task_id)
