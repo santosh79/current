@@ -3,6 +3,6 @@ defmodule Current.ErrorReturningProposalBuilder do
   alias Current.Error.ProposalProductionError
 
   @impl true
-  def build(_req, _workflow_id, _client_module),
+  def build(_req, _workflow_id, _client_module, _timeout_ms, _project_dir),
     do: {:error, %ProposalProductionError{stage: :connection, reason: :rate_limited}}
 end

@@ -15,7 +15,7 @@ defmodule Current.WouldFailOnApplyProposalBuilder do
   alias Current.{Id, Intent, Proposal, Request}
 
   @impl true
-  def build(%Request{} = req, workflow_id, _client_module) do
+  def build(%Request{} = req, workflow_id, _client_module, _timeout_ms, _project_dir) do
     unless Mix.env() == :test do
       raise "WouldFailOnApplyProposalBuilder must only be used in test environment"
     end
@@ -55,7 +55,7 @@ defmodule Current.WouldFailOnApplyProposalBuilder do
 
     dir =
       Path.join(
-        System.tmp_dir!(),
+        Current.TestTmp.dir(),
         "current_multi_#{suffix}"
       )
 

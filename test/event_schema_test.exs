@@ -96,6 +96,42 @@ defmodule Current.Event.SchemaTest do
       assert_raise Schema.UpcastError, fn -> Schema.migrate(Gap, raw) end
     end
 
+    test "a v1 TaskCreated (before project_dir existed) upcasts with project_dir nil, not a guess" do
+      now = DateTime.utc_now()
+
+      raw = %{
+        __struct__: Event.TaskCreated,
+        id: Id.generate(),
+        task_id: Id.generate(),
+        input: "old task",
+        context: %{},
+        mode: :plan,
+        submitted_at: now,
+        timestamp: now,
+        version: 1
+      }
+
+      assert %Event.TaskCreated{project_dir: nil, version: 2} =
+               Schema.migrate(Event.TaskCreated, raw)
+    end
+
+    test "a v2 TaskCreated keeps the project_dir it recorded" do
+      now = DateTime.utc_now()
+
+      event = %Event.TaskCreated{
+        id: Id.generate(),
+        task_id: Id.generate(),
+        input: "new task",
+        context: %{},
+        mode: :plan,
+        project_dir: "/srv/projects/app",
+        submitted_at: now,
+        timestamp: now
+      }
+
+      assert Schema.upcast(event) == event
+    end
+
     test "an additive version bump still requires an explicit identity upcast" do
       raw = %{__struct__: Additive, id: 123, version: 1}
       assert %Additive{id: 123, new_field: :default, version: 2} = Schema.migrate(Additive, raw)

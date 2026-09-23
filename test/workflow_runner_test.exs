@@ -9,6 +9,9 @@ defmodule Current.WorkflowRunnerTest do
       input: "test",
       context: %{},
       mode: mode,
+      # FakeProposalBuilder writes under the system tmp dir; the project
+      # must contain it or validation (correctly) rejects the proposal.
+      project_dir: Current.TestTmp.dir(),
       submitted_at: DateTime.utc_now()
     }
   end

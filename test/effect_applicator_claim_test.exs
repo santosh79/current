@@ -3,7 +3,7 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
 
   alias Current.{EffectApplicator, Id, Intent}
 
-  describe "apply/2 - claim (stage 0: expected boolean)" do
+  describe "apply/3 - claim (stage 0: expected boolean)" do
     test "when no evidence is supplied it returns error" do
       intent_missing_evidence = %Intent.Claim{
         id: Id.generate(),
@@ -16,11 +16,11 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
       prior_results = []
 
       assert {:error, "claim requires evidence"} =
-               EffectApplicator.apply(intent_missing_evidence, prior_results)
+               EffectApplicator.apply(intent_missing_evidence, prior_results, "/")
     end
   end
 
-  describe "apply/2 - claim (stage 1: evidence against prior results)" do
+  describe "apply/3 - claim (stage 1: evidence against prior results)" do
     test "verifies grep match count greater than 0 when matches exist" do
       grep_intent = %Intent.Grep{
         id: Id.generate(),
@@ -49,7 +49,7 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         expected: nil
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, prior_results)
+      assert {:ok, result} = EffectApplicator.apply(intent, prior_results, "/")
 
       assert %Current.EffectResult.Claim{} = result
       assert result.verified == true
@@ -90,7 +90,7 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         expected: nil
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, prior_results)
+      assert {:ok, result} = EffectApplicator.apply(intent, prior_results, "/")
       assert result.verified == false
       assert result.reason =~ "0 match"
     end
@@ -125,7 +125,7 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         expected: nil
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, prior_results)
+      assert {:ok, result} = EffectApplicator.apply(intent, prior_results, "/")
       assert result.verified == true
       assert result.reason =~ "exited with 0"
     end
@@ -145,7 +145,7 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         expected: nil
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
 
       assert reason =~ missing_intent_id
       assert reason =~ "no such intent result found"
@@ -178,7 +178,7 @@ defmodule Current.EffectApplicatorTest.ClaimTest do
         expected: nil
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, prior_results)
+      assert {:error, reason} = EffectApplicator.apply(intent, prior_results, "/")
       assert reason =~ "not supported"
     end
   end

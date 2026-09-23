@@ -1,6 +1,26 @@
 defmodule Current.EffectApplicator do
-  import Kernel, except: [apply: 2]
-  alias Current.Intent
+  @moduledoc """
+  Performs one intent's side effect.
+
+  `project_dir` is the authoritative boundary. Immediately before any
+  filesystem access, every path the intent names must be absolute and --
+  with all symlinks that exist *right now* followed -- inside
+  `project_dir` (see Current.IntentPaths.resolved_violation/2). That is
+  re-checked here even though IntentValidator already checked it
+  lexically, because approval can come long after validation and the
+  filesystem can change in between.
+
+  Paths are never resolved here: WorkflowOrchestrator makes them
+  absolute before the proposal is recorded, so a relative path arriving
+  here is a bug upstream and is rejected, not guessed at.
+
+  RunCommand runs with `project_dir` as its working directory. Its
+  arguments are not path-checked -- a command can still reach outside the
+  project by itself; only a sandbox can bound that.
+  """
+
+  import Kernel, except: [apply: 3]
+  alias Current.{Intent, IntentPaths}
 
   @type result ::
           Current.EffectResult.FilePatch.t()
@@ -13,14 +33,27 @@ defmodule Current.EffectApplicator do
           | Current.EffectResult.Claim.t()
           | Current.EffectResult.Report.t()
 
-  def apply(intent) do
-    __MODULE__.apply(intent, [])
+  @callback apply(Intent.t(), [{Intent.t(), result()}], project_dir :: Path.t()) ::
+              {:ok, result()} | {:error, String.t()}
+
+  @spec apply(Intent.t(), [{Intent.t(), result()}], Path.t()) ::
+          {:ok, result()} | {:error, String.t()}
+  def apply(intent, prior_results, project_dir) when is_binary(project_dir) do
+    case IntentPaths.resolved_violation(intent, project_dir) do
+      nil ->
+        do_apply(intent, prior_results, project_dir)
+
+      {field, path, problem} ->
+        {:error, "refusing to apply: #{field} #{inspect(path)} #{describe(problem)}"}
+    end
   end
 
-  @callback apply(Intent.t(), [{Intent.t(), result()}]) :: {:ok, result()} | {:error, String.t()}
-  @spec apply(Intent.t(), [{Intent.t(), result()}]) :: {:ok, result()} | {:error, String.t()}
+  defp describe(:not_absolute), do: "is not an absolute path"
+  defp describe(:outside_project_dir), do: "resolves outside the project directory"
+  defp describe(:parent_segment), do: "must not contain '..'"
+  defp describe(:too_many_links), do: "has too many levels of symbolic links"
 
-  def apply(%Current.Intent.FilePatch{} = intent, _prior_results) do
+  defp do_apply(%Current.Intent.FilePatch{} = intent, _prior_results, _project_dir) do
     path = intent.path
 
     case File.exists?(path) do
@@ -38,7 +71,7 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Current.Intent.ReadFile{} = intent, _prior_results) do
+  defp do_apply(%Current.Intent.ReadFile{} = intent, _prior_results, _project_dir) do
     case File.read(intent.path) do
       {:ok, contents} ->
         {:ok, artifact_id} = Current.BlobStore.put(contents)
@@ -58,7 +91,7 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Current.Intent.WriteFile{} = intent, _prior_results) do
+  defp do_apply(%Current.Intent.WriteFile{} = intent, _prior_results, _project_dir) do
     case File.exists?(intent.path) do
       true ->
         {:error, "file already exists: #{intent.path}"}
@@ -81,7 +114,7 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Current.Intent.DeleteFile{} = intent, _prior_results) do
+  defp do_apply(%Current.Intent.DeleteFile{} = intent, _prior_results, _project_dir) do
     case File.dir?(intent.path) do
       true ->
         {:error, "delete_file failed for #{intent.path}: not a regular file"}
@@ -113,14 +146,14 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Current.Intent.RunCommand{} = intent, _prior_results) do
+  defp do_apply(%Current.Intent.RunCommand{} = intent, _prior_results, project_dir) do
     cmd = intent.cmd
     args = intent.args
     stdout_path = temp_path("stdout")
     stderr_path = temp_path("stderr")
 
     try do
-      case run_command_with_redirect(cmd, args, stdout_path, stderr_path) do
+      case run_command_with_redirect(cmd, args, stdout_path, stderr_path, project_dir) do
         {:ok, exit_code} ->
           stdout = File.read!(stdout_path)
           stderr = File.read!(stderr_path)
@@ -146,7 +179,7 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Current.Intent.Glob{} = intent, _prior_results) do
+  defp do_apply(%Current.Intent.Glob{} = intent, _prior_results, project_dir) do
     pattern = intent.pattern
     base_dir = intent.base_dir
 
@@ -158,7 +191,13 @@ defmodule Current.EffectApplicator do
         {:error, "directory not found: #{base_dir}"}
 
       true ->
-        matches = Path.join(base_dir, pattern) |> Path.wildcard() |> Enum.sort()
+        # Traversing a symlinked directory can yield matches outside the
+        # project even though base_dir itself is inside; drop those.
+        matches =
+          Path.join(base_dir, pattern)
+          |> Path.wildcard()
+          |> Enum.filter(&(IntentPaths.resolved_within(&1, project_dir) == :ok))
+          |> Enum.sort()
         encoded = :erlang.term_to_binary(matches)
         {:ok, matches_artifact_id} = Current.BlobStore.put(encoded)
 
@@ -170,7 +209,7 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Current.Intent.Grep{} = intent, _prior_results) do
+  defp do_apply(%Current.Intent.Grep{} = intent, _prior_results, _project_dir) do
     paths = intent.paths
     pattern = intent.pattern
 
@@ -209,11 +248,11 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%Current.Intent.Report{} = _intent, _prior_results) do
+  defp do_apply(%Current.Intent.Report{} = _intent, _prior_results, _project_dir) do
     {:ok, %Current.EffectResult.Report{generated: true}}
   end
 
-  def apply(%Current.Intent.Claim{} = intent, prior_results) do
+  defp do_apply(%Current.Intent.Claim{} = intent, prior_results, _project_dir) do
     case intent.evidence do
       nil ->
         {:error, "claim requires evidence"}
@@ -223,11 +262,11 @@ defmodule Current.EffectApplicator do
     end
   end
 
-  def apply(%{__struct__: mod} = _intent, _prior_results),
+  defp do_apply(%{__struct__: mod} = _intent, _prior_results, _project_dir),
     do: {:error, "unsupported intent type: #{mod}"}
 
-  defp run_command_with_redirect(cmd, args, stdout_path, stderr_path) do
-    executable = System.find_executable(cmd)
+  defp run_command_with_redirect(cmd, args, stdout_path, stderr_path, project_dir) do
+    executable = System.find_executable(command_path(cmd, project_dir))
 
     case executable do
       nil ->
@@ -242,7 +281,8 @@ defmodule Current.EffectApplicator do
           System.cmd(
             "bash",
             ["-c", script, "current-runner", executable, stdout_path, stderr_path | args],
-            stderr_to_stdout: true
+            stderr_to_stdout: true,
+            cd: project_dir
           )
 
         {:ok, exit_code}
@@ -250,6 +290,14 @@ defmodule Current.EffectApplicator do
   rescue
     e ->
       {:error, "command failed: #{Exception.message(e)}"}
+  end
+
+  # A bare name ("mix") is looked up on PATH as before. A relative path
+  # ("bin/setup") means relative to the project, not to this node's cwd.
+  defp command_path(cmd, project_dir) do
+    if String.contains?(cmd, "/") and Path.type(cmd) == :relative,
+      do: Path.expand(cmd, project_dir),
+      else: cmd
   end
 
   defp temp_path(label) do

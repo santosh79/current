@@ -2,14 +2,17 @@ defmodule Current.FakeProposalBuilder do
   @behaviour Current.ProposalBuilder
 
   @impl true
-  @spec build(Request.t(), Current.Id.t(), module()) ::
+  @spec build(Request.t(), Current.Id.t(), module(), pos_integer(), Path.t() | nil) ::
           {:ok, Proposal.t()}
           | {:ok, Proposal.t(), Current.Id.t()}
           | {:error, ProposalProductionError.t()}
-  def build(%Current.Request{} = req, workflow_id, _module) do
+  def build(%Current.Request{} = req, workflow_id, _module, _timeout_ms, _project_dir) do
     proposal_id = Current.Id.generate()
 
-    dir = Path.join(System.tmp_dir!(), "current_proposal_#{System.unique_integer([:positive])}")
+    # Canonical, like the project_dir submit_task records for the tmp dir
+    # (on macOS System.tmp_dir!() is under /var, a symlink to /private/var).
+    {:ok, tmp} = Current.IntentPaths.realpath(Path.expand(System.tmp_dir!()))
+    dir = Path.join(tmp, "current_proposal_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     path = Path.join(dir, "signup.ex")
     File.write!(path, "defmodule Signup do\nend\n")

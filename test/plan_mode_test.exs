@@ -7,7 +7,7 @@ defmodule Current.PlanModeTest do
 
   test "plan mode with a valid proposal completes as :planned" do
     req = %Request{input: "add email validation", context: %{}, mode: :plan}
-    {:ok, task_id} = Current.submit_task(req, self())
+    {:ok, task_id} = Current.submit_task(req, self(), System.tmp_dir!())
 
     receive do
       {:workflow_completed, %Event.WorkflowCompleted{}} ->
@@ -34,7 +34,7 @@ defmodule Current.PlanModeTest do
     end)
 
     req = %Request{input: "add email validation", context: %{}, mode: :plan}
-    {:ok, task_id} = Current.submit_task(req, self())
+    {:ok, task_id} = Current.submit_task(req, self(), System.tmp_dir!())
 
     workflow_id =
       receive do

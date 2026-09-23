@@ -10,7 +10,7 @@ defmodule Current.SecondIntentFailsProposalBuilder do
 
     dir =
       Path.join(
-        System.tmp_dir!(),
+        Current.TestTmp.dir(),
         "current_multi_#{suffix}"
       )
 
@@ -19,7 +19,7 @@ defmodule Current.SecondIntentFailsProposalBuilder do
   end
 
   @impl true
-  def build(%Request{} = req, workflow_id, _client_module) do
+  def build(%Request{} = req, workflow_id, _client_module, _timeout_ms, _project_dir) do
     unless Mix.env() == :test do
       raise "SecondIntentFailsProposalBuilder must only be used in test environment"
     end

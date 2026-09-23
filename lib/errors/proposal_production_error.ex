@@ -2,7 +2,7 @@ defmodule Current.Error.ProposalProductionError do
   @enforce_keys [:stage, :reason]
   defstruct [:stage, :reason, :raw_output_blob_id]
 
-  @type stage :: :connection | :timeout | :decode | nil
+  @type stage :: :project_context | :connection | :timeout | :decode | nil
 
   @type t :: %__MODULE__{
           stage: stage(),
@@ -18,6 +18,9 @@ defmodule Current.Error.ProposalProductionError do
   """
   @spec message(t() | nil) :: String.t()
   def message(nil), do: "proposal production failed"
+
+  def message(%__MODULE__{stage: :project_context, reason: reason}),
+    do: "could not read the project directory: #{inspect(reason)}"
 
   def message(%__MODULE__{stage: :connection, reason: reason}),
     do: "could not connect to the model: #{inspect(reason)}"

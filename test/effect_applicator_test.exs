@@ -3,7 +3,11 @@ defmodule Current.EffectApplicatorTest do
 
   alias Current.{EffectApplicator, Id, Intent}
 
-  describe "apply/2 - file_patch" do
+  # Most tests below pass "/" as project_dir so the boundary check is
+  # trivially satisfied and only the intent's own behaviour is under test.
+  # The boundary itself is covered in "apply/3 - project_dir boundary".
+
+  describe "apply/3 - file_patch" do
     setup do
       dir = System.tmp_dir!() |> Path.join("effect_applicator_test_#{:rand.uniform(1_000_000)}")
       File.mkdir_p!(dir)
@@ -39,7 +43,7 @@ defmodule Current.EffectApplicatorTest do
       assert !String.contains?(File.read!(path), "def validate_email")
 
       assert {:ok, %Current.EffectResult.FilePatch{} = result} =
-               EffectApplicator.apply(intent, [])
+               EffectApplicator.apply(intent, [], "/")
 
       assert result.path == path
       assert File.read!(path) =~ "def validate_email"
@@ -57,7 +61,7 @@ defmodule Current.EffectApplicatorTest do
         diff_artifact_id: diff_artifact_id
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "not found" or reason =~ "no such file"
     end
 
@@ -73,11 +77,11 @@ defmodule Current.EffectApplicatorTest do
         diff_artifact_id: diff_artifact_id
       }
 
-      assert {:error, _reason} = EffectApplicator.apply(intent, [])
+      assert {:error, _reason} = EffectApplicator.apply(intent, [], "/")
     end
   end
 
-  describe "apply/2 - run_command" do
+  describe "apply/3 - run_command" do
     test "executes command and captures stdout" do
       intent = %Intent.RunCommand{
         id: Id.generate(),
@@ -86,7 +90,7 @@ defmodule Current.EffectApplicatorTest do
         args: ["hello"]
       }
 
-      assert {:ok, %Current.EffectResult.Command{} = result} = EffectApplicator.apply(intent, [])
+      assert {:ok, %Current.EffectResult.Command{} = result} = EffectApplicator.apply(intent, [], "/")
       assert result.exit_code == 0
       assert result.stdout_bytes > 0
 
@@ -103,7 +107,7 @@ defmodule Current.EffectApplicatorTest do
         args: ["/path/to/unknown/file"]
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       assert result.exit_code > 0
       assert result.stderr_bytes > 0
 
@@ -120,7 +124,7 @@ defmodule Current.EffectApplicatorTest do
         args: []
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       assert result.exit_code != 0
       assert result.stderr_bytes == 0
     end
@@ -133,12 +137,12 @@ defmodule Current.EffectApplicatorTest do
         args: []
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "not found"
     end
   end
 
-  describe "apply/2 - read_file" do
+  describe "apply/3 - read_file" do
     setup do
       dir =
         System.tmp_dir!()
@@ -160,7 +164,7 @@ defmodule Current.EffectApplicatorTest do
         path: path
       }
 
-      assert {:ok, %Current.EffectResult.ReadFile{} = result} = EffectApplicator.apply(intent, [])
+      assert {:ok, %Current.EffectResult.ReadFile{} = result} = EffectApplicator.apply(intent, [], "/")
       assert result.path == path
 
       assert is_binary(result.contents_artifact_id)
@@ -181,13 +185,13 @@ defmodule Current.EffectApplicatorTest do
         path: path
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "not found"
       assert reason =~ path
     end
   end
 
-  describe "apply/2 - write_file" do
+  describe "apply/3 - write_file" do
     setup do
       dir =
         System.tmp_dir!()
@@ -210,7 +214,7 @@ defmodule Current.EffectApplicatorTest do
       }
 
       assert {:ok, %Current.EffectResult.WriteFile{} = result} =
-               EffectApplicator.apply(intent, [])
+               EffectApplicator.apply(intent, [], "/")
 
       assert result.path == path
       assert File.exists?(path)
@@ -231,13 +235,13 @@ defmodule Current.EffectApplicatorTest do
         contents_artifact_id: contents_artifact_id
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "already exists"
       assert File.read!(path) == "original"
     end
   end
 
-  describe "apply/2 - delete_file" do
+  describe "apply/3 - delete_file" do
     setup do
       dir =
         System.tmp_dir!()
@@ -258,7 +262,7 @@ defmodule Current.EffectApplicatorTest do
         path: path
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       assert %Current.EffectResult.DeleteFile{} = result
       assert result.path == path
       refute File.exists?(path)
@@ -274,7 +278,7 @@ defmodule Current.EffectApplicatorTest do
         path: path
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       assert %Current.EffectResult.DeleteFile{} = result
       assert result.path == path
       refute File.exists?(path)
@@ -290,13 +294,13 @@ defmodule Current.EffectApplicatorTest do
         path: path
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "not a regular file"
       assert File.dir?(path)
     end
   end
 
-  describe "apply/2 - grep" do
+  describe "apply/3 - grep" do
     setup do
       dir =
         System.tmp_dir!()
@@ -324,7 +328,7 @@ defmodule Current.EffectApplicatorTest do
         paths: [path]
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       assert %Current.EffectResult.Grep{} = result
       matches = fetch_matches(result.matches_artifact_id)
       assert matches == []
@@ -346,7 +350,7 @@ defmodule Current.EffectApplicatorTest do
         paths: [path]
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       matches = fetch_matches(result.matches_artifact_id)
 
       assert [
@@ -366,7 +370,7 @@ defmodule Current.EffectApplicatorTest do
         paths: [path]
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       matches = fetch_matches(result.matches_artifact_id)
 
       assert [
@@ -388,12 +392,12 @@ defmodule Current.EffectApplicatorTest do
         paths: [path]
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "not found"
     end
   end
 
-  describe "apply/2 - glob" do
+  describe "apply/3 - glob" do
     setup do
       dir =
         System.tmp_dir!()
@@ -416,7 +420,7 @@ defmodule Current.EffectApplicatorTest do
         base_dir: dir
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       matches = fetch_matches(result.matches_artifact_id)
       assert %Current.EffectResult.Glob{} = result
       assert length(matches) == 2
@@ -434,7 +438,7 @@ defmodule Current.EffectApplicatorTest do
         base_dir: dir
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       matches = fetch_matches(result.matches_artifact_id)
       assert matches == []
     end
@@ -452,7 +456,7 @@ defmodule Current.EffectApplicatorTest do
         base_dir: dir
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       matches = fetch_matches(result.matches_artifact_id)
       assert length(matches) == 2
       assert Path.join(dir, "top.ex") in matches
@@ -469,7 +473,7 @@ defmodule Current.EffectApplicatorTest do
         base_dir: missing
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "not found"
     end
 
@@ -484,7 +488,7 @@ defmodule Current.EffectApplicatorTest do
         base_dir: dir
       }
 
-      assert {:ok, result} = EffectApplicator.apply(intent, [])
+      assert {:ok, result} = EffectApplicator.apply(intent, [], "/")
       matches = fetch_matches(result.matches_artifact_id)
       assert matches == [Path.join(dir, "a.ex"), Path.join(dir, "z.ex")]
     end
@@ -497,7 +501,7 @@ defmodule Current.EffectApplicatorTest do
         base_dir: dir
       }
 
-      assert {:error, reason} = EffectApplicator.apply(intent, [])
+      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "relative"
     end
   end
@@ -517,5 +521,115 @@ defmodule Current.EffectApplicatorTest do
   defp fetch_matches(artifact_id) do
     {:ok, encoded} = Current.BlobStore.read(artifact_id)
     :erlang.binary_to_term(encoded)
+  end
+
+  describe "apply/3 - project_dir boundary" do
+    setup do
+      base = Path.join(System.tmp_dir!(), "ea_boundary_#{System.unique_integer([:positive])}")
+      project = Path.join(base, "project")
+      outside = Path.join(base, "outside")
+      File.mkdir_p!(Path.join(project, "lib"))
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.txt"), "top secret\n")
+      on_exit(fn -> File.rm_rf!(base) end)
+      %{project: project, outside: outside}
+    end
+
+    defp read_intent(path),
+      do: %Intent.ReadFile{id: Id.generate(), proposal_id: Id.generate(), path: path}
+
+    test "reads a file inside the project", %{project: project} do
+      path = Path.join(project, "lib/a.ex")
+      File.write!(path, "ok")
+      assert {:ok, _} = EffectApplicator.apply(read_intent(path), [], project)
+    end
+
+    test "refuses a path that is lexically outside", %{project: project, outside: outside} do
+      path = Path.join(outside, "secret.txt")
+
+      assert {:error, reason} = EffectApplicator.apply(read_intent(path), [], project)
+      assert reason =~ "resolves outside the project directory"
+    end
+
+    test "refuses a path that is only outside once a symlink is followed",
+         %{project: project, outside: outside} do
+      File.ln_s!(outside, Path.join(project, "lib/vendor"))
+      path = Path.join(project, "lib/vendor/secret.txt")
+
+      assert {:error, reason} = EffectApplicator.apply(read_intent(path), [], project)
+      assert reason =~ "resolves outside the project directory"
+    end
+
+    test "refuses to write through a symlinked directory that points outside",
+         %{project: project, outside: outside} do
+      File.ln_s!(outside, Path.join(project, "out"))
+      {:ok, blob} = Current.BlobStore.put("pwned")
+
+      intent = %Intent.WriteFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: Path.join(project, "out/new.txt"),
+        contents_artifact_id: blob
+      }
+
+      assert {:error, _reason} = EffectApplicator.apply(intent, [], project)
+      refute File.exists?(Path.join(outside, "new.txt"))
+    end
+
+    test "refuses a relative path instead of resolving it", %{project: project} do
+      assert {:error, reason} = EffectApplicator.apply(read_intent("lib/a.ex"), [], project)
+      assert reason =~ "is not an absolute path"
+    end
+
+    test "a symlink loop is an error, not a hang", %{project: project} do
+      File.ln_s!("b", Path.join(project, "a"))
+      File.ln_s!("a", Path.join(project, "b"))
+
+      assert {:error, reason} =
+               EffectApplicator.apply(read_intent(Path.join(project, "a/x")), [], project)
+
+      assert reason =~ "too many levels of symbolic links"
+    end
+
+    test "glob drops matches reached through a symlink that points outside",
+         %{project: project, outside: outside} do
+      File.write!(Path.join(project, "lib/inside.txt"), "")
+      File.ln_s!(outside, Path.join(project, "lib/vendor"))
+
+      intent = %Intent.Glob{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "lib/*/*.txt",
+        base_dir: project
+      }
+
+      assert {:ok, %{match_count: 0}} = EffectApplicator.apply(intent, [], project)
+
+      inside = %{intent | pattern: "lib/*.txt"}
+      assert {:ok, %{match_count: 1}} = EffectApplicator.apply(inside, [], project)
+    end
+
+    test "run_command runs with project_dir as its working directory", %{project: project} do
+      intent = %Intent.RunCommand{id: Id.generate(), proposal_id: Id.generate(), cmd: "pwd"}
+
+      assert {:ok, result} = EffectApplicator.apply(intent, [], project)
+      {:ok, stdout_path} = Current.BlobStore.path_for(result.stdout_artifact_id)
+      {:ok, real_project} = Current.IntentPaths.realpath(project)
+      assert String.trim(File.read!(stdout_path)) in [project, real_project]
+    end
+
+    test "run_command resolves a relative command path against project_dir",
+         %{project: project} do
+      script = Path.join(project, "bin/hello")
+      File.mkdir_p!(Path.dirname(script))
+      File.write!(script, "#!/bin/sh\necho from-project\n")
+      File.chmod!(script, 0o755)
+
+      intent = %Intent.RunCommand{id: Id.generate(), proposal_id: Id.generate(), cmd: "bin/hello"}
+
+      assert {:ok, result} = EffectApplicator.apply(intent, [], project)
+      {:ok, stdout_path} = Current.BlobStore.path_for(result.stdout_artifact_id)
+      assert File.read!(stdout_path) =~ "from-project"
+    end
   end
 end

@@ -3,6 +3,7 @@ defmodule Current do
     Event,
     EventStore,
     Id,
+    IntentPaths,
     ProposalStore,
     Request,
     TaskDispatcher,
@@ -14,10 +15,65 @@ defmodule Current do
           {:approve, metadata :: map()}
           | {:reject, metadata :: map()}
 
-  @spec submit_task(Request.t(), pid()) ::
+  @doc """
+  Submits a task for `project_dir` (default: the current working
+  directory).
+
+  The directory is resolved once, here, to its canonical physical path:
+  absolute, every symlink followed, and required to exist as a directory.
+  That is what TaskCreated records, so the recorded execution context
+  means the same thing on replay whatever happens later to the node's
+  working directory or to any symlink that was used to name it. (If the
+  directory itself is later moved or removed, the workflow fails rather
+  than following it.)
+
+  `project_dir` is execution context, not request content, so it is an
+  argument here rather than a `Request` field: this is its only entry
+  point. It is recorded on TaskCreated, and WorkflowOrchestrator passes
+  that recorded value to the proposal builder, IntentValidator and
+  EffectApplicator.
+
+  A `project_dir` that contains any `..` segment, isn't a directory, or
+  can't be resolved (a symlink loop) is rejected before anything is
+  registered or recorded.
+  """
+  @spec submit_task(Request.t(), pid(), Path.t()) ::
           {:ok, Current.Id.t()}
-  def submit_task(%Request{} = req, caller_pid)
-      when is_pid(caller_pid) do
+          | {:error,
+             {:invalid_project_dir, Path.t(),
+              :parent_segment | :not_a_directory | :too_many_links}}
+          | {:error, term()}
+  def submit_task(%Request{} = req, caller_pid, project_dir \\ ".")
+      when is_pid(caller_pid) and is_binary(project_dir) do
+    with :ok <- validate_project_dir(project_dir),
+         {:ok, canonical} <- canonical_project_dir(project_dir) do
+      do_submit_task(req, caller_pid, canonical)
+    end
+  end
+
+  # realpath/1 keeps components that don't exist yet (right for a file
+  # about to be written), so existence is checked separately.
+  defp canonical_project_dir(project_dir) do
+    case IntentPaths.realpath(Path.expand(project_dir)) do
+      {:ok, canonical} ->
+        if File.dir?(canonical),
+          do: {:ok, canonical},
+          else: {:error, {:invalid_project_dir, project_dir, :not_a_directory}}
+
+      {:error, :too_many_links} ->
+        {:error, {:invalid_project_dir, project_dir, :too_many_links}}
+    end
+  end
+
+  defp validate_project_dir(project_dir) do
+    if IntentPaths.parent_segment?(project_dir) do
+      {:error, {:invalid_project_dir, project_dir, :parent_segment}}
+    else
+      :ok
+    end
+  end
+
+  defp do_submit_task(req, caller_pid, project_dir) do
     task_id = Id.generate()
     now = DateTime.utc_now()
 
@@ -33,6 +89,7 @@ defmodule Current do
       input: req.input,
       context: req.context,
       mode: req.mode,
+      project_dir: project_dir,
       submitted_at: now,
       timestamp: now
     }

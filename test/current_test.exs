@@ -15,7 +15,7 @@ defmodule CurrentTest do
   end
 
   defp submit_and_await_valid_proposal do
-    {:ok, task_id} = Current.submit_task(request(), self())
+    {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
     workflow_id =
       receive do
@@ -49,9 +49,9 @@ defmodule CurrentTest do
     {:ok, task_id, workflow_id, proposal}
   end
 
-  describe "submit_task/2" do
+  describe "submit_task/3" do
     test "creates a workflow that is queryable through the public API" do
-      {:ok, task_id} = Current.submit_task(request(), self())
+      {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
       receive do
         {:workflow_created, %Event.WorkflowCreated{task_id: ^task_id, workflow_id: workflow_id}} ->
@@ -65,6 +65,98 @@ defmodule CurrentTest do
         @receive_timeout ->
           flunk("did not receive workflow_created")
       end
+    end
+
+    test "defaults project_dir to the working directory, recorded canonically" do
+      {:ok, task_id} = Current.submit_task(request(), self())
+      await_workflow_created(task_id)
+
+      assert {:ok, %Current.Task{project_dir: project_dir}} = Current.Task.get(task_id)
+      assert {:ok, project_dir} == Current.IntentPaths.realpath(File.cwd!())
+    end
+
+    test "resolves an explicit relative project_dir at submission time" do
+      {:ok, task_id} = Current.submit_task(request(), self(), "lib")
+      await_workflow_created(task_id)
+
+      assert {:ok, %Current.Task{project_dir: project_dir}} = Current.Task.get(task_id)
+      assert {:ok, project_dir} == Current.IntentPaths.realpath(Path.join(File.cwd!(), "lib"))
+    end
+
+    test "records the physical directory, not the symlink used to name it" do
+      base = Path.join(Current.TestTmp.dir(), "current_link_#{System.unique_integer([:positive])}")
+      real = Path.join(base, "real_project")
+      link = Path.join(base, "app")
+      File.mkdir_p!(real)
+      File.ln_s!(real, link)
+      on_exit(fn -> File.rm_rf!(base) end)
+
+      {:ok, task_id} = Current.submit_task(request(), self(), link)
+      await_workflow_created(task_id)
+
+      assert {:ok, %Current.Task{project_dir: ^real}} = Current.Task.get(task_id)
+
+      # Repointing the symlink afterwards changes nothing about the task.
+      other = Path.join(base, "other_project")
+      File.mkdir_p!(other)
+      File.rm!(link)
+      File.ln_s!(other, link)
+
+      assert {:ok, %Current.Task{project_dir: ^real}} = Current.Task.get(task_id)
+    end
+
+    test "rejects a project_dir that doesn't exist or isn't a directory" do
+      missing = Path.join(Current.TestTmp.dir(), "current_missing_#{System.unique_integer([:positive])}")
+
+      assert {:error, {:invalid_project_dir, ^missing, :not_a_directory}} =
+               Current.submit_task(request(), self(), missing)
+
+      file = missing <> ".txt"
+      File.write!(file, "")
+      on_exit(fn -> File.rm(file) end)
+
+      assert {:error, {:invalid_project_dir, ^file, :not_a_directory}} =
+               Current.submit_task(request(), self(), file)
+
+      refute_receive {:workflow_created, _}, 200
+    end
+
+    test "rejects a project_dir that is a symlink loop" do
+      base = Path.join(Current.TestTmp.dir(), "current_loop_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(base)
+      File.ln_s!("b", Path.join(base, "a"))
+      File.ln_s!("a", Path.join(base, "b"))
+      on_exit(fn -> File.rm_rf!(base) end)
+
+      loop = Path.join(base, "a")
+
+      assert {:error, {:invalid_project_dir, ^loop, :too_many_links}} =
+               Current.submit_task(request(), self(), loop)
+    end
+
+    test "rejects a project_dir containing '..' without recording anything" do
+      for dir <- ["..", "../../etc", "lib/../..", "/srv/app/../../etc", "lib/.."] do
+        assert {:error, {:invalid_project_dir, ^dir, :parent_segment}} =
+                 Current.submit_task(request(), self(), dir)
+      end
+
+      refute_receive {:workflow_created, _}, 200
+    end
+
+    test "does not mistake a name that merely contains dots for '..'" do
+      dir = Path.join(System.tmp_dir!(), "current..dots_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      assert {:ok, _task_id} = Current.submit_task(request(), self(), dir)
+    end
+  end
+
+  defp await_workflow_created(task_id) do
+    receive do
+      {:workflow_created, %Event.WorkflowCreated{task_id: ^task_id}} -> :ok
+    after
+      @receive_timeout -> flunk("did not receive workflow_created")
     end
   end
 
@@ -168,7 +260,7 @@ defmodule CurrentTest do
 
     test "reviewing a plan-mode proposal returns an invalid transition error" do
       req = %Request{input: "add email validation", context: %{}, mode: :plan}
-      {:ok, task_id} = Current.submit_task(req, self())
+      {:ok, task_id} = Current.submit_task(req, self(), System.tmp_dir!())
 
       workflow_id =
         receive do
@@ -207,7 +299,7 @@ defmodule CurrentTest do
         :ok = Application.put_env(:current, :proposal_builder, previous_builder)
       end)
 
-      {:ok, task_id} = Current.submit_task(request(), self())
+      {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
       workflow_id =
         receive do
@@ -250,7 +342,7 @@ defmodule CurrentTest do
         :ok = Application.put_env(:current, :proposal_builder, previous_builder)
       end)
 
-      {:ok, task_id} = Current.submit_task(request(), self())
+      {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
       reason = await_proposal_production_failure(task_id)
       assert reason =~ "rate_limited"
     end

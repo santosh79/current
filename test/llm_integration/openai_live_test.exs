@@ -5,6 +5,8 @@ defmodule Current.LLMIntegration.OpenAILiveTest do
 
   @moduletag :live_llm
 
+  @timeout_ms 240_000
+
   setup do
     previous_client = Application.fetch_env!(:current, :llm_client)
 
@@ -33,7 +35,9 @@ defmodule Current.LLMIntegration.OpenAILiveTest do
              LLMProposalBuilder.build(
                request,
                workflow_id,
-               Current.LLMClient.OpenAI
+               Current.LLMClient.OpenAI,
+               @timeout_ms,
+               File.cwd!()
              )
 
     assert proposal.workflow_id == workflow_id

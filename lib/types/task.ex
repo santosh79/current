@@ -1,12 +1,14 @@
 defmodule Current.Task do
   @enforce_keys [:id, :input, :context, :mode, :submitted_at]
-  defstruct [:id, :input, :context, :mode, :submitted_at]
+  defstruct [:id, :input, :context, :mode, :submitted_at, :project_dir]
 
   @type t :: %__MODULE__{
           id: Current.Id.t(),
           input: String.t() | map(),
           context: map(),
           mode: Current.Mode.t(),
+          # nil for tasks recorded before project_dir existed.
+          project_dir: Path.t() | nil,
           submitted_at: DateTime.t()
         }
 

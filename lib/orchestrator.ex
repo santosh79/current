@@ -6,6 +6,7 @@ defmodule Current.WorkflowOrchestrator do
     Event,
     EventStore,
     Id,
+    IntentPaths,
     IntentValidator,
     Mode,
     Proposal,
@@ -20,6 +21,7 @@ defmodule Current.WorkflowOrchestrator do
           listeners: [pid()],
           workflow_id: Current.Id.t(),
           request: Request.t(),
+          project_dir: Path.t() | nil,
           task_id: Current.Id.t(),
           replayed: MapSet.t(Current.Id.t()),
           proposal_production: pid() | nil
@@ -64,6 +66,8 @@ defmodule Current.WorkflowOrchestrator do
       listeners: listeners,
       task_id: task.id,
       request: %Request{input: task.input, context: task.context, mode: task.mode},
+      # Execution context from the recorded task (nil for a legacy task).
+      project_dir: task.project_dir,
       workflow_id: workflow_id,
       replayed: MapSet.new(),
       proposal_production: nil
@@ -115,11 +119,16 @@ defmodule Current.WorkflowOrchestrator do
   def handle_info({:proposal_produced, _}, %{proposal_production: nil} = state),
     do: {:noreply, state}
 
+  # Paths are made absolute here, before the proposal becomes durable, so
+  # everything downstream -- IntentValidator, the reviewer reading
+  # ProposalStore, EffectApplicator (via workflow.proposal), and any replay
+  # -- sees exactly the same resolved paths. The model's untouched output
+  # is still preserved in the raw_output_blob_id blob.
   def handle_info({:proposal_produced, %Proposal{} = proposal, raw_output_blob_id}, state) do
     propose(%Event.ProposalProduced{
       id: Id.generate(),
       workflow_id: state.workflow_id,
-      proposal: proposal,
+      proposal: IntentPaths.absolutize(proposal, state.project_dir),
       raw_output_blob_id: raw_output_blob_id,
       timestamp: DateTime.utc_now()
     })
@@ -226,7 +235,9 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   defp react(%Event.ProposalProductionStarted{}, state) do
-    {:noreply, start_proposal_production(state)}
+    with_project_dir(state, "produce a proposal", fn ->
+      {:noreply, start_proposal_production(state)}
+    end)
   end
 
   defp react(%Event.ModeInvalid{mode: mode}, state) do
@@ -241,29 +252,31 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   defp react(%Event.ProposalProduced{proposal: proposal}, state) do
-    event =
-      case IntentValidator.validate(proposal) do
-        :ok ->
-          %Event.ProposalValidated{
-            id: Id.generate(),
-            workflow_id: state.workflow_id,
-            proposal: proposal,
-            timestamp: DateTime.utc_now()
-          }
+    with_project_dir(state, "validate the proposal", fn ->
+      event =
+        case IntentValidator.validate(proposal, state.project_dir) do
+          :ok ->
+            %Event.ProposalValidated{
+              id: Id.generate(),
+              workflow_id: state.workflow_id,
+              proposal: proposal,
+              timestamp: DateTime.utc_now()
+            }
 
-        {:error, %Error.ValidationError{} = error} ->
-          %Event.ProposalValidationFailed{
-            id: Id.generate(),
-            workflow_id: state.workflow_id,
-            proposal: proposal,
-            error: error,
-            timestamp: DateTime.utc_now()
-          }
-      end
+          {:error, %Error.ValidationError{} = error} ->
+            %Event.ProposalValidationFailed{
+              id: Id.generate(),
+              workflow_id: state.workflow_id,
+              proposal: proposal,
+              error: error,
+              timestamp: DateTime.utc_now()
+            }
+        end
 
-    propose(event)
+      propose(event)
 
-    {:noreply, state}
+      {:noreply, state}
+    end)
   end
 
   defp react(
@@ -306,14 +319,18 @@ defmodule Current.WorkflowOrchestrator do
     {:noreply, state}
   end
 
+  # Checked before EffectApplicationStarted is recorded, so the log never
+  # claims application started for a task that could not have one.
   defp react(%Event.ProposalApproved{}, state) do
-    propose(%Event.EffectApplicationStarted{
-      id: Id.generate(),
-      workflow_id: state.workflow_id,
-      timestamp: DateTime.utc_now()
-    })
+    with_project_dir(state, "apply the proposal", fn ->
+      propose(%Event.EffectApplicationStarted{
+        id: Id.generate(),
+        workflow_id: state.workflow_id,
+        timestamp: DateTime.utc_now()
+      })
 
-    {:noreply, state}
+      {:noreply, state}
+    end)
   end
 
   defp react(%Event.EffectApplicationStarted{}, state) do
@@ -366,20 +383,26 @@ defmodule Current.WorkflowOrchestrator do
     {:stop, :normal, state}
   end
 
+  defp react(%Event.WorkflowAbandoned{}, state) do
+    {:stop, :normal, state}
+  end
+
   ## Proposal production
 
   defp start_proposal_production(state) do
     builder = Application.fetch_env!(:current, :proposal_builder)
     client = Application.fetch_env!(:current, :llm_client)
+    timeout_ms = Application.fetch_env!(:current, :llm_proposal_timeout_ms)
 
     orchestrator = self()
     request = state.request
+    project_dir = state.project_dir
     workflow_id = state.workflow_id
 
     pid =
       spawn_link(fn ->
         message =
-          case builder.build(request, workflow_id, client) do
+          case builder.build(request, workflow_id, client, timeout_ms, project_dir) do
             {:ok, %Proposal{} = proposal} ->
               raw_output_blob_id = nil
               {:proposal_produced, proposal, raw_output_blob_id}
@@ -404,12 +427,14 @@ defmodule Current.WorkflowOrchestrator do
     {:ok, workflow} = Current.WorkflowStore.get(state.workflow_id)
 
     intents = workflow.proposal.intents
+    project_dir = state.project_dir
 
     spawn_link(fn ->
       try do
         case apply_intents_streaming(
                intents,
                orchestrator,
+               project_dir,
                []
              ) do
           {:ok, intent_results} ->
@@ -438,18 +463,19 @@ defmodule Current.WorkflowOrchestrator do
     :ok
   end
 
-  defp apply_intents_streaming([], _orchestrator, acc) do
+  defp apply_intents_streaming([], _orchestrator, _project_dir, acc) do
     {:ok, :lists.reverse(acc)}
   end
 
   defp apply_intents_streaming(
          [intent | rest],
          orchestrator,
+         project_dir,
          acc
        ) do
     applicator = Application.fetch_env!(:current, :effect_applicator)
 
-    case applicator.apply(intent, acc) do
+    case applicator.apply(intent, acc, project_dir) do
       {:ok, result} ->
         send(
           orchestrator,
@@ -459,6 +485,7 @@ defmodule Current.WorkflowOrchestrator do
         apply_intents_streaming(
           rest,
           orchestrator,
+          project_dir,
           [{intent, result} | acc]
         )
 
@@ -552,6 +579,35 @@ defmodule Current.WorkflowOrchestrator do
 
   defp notification(%Event.WorkflowFailed{} = event),
     do: {:workflow_failed, event}
+
+  defp notification(%Event.WorkflowAbandoned{} = event),
+    do: {:workflow_abandoned, event}
+
+  ## Legacy tasks
+
+  # A task recorded before project_dir existed (TaskCreated v1) has
+  # project_dir: nil -- its project directory was never recorded and is
+  # not guessed. The three steps that need one (producing, validating and
+  # applying a proposal) check here first and abandon the workflow
+  # explicitly instead. Nothing else does: replaying a legacy workflow,
+  # projecting it, or reviewing a proposal still works as before.
+  #
+  # WorkflowAbandoned is the reducer's "no further automatic progress is
+  # possible" transition, valid from every non-terminal status.
+  defp with_project_dir(%{project_dir: nil} = state, step, _fun) do
+    propose(%Event.WorkflowAbandoned{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      reason:
+        "cannot #{step}: task #{state.task_id} was recorded before project_dir " <>
+          "existed, so it has no project directory",
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
+  defp with_project_dir(_state, _step, fun), do: fun.()
 
   defp fail_interrupted_effects(state) do
     propose(%Event.WorkflowFailed{
