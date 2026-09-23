@@ -249,6 +249,7 @@ defmodule Current.TaskStore do
       input: event.input,
       context: event.context,
       mode: event.mode,
+      project_dir: event.project_dir,
       submitted_at: event.submitted_at
     }
 

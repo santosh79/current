@@ -28,7 +28,7 @@ defmodule Current.FakeLLMClient do
   end
 
   @impl true
-  def complete(_prompt) do
+  def complete(_prompt, _timeout_ms) do
     case :persistent_term.get(@key, {:error, :not_configured}) do
       :hang -> Process.sleep(:infinity)
       response -> response

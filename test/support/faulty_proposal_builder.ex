@@ -4,13 +4,14 @@ defmodule Current.FaultyProposalBuilder do
   alias Current.{Id, Intent, Proposal, Request}
 
   @impl true
-  def build(%Request{} = req, workflow_id, _client_module) do
+  def build(%Request{} = req, workflow_id, _client_module, _timeout_ms, _project_dir) do
     unless Mix.env() == :test do
       raise "FaultyProposalBuilder must only be used in test environment"
     end
 
     proposal_id = Id.generate()
-    missing_file_path = "/tmp/current_missing_file_#{System.unique_integer([:positive])}.ex"
+    missing_file_path =
+      Path.join(Current.TestTmp.dir(), "current_missing_file_#{System.unique_integer([:positive])}.ex")
 
     intent = %Intent.ReadFile{
       id: Id.generate(),

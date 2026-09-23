@@ -17,6 +17,7 @@ defmodule Current.TaskStoreTest do
       input: "add email validation",
       context: %{repo: "current"},
       mode: :plan,
+      project_dir: "/tmp/some_project",
       submitted_at: now,
       timestamp: now
     }
@@ -40,6 +41,7 @@ defmodule Current.TaskStoreTest do
     assert task.context == event.context
     assert task.mode == event.mode
     assert task.submitted_at == event.submitted_at
+    assert task.project_dir == event.project_dir
   end
 
   test "advances its EventStore cursor incrementally" do
@@ -55,6 +57,7 @@ defmodule Current.TaskStoreTest do
       input: "cursor test",
       context: %{},
       mode: :plan,
+      project_dir: Current.TestTmp.dir(),
       submitted_at: now,
       timestamp: now
     }

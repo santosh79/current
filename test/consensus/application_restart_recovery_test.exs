@@ -144,7 +144,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     restart_application()
 
     {:ok, task_id} =
-      Current.submit_task(%Request{input: "post-restart sanity check", context: %{}}, self())
+      Current.submit_task(%Request{input: "post-restart sanity check", context: %{}}, self(), System.tmp_dir!())
 
     assert_receive {:workflow_created, %Event.WorkflowCreated{task_id: ^task_id}}, 5_000
   end
@@ -197,7 +197,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     crash_log_and_await_runtime_rebuild()
 
     {:ok, task_id} =
-      Current.submit_task(%Request{input: "post-recovery sanity check", context: %{}}, self())
+      Current.submit_task(%Request{input: "post-recovery sanity check", context: %{}}, self(), System.tmp_dir!())
 
     assert_receive {:workflow_created, %Event.WorkflowCreated{task_id: ^task_id}}, 5_000
   end
@@ -219,7 +219,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     # and can decide accept/reject deterministically later).
     tasks =
       Enum.map(requests, fn {i, req} ->
-        {:ok, task_id} = Current.submit_task(req, self())
+        {:ok, task_id} = Current.submit_task(req, self(), System.tmp_dir!())
         %{index: i, task_id: task_id, mode: req.mode}
       end)
 
@@ -374,7 +374,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
 
   # Resuming workflows after a restart
   test "a workflow waiting for approval is resumed after a runtime rebuild and can still be approved" do
-    {:ok, task_id} = Current.submit_task(%Request{input: "resume me", context: %{}}, self())
+    {:ok, task_id} = Current.submit_task(%Request{input: "resume me", context: %{}}, self(), System.tmp_dir!())
     %{^task_id => workflow_id} = await_workflow_created_for([task_id])
     %{^workflow_id => proposal} = await_proposal_validated_for([workflow_id])
 
@@ -397,7 +397,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     :ok = Application.put_env(:current, :proposal_builder, Current.BlockingProposalBuilder)
 
     {:ok, task_id} =
-      Current.submit_task(%Request{input: "resume me", context: %{}, mode: :plan}, self())
+      Current.submit_task(%Request{input: "resume me", context: %{}, mode: :plan}, self(), System.tmp_dir!())
 
     :ok = await_status(task_id, :planning)
 
@@ -415,7 +415,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
       :ok = Application.put_env(:current, :effect_applicator, previous_effect_applicator)
     end)
 
-    {:ok, task_id} = Current.submit_task(%Request{input: "resume me", context: %{}}, self())
+    {:ok, task_id} = Current.submit_task(%Request{input: "resume me", context: %{}}, self(), System.tmp_dir!())
     %{^task_id => workflow_id} = await_workflow_created_for([task_id])
     %{^workflow_id => proposal} = await_proposal_validated_for([workflow_id])
 
@@ -447,7 +447,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     end)
 
     {:ok, task_id} =
-      Current.submit_task(%Request{input: "step effects", context: %{}}, self())
+      Current.submit_task(%Request{input: "step effects", context: %{}}, self(), System.tmp_dir!())
 
     %{^task_id => workflow_id} = await_workflow_created_for([task_id])
     %{^workflow_id => proposal} = await_proposal_validated_for([workflow_id])
@@ -625,6 +625,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
       input: "recover orphan task",
       context: %{},
       mode: :apply,
+      project_dir: Current.TestTmp.dir(),
       submitted_at: now,
       timestamp: now
     }

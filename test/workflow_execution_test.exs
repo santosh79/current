@@ -13,7 +13,7 @@ defmodule Current.WorkflowExecutionTest do
   end
 
   defp submit_and_await_valid_proposal do
-    {:ok, task_id} = Current.submit_task(request(), self())
+    {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
     workflow_id =
       receive do

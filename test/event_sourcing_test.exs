@@ -46,7 +46,7 @@ defmodule Current.EventSourcingTest do
   end
 
   test "completed apply workflow projection equals replay" do
-    {:ok, task_id} = Current.submit_task(request(), self())
+    {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
     produced = await(:proposal_produced)
     proposal = produced.proposal
@@ -67,7 +67,7 @@ defmodule Current.EventSourcingTest do
   end
 
   test "rejected workflow projection equals replay" do
-    {:ok, task_id} = Current.submit_task(request(), self())
+    {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
     produced = await(:proposal_produced)
     proposal = produced.proposal
@@ -88,7 +88,7 @@ defmodule Current.EventSourcingTest do
   end
 
   test "plan workflow projection equals replay" do
-    {:ok, task_id} = Current.submit_task(request(:plan), self())
+    {:ok, task_id} = Current.submit_task(request(:plan), self(), System.tmp_dir!())
 
     await(:workflow_completed)
 
@@ -104,7 +104,7 @@ defmodule Current.EventSourcingTest do
       :ok = Application.put_env(:current, :proposal_builder, previous_builder)
     end)
 
-    {:ok, task_id} = Current.submit_task(request(), self())
+    {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
     validation_failed = await(:proposal_validation_failed)
     await(:workflow_failed, validation_failed.workflow_id)

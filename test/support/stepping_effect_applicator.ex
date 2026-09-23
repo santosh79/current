@@ -17,7 +17,7 @@ defmodule Current.SteppingEffectApplicator do
   process-global like this.
   """
 
-  import Kernel, except: [apply: 2]
+  import Kernel, except: [apply: 3]
   @behaviour Current.EffectApplicator
 
   @controller_name :stepping_effect_applicator_controller
@@ -26,7 +26,7 @@ defmodule Current.SteppingEffectApplicator do
   def controller_name, do: @controller_name
 
   @impl true
-  def apply(intent, prior_results) do
+  def apply(intent, prior_results, project_dir) do
     controller = Process.whereis(@controller_name)
 
     case controller do
@@ -45,6 +45,6 @@ defmodule Current.SteppingEffectApplicator do
       :step -> :ok
     end
 
-    Current.EffectApplicator.apply(intent, prior_results)
+    Current.EffectApplicator.apply(intent, prior_results, project_dir)
   end
 end

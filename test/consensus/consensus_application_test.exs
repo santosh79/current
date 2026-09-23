@@ -36,7 +36,7 @@ defmodule Current.ConsensusApplicationTest do
   end
 
   test "TaskCreated itself goes through consensus" do
-    {:ok, task_id} = Current.submit_task(request(), self())
+    {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
     receive do
       {:workflow_created, %Current.Event.WorkflowCreated{task_id: ^task_id}} -> :ok
@@ -58,7 +58,7 @@ defmodule Current.ConsensusApplicationTest do
   end
 
   test "a completed apply-mode workflow's entire event stream is backed by consensus" do
-    {:ok, task_id} = Current.submit_task(request(), self())
+    {:ok, task_id} = Current.submit_task(request(), self(), System.tmp_dir!())
 
     workflow_id =
       receive do
@@ -93,7 +93,7 @@ defmodule Current.ConsensusApplicationTest do
   end
 
   test "a plan-mode workflow's entire event stream is backed by consensus" do
-    {:ok, task_id} = Current.submit_task(request(:plan), self())
+    {:ok, task_id} = Current.submit_task(request(:plan), self(), System.tmp_dir!())
 
     workflow_id =
       receive do

@@ -4,11 +4,14 @@ defmodule Current.LLMClient.OpenAI do
   @endpoint "https://api.openai.com/v1/responses"
   @default_model "gpt-5.6"
 
+  @connect_timeout_ms 10_000
+
   @impl true
-  def complete(prompt) when is_binary(prompt) do
+  def complete(prompt, timeout_ms)
+      when is_binary(prompt) and is_integer(timeout_ms) and timeout_ms > 0 do
     with {:ok, api_key} <- api_key(),
          {:ok, body} <- encode_request(prompt),
-         {:ok, response} <- request(api_key, body),
+         {:ok, response} <- request(api_key, body, timeout_ms),
          {:ok, text} <- extract_text(response) do
       {:ok, text}
     end
@@ -26,7 +29,7 @@ defmodule Current.LLMClient.OpenAI do
       {:error, {:request_encode_failed, Exception.message(error)}}
   end
 
-  defp request(api_key, body) do
+  defp request(api_key, body, timeout_ms) do
     headers = [
       {~c"authorization", ~c"Bearer " ++ String.to_charlist(api_key)}
     ]
@@ -40,8 +43,8 @@ defmodule Current.LLMClient.OpenAI do
              body
            },
            [
-             connect_timeout: 10_000,
-             timeout: 25_000
+             connect_timeout: min(@connect_timeout_ms, timeout_ms),
+             timeout: timeout_ms
            ],
            body_format: :binary
          ) do
@@ -51,6 +54,9 @@ defmodule Current.LLMClient.OpenAI do
 
       {:ok, {{_version, status, _reason}, _headers, body}} ->
         {:error, {:http_error, status, body}}
+
+      {:error, :timeout} ->
+        {:error, :timeout}
 
       {:error, reason} ->
         {:error, {:http_error, reason}}

@@ -118,6 +118,15 @@ defmodule Current.WorkflowRunner do
     {:stop, :normal, state}
   end
 
+  # Proposed by the orchestrator itself (e.g. a legacy task with no
+  # project_dir). The orchestrator notifies listeners and stops :normal,
+  # and that :DOWN is what ends this runner -- nothing to do here.
+  def handle_info(
+        {:event_committed, %Current.EventStore.Entry{event: %Event.WorkflowAbandoned{}}},
+        state
+      ),
+      do: {:noreply, state}
+
   defp give_up(state, reason) do
     case WorkflowStore.get(state.workflow_id) do
       {:ok, %Workflow{} = workflow} ->

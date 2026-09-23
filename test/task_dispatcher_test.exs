@@ -15,6 +15,7 @@ defmodule Current.TaskDispatcherTest do
         input: "test task",
         context: %{},
         mode: :plan,
+        project_dir: Current.TestTmp.dir(),
         submitted_at: now,
         timestamp: now
       }

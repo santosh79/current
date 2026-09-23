@@ -14,15 +14,41 @@ defmodule Current.IntentValidator do
   Every member of Current.Intent.t() must have an explicit clause below.
   There is no catch-all: an intent type with no clause is a compile-time
   gap this module should never silently accept.
+
+  Before any per-intent rule runs, every path field must be absolute and
+  inside `project_dir` (see Current.IntentPaths). WorkflowOrchestrator
+  absolutizes proposals before they get here, so a relative path at this
+  point means the caller skipped that step, and is rejected rather than
+  resolved against this node's working directory.
   """
 
-  alias Current.{BlobStore, Intent, Proposal}
+  alias Current.{BlobStore, Intent, IntentPaths, Proposal}
   alias Current.Error.ValidationError
 
-  @spec validate(Proposal.t()) :: :ok | {:error, ValidationError.t()}
-  def validate(%Proposal{intents: intents}) do
-    validate_helper(intents, %{})
+  @spec validate(Proposal.t(), Path.t()) :: :ok | {:error, ValidationError.t()}
+  def validate(%Proposal{intents: intents}, project_dir) when is_binary(project_dir) do
+    validate_helper(intents, %{}, Path.expand(project_dir))
   end
+
+  ## --- Paths (every intent) ---------------------------------------------
+
+  defp validate_paths(intent, project_dir) do
+    case IntentPaths.violation(intent, project_dir) do
+      nil ->
+        nil
+
+      {field, path, problem} ->
+        %ValidationError{
+          intent_id: intent.id,
+          reason: path_reason(field, problem),
+          details: %{field: field, path: path, project_dir: project_dir}
+        }
+    end
+  end
+
+  defp path_reason(field, :not_absolute), do: "#{field} must be an absolute path"
+  defp path_reason(field, :outside_project_dir), do: "#{field} is outside the project directory"
+  defp path_reason(field, :parent_segment), do: "#{field} must not contain '..'"
 
   ## --- ReadFile -------------------------------------------------------
 
@@ -222,18 +248,18 @@ defmodule Current.IntentValidator do
 
   defp validate_intent(%Intent.Report{}, _seen_intents), do: nil
 
-  defp validate_helper([], _seen_intents) do
+  defp validate_helper([], _seen_intents, _project_dir) do
     :ok
   end
 
-  defp validate_helper([intent | rest], seen_intents) do
-    case validate_intent(intent, seen_intents) do
+  defp validate_helper([intent | rest], seen_intents, project_dir) do
+    case validate_paths(intent, project_dir) || validate_intent(intent, seen_intents) do
       %ValidationError{} = error ->
         {:error, error}
 
       nil ->
         seen_intents = Map.put(seen_intents, intent.id, intent)
-        validate_helper(rest, seen_intents)
+        validate_helper(rest, seen_intents, project_dir)
     end
   end
 

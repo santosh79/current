@@ -113,6 +113,7 @@ defmodule Current.EventStoreTest do
       input: "test task",
       context: %{},
       mode: :apply,
+      project_dir: Current.TestTmp.dir(),
       submitted_at: now,
       timestamp: now
     }
