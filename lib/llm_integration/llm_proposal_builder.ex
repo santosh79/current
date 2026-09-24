@@ -193,17 +193,20 @@ defmodule Current.LLMProposalBuilder do
       lines without line numbers.
     - Start with "--- a/<path>" and "+++ b/<path>", then one or more hunks.
     - Each hunk starts with "@@ -<old_start>,<old_count> +<new_start>,<new_count> @@".
-      old_count is the number of context and removed lines in the hunk;
-      new_count is the number of context and added lines. They must be exact.
+      old_start and new_start are the 1-based line numbers where the hunk
+      begins in the file before and after the change. old_count is the
+      number of context and removed lines in the hunk; new_count is the
+      number of context and added lines. All four must be correct.
     - Every line inside a hunk starts with exactly one character: " " for
       context, "-" for a removed line, "+" for an added line. A blank
       context line is a single space.
     - Context and removed lines must match the file shown above character
       for character, whitespace included. Give up to 3 lines of context
       around each change.
-    - The file must already exist. To create a file, use write_file. To
-      rewrite most of a file, prefer write_file with its complete new
-      contents over a large diff.
+    - The file must already exist. To create a new file, use write_file.
+      write_file only ever creates files -- it fails if the file already
+      exists -- so never use it to rewrite an existing file; change an
+      existing file with file_patch (several hunks are fine).
 
     Example. For lib/greeter.ex containing
 

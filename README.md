@@ -87,20 +87,22 @@ Events are emitted throughout and form the canonical system record.
 Task submitted
 → Workflow created (:created → :planning)
 
-→ Proposal produced (:planning)
-→ Proposal validated (:validating)
+→ Proposal produced (:planning → :validating)
+→ Proposal validated (:validating → :waiting_for_approval)
 
-→ If approval required → waiting_for_approval
-→ If approved → :approved
+→ In plan mode:
+    Workflow completes at once (:planned). No effects.
 
-→ Intents applied (:applying)
-→ Artifacts produced
+→ In apply mode:
+    Workflow waits for a review
+    → approved (:approved) or rejected (:rejected)
+    → Intents applied (:applying)
+    → Artifacts produced
+    → WorkflowResult assembled (:assembling_result)
+    → Workflow completes (:completed)
 
-→ WorkflowResult assembled (:assembling_result)
-
-→ Workflow completes (:completed)
-   or is rejected (:rejected)
-   or fails (:failed)
+A workflow can also end :failed (proposal production, validation or an
+effect failed) or :abandoned (no further automatic progress is possible).
 ```
 
 Everything is recorded as events
@@ -125,6 +127,8 @@ It groups one or more intents into a coherent unit of suggested work.
 ### Intent
 An intent is the smallest unit of proposed work the runtime can evaluate independently.  
 It describes one desired effect or observation.
+
+Current understands nine: `read_file`, `write_file`, `delete_file`, `file_patch`, `run_command`, `grep`, `glob`, `claim` and `report`. The exact JSON an agent must send is specified in [docs/wire_schema.md](docs/wire_schema.md).
 
 ### Artifact
 An artifact is an immutable stored result produced by a step or runtime stage.  
@@ -193,12 +197,12 @@ The workflow structure remains the same, but the runtime controls:
 - whether approval is required
 - whether artifacts are persisted
 
-| Mode | Behavior |
-|---|---|
-| `plan` | Produce a proposal and intents only. No effects are applied. |
-| `simulate` | Apply intents in a temporary environment. Artifacts are not persisted. |
-| `review` | Validate intents and pause for approval before applying effects. |
-| `apply` | Execute accepted intents through trusted interpreters and persist artifacts. |
+| Mode | Behavior | Status |
+|---|---|---|
+| `plan` | Produce a proposal and intents only. No effects are applied. | Available (`current plan`) |
+| `simulate` | Apply intents in a temporary environment. Artifacts are not persisted. | Planned |
+| `review` | Validate intents and pause for approval before applying effects. | Built into `apply` today: every proposal waits for approval |
+| `apply` | Execute accepted intents through trusted interpreters and persist artifacts. | In the runtime (`Current.review_proposal/2` approves); not yet in the CLI |
 
 ---
 
@@ -256,9 +260,9 @@ If something changes, you can see exactly where and why.
 Current is designed around defense in depth:
 
 1. Agents cannot perform effects directly
-2. All intents are schema-validated
-3. Policies decide what may be interpreted
-4. Interpreters run in controlled environments
+2. Every proposal must decode into typed intents under a strict wire contract, then pass validation
+3. Policies decide what may be interpreted *(planned)*
+4. Interpreters run in controlled environments: every path is confined to the project directory, and commands run without a shell. Sandboxed environments are planned.
 5. Every transition is recorded
 
 This does not eliminate failure. It makes failure visible.
@@ -291,18 +295,20 @@ Current borrows from event sourcing, CQRS, typed effect systems, workflow engine
 
 **Phase 1**
 
-- workflow definition format
-- intent schema
-- append-only event log
-- validator
-- local file/command interpreter
-- CLI for `plan` / `simulate` / `apply`
+- [ ] workflow definition format
+- [x] intent schema ([docs/wire_schema.md](docs/wire_schema.md))
+- [x] append-only event log (a hash-chained write-ahead log)
+- [x] validator
+- [x] local file/command interpreter
+- [x] CLI for `plan`
+- [ ] CLI for `simulate`
+- [ ] CLI for `apply`
 
 **Phase 2**
 
 - approval policies
 - sandbox environments
-- artifact browser
+- artifact browser (started: `current events`, `current proposal`, `current artifact`)
 - replay and time-travel inspection
 - branch/worktree support
 
@@ -316,7 +322,8 @@ Current borrows from event sourcing, CQRS, typed effect systems, workflow engine
 
 **Phase 4**
 
-- BEAM-native runtime
+Current already runs on the BEAM (Elixir/OTP), with a process per workflow. This phase is about going further:
+
 - process-per-step orchestration
 - durable mailbox/event bridge
 - fault-tolerant distributed execution
@@ -337,15 +344,52 @@ This is early. The goal is simple:
 
 If that loop is solid, the rest follows.
 
+Today, steps 1–3, 5 and 6 work end to end against a real model, from the CLI. Applying (step 4) works in the runtime but isn't exposed in the CLI yet.
+
 ---
 
 ## Hello World
 
-Coming soon. Planned first demo:
+Current is a long-running runtime; `current` is a client of it.
+
+**Requirements:** Elixir 1.18+ on Erlang/OTP 27+, an OpenAI API key, and `patch` on your `PATH` (used when applying file patches).
+
+Point the runtime at the real model, e.g. in `config/dev.exs`:
+
+```elixir
+config :current,
+  proposal_builder: Current.LLMProposalBuilder,
+  llm_client: Current.LLMClient.OpenAI,
+  llm_proposal_timeout_ms: 120_000,
+  effect_applicator: Current.EffectApplicator
+```
+
+Start the runtime in one terminal (it prints each request and every commit to the log as it happens; Ctrl-C stops it):
+
+```sh
+OPENAI_API_KEY=sk-... bin/current-server
+```
+
+Build the CLI and ask for a plan in another:
+
+```sh
+make client
+./current status
+./current plan "add input validation to signup form" --dir path/to/project
+```
+
+Nothing is executed. The output ends with the commands to inspect what was recorded:
+
+```sh
+./current events   <workflow-id>   # the workflow's events, in log order
+./current proposal <proposal-id>   # every intent the agent proposed
+./current artifact <artifact-id>   # exact bytes, e.g. a proposed diff
+```
+
+Still to come:
 
 ```sh
 current init
-current plan "add input validation to signup form"
 current simulate run feature/signup-validation
 current apply run feature/signup-validation
 current events tail
@@ -378,3 +422,4 @@ Contributions are welcome, especially in:
 ## License
 
 MIT
+

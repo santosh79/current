@@ -211,6 +211,9 @@ defmodule Current.LLMProposalBuilderTest do
 
       assert_receive {:prompt, prompt}
       assert prompt =~ "patch --batch --forward --fuzz=0 <path> <diff>"
+      # EffectApplicator refuses a write_file whose target exists.
+      assert prompt =~ "write_file only ever creates files"
+      refute prompt =~ "prefer write_file"
       assert prompt =~ ~s(do NOT use the\n  "*** Begin Patch")
       {_before, example_diff, _after} = LLMProposalBuilder.file_patch_example()
       assert prompt =~ "<diff>\n" <> String.trim_trailing(example_diff) <> "\n</diff>"

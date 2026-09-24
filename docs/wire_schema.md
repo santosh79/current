@@ -14,6 +14,11 @@ A machine-checkable version of this contract lives at
 asserts that every well-formed fixture in that test file validates against
 it, so the two can't silently drift apart.
 
+The prompt is built by `Current.LLMProposalBuilder`. It includes that JSON
+schema verbatim -- so the `description`s in it are instructions the model
+reads -- followed by the `file_patch` diff rules and example described
+under [`file_patch`](#file_patch) below.
+
 ## Where this fits
 
 ```
@@ -46,7 +51,7 @@ ProposalValidated
 **Decoding and validating are different questions, deliberately.**
 `ProposalDecoder` only asks "is this well-formed enough to become typed
 intents" — JSON parses, required fields are present and the right kind of
-value, referenced refs exist. It does **not** check things like "does this
+value, refs are unique and referenced refs exist. It does **not** check things like "does this
 claim reference an earlier intent" or "does this write_file's target
 already exist" — those are `IntentValidator`'s job, once real
 `Current.Intent.t()` structs exist to check. See `IntentValidator`'s
@@ -72,6 +77,31 @@ module doc for that boundary in more detail.
 
 Anything at the top level besides these four keys is ignored, not rejected.
 
+## Paths
+
+Every path field (`path`, `grep`'s `paths`, `glob`'s `base_dir`) is
+relative to the project root -- the directory the task was submitted for,
+e.g. `lib/signup.ex`.
+
+What is recorded, and when:
+
+1. The model's raw response is stored as a blob before decoding,
+   untouched -- paths exactly as the model wrote them.
+2. Decoding stores each `diff`/`contents` payload as a blob. It records
+   nothing else; the decoded intents still carry the model's paths.
+3. `WorkflowOrchestrator` resolves every path against the project
+   directory, and only then records the proposal, in the
+   `ProposalProduced` event it commits to the log.
+
+So the proposal as recorded -- and everything that reads it
+(`IntentValidator`, `ProposalStore`, `EffectApplicator`, replay) -- only
+ever has absolute, resolved paths, while the raw-output blob keeps what
+the model actually sent.
+
+`IntentValidator` then rejects any path that contains a `..` segment or
+lands outside the project directory. `EffectApplicator` checks again at
+apply time, with symlinks followed.
+
 ## Referencing intents: `ref` and `source_intent_ref`
 
 The model cannot know Current's internal ids in advance, and must not
@@ -92,6 +122,10 @@ of a real id:
 `ProposalDecoder` assigns every intent a real `Current.Id.t()` and
 resolves `source_intent_ref` to that id. A `source_intent_ref` that
 doesn't match any `ref` in the response is a decode failure.
+
+`ref`s must be unique within a response. A duplicate `ref` is a decode
+failure, whether or not anything cites it: evidence has to point at
+exactly one intent.
 
 **Ordering is not checked at decode time.** A claim may cite a ref
 belonging to an intent that appears later in the `intents` array, and
@@ -135,6 +169,11 @@ fields not listed are ignored.
 `contents` is written to `BlobStore` by the decoder; the resulting intent
 carries a `contents_artifact_id`, not the raw text.
 
+`write_file` only ever **creates** a file: `EffectApplicator` refuses it
+if the target already exists. There is no overwrite; change an existing
+file with `file_patch`. (This is checked at apply time, not validation
+time, since whether a file exists can change in between.)
+
 ### `delete_file`
 
 ```json
@@ -148,7 +187,7 @@ carries a `contents_artifact_id`, not the raw text.
 ### `file_patch`
 
 ```json
-{ "type": "file_patch", "path": "lib/signup.ex", "diff": "--- a/signup.ex\n+++ b/signup.ex\n@@ ... @@\n" }
+{ "type": "file_patch", "path": "lib/signup.ex", "diff": "--- a/lib/signup.ex\n+++ b/lib/signup.ex\n@@ -1,2 +1,3 @@\n defmodule Signup do\n+  def validate_email(email), do: String.contains?(email, \"@\")\n end\n" }
 ```
 
 | Field  | Type   | Required |
@@ -156,8 +195,38 @@ carries a `contents_artifact_id`, not the raw text.
 | `path` | string | yes      |
 | `diff` | string | yes      |
 
-`diff` must be a unified diff. It's written to `BlobStore`; the resulting
-intent carries a `diff_artifact_id`.
+`diff` is written to `BlobStore`; the resulting intent carries a
+`diff_artifact_id`. The target file must already exist (to create one,
+use `write_file`).
+
+**Diff format.** `diff` must be a standard unified diff of that one file
+-- the format `diff -u` produces -- because `EffectApplicator` applies it
+with exactly:
+
+```sh
+patch --batch --forward --fuzz=0 <path> <diff>
+```
+
+So:
+
+- The `---`/`+++` header names are ignored; the target is always `path`.
+- Each hunk header is `@@ -<old_start>,<old_count> +<new_start>,<new_count> @@`.
+  All four numbers must be correct: the starts are the 1-based lines
+  where the hunk begins before and after the change, `old_count` is
+  context plus removed lines, and `new_count` is context plus added
+  lines.
+- Every hunk line starts with one character: ` ` context, `-` removed,
+  `+` added. A blank context line is a single space.
+- Context and removed lines must match the file exactly, whitespace
+  included -- `--fuzz=0` allows no drift.
+- Other patch formats are rejected, notably the `*** Begin Patch` /
+  `*** Update File` format some models default to.
+
+The prompt states these rules and gives a worked example
+(`LLMProposalBuilder.file_patch_example/0`, which
+`test/llm_proposal_builder_test.exs` applies with the command above).
+Whether a given diff applies is currently only discovered at apply time;
+see "What this schema does not enforce."
 
 ### `run_command`
 
@@ -169,6 +238,9 @@ intent carries a `diff_artifact_id`.
 |--------|------------------|----------|---------|
 | `cmd`  | string           | yes      | —       |
 | `args` | array of strings | no       | `[]`    |
+
+`cmd` is an executable run directly in the project root with `args` --
+not through a shell, so pipes, redirects, `&&` and globbing don't apply.
 
 ### `grep`
 
@@ -266,6 +338,12 @@ proposal will run against — not on whether the response is well-formed:
 - Whether `run_command`'s `cmd` is actually on `PATH` — this can differ
   between validation time and apply time, so it's checked only at apply
   time, by `EffectApplicator`.
+- Whether a `write_file` target already exists (apply fails if it does),
+  for the same reason.
+- Whether a `file_patch` diff actually applies to its file. In `plan`
+  mode a proposal can therefore validate and still fail on apply.
+  Checking it at validation (`patch --dry-run` against the current file)
+  is a candidate for `IntentValidator`.
 
 ## Full example
 
@@ -279,7 +357,7 @@ proposal will run against — not on whether the response is well-formed:
       "ref": "patch_1",
       "type": "file_patch",
       "path": "lib/signup.ex",
-      "diff": "--- a/signup.ex\n+++ b/signup.ex\n@@ -1,2 +1,3 @@\n defmodule Signup do\n+  def validate_email(email), do: String.contains?(email, \"@\")\n end\n"
+      "diff": "--- a/lib/signup.ex\n+++ b/lib/signup.ex\n@@ -1,2 +1,3 @@\n defmodule Signup do\n+  def validate_email(email), do: String.contains?(email, \"@\")\n end\n"
     },
     {
       "ref": "cmd_1",
@@ -310,3 +388,4 @@ per-version code path, the same way `Current.Event.Versioned` handles
 schema evolution for events. Until then, all changes to this document
 must be additive: new optional fields are fine; changing what an existing
 field means, or making an optional field required, is not.
+

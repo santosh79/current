@@ -79,8 +79,8 @@ defmodule Current.ProposalDecoder do
   # everything is a real Intent.t() carrying a real id.
 
   defp decode_intents(raw_intents, proposal_id) do
-    with {:ok, entries} <- assign_ids(raw_intents) do
-      ref_to_id = build_ref_map(entries)
+    with {:ok, entries} <- assign_ids(raw_intents),
+         {:ok, ref_to_id} <- build_ref_map(entries) do
       build_intents(entries, proposal_id, ref_to_id)
     end
   end
@@ -99,11 +99,20 @@ defmodule Current.ProposalDecoder do
     end
   end
 
+  # A ref names one intent. Two intents sharing a ref would leave a
+  # claim's evidence.source_intent_ref ambiguous, so that is a decode
+  # failure rather than a silent pick.
   defp build_ref_map(entries) do
-    Enum.reduce(entries, %{}, fn {id, map}, acc ->
+    Enum.reduce_while(entries, {:ok, %{}}, fn {id, map}, {:ok, acc} ->
       case Map.get(map, "ref") do
-        ref when is_binary(ref) -> Map.put(acc, ref, id)
-        _ -> acc
+        ref when is_binary(ref) and is_map_key(acc, ref) ->
+          {:halt, {:error, "duplicate intent ref #{inspect(ref)}"}}
+
+        ref when is_binary(ref) ->
+          {:cont, {:ok, Map.put(acc, ref, id)}}
+
+        _ ->
+          {:cont, {:ok, acc}}
       end
     end)
   end

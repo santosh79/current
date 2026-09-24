@@ -177,6 +177,28 @@ defmodule Current.ProposalDecoderTest do
       assert reason =~ "unknown ref"
     end
 
+    test "two intents sharing a ref" do
+      json = ~s({"intents": [
+        {"ref": "cmd_1", "type": "run_command", "cmd": "mix", "args": ["test"]},
+        {"ref": "cmd_1", "type": "run_command", "cmd": "npm", "args": ["test"]},
+        {"type": "claim", "statement": "tests pass",
+         "evidence": {"source_intent_ref": "cmd_1", "condition": "exit_code_equals", "value": 0}}
+      ]})
+
+      assert {:error, reason} = ProposalDecoder.decode(json, workflow_id())
+      assert reason =~ ~s(duplicate intent ref "cmd_1")
+    end
+
+    test "a duplicate ref is rejected even when nothing cites it" do
+      json = ~s({"intents": [
+        {"ref": "r", "type": "read_file", "path": "a.ex"},
+        {"ref": "r", "type": "read_file", "path": "b.ex"}
+      ]})
+
+      assert {:error, reason} = ProposalDecoder.decode(json, workflow_id())
+      assert reason =~ "duplicate intent ref"
+    end
+
     test "claim evidence with an unrecognized condition" do
       json = ~s({
         "intents": [

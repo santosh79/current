@@ -2,35 +2,44 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://current.internal/schema/proposal_response.schema.json",
   "title": "Proposal response",
-  "description": "The wire shape an agent (LLM) must return when asked to produce a proposal. See docs/wire_schema.md for the human-readable version of this same contract -- keep the two in sync.",
+  "description": "The wire shape an agent (LLM) must return when asked to produce a proposal. Every path in it is relative to the project root. See docs/wire_schema.md for the human-readable version of this same contract -- keep the two in sync.",
   "type": "object",
-  "required": ["intents"],
+  "required": [
+    "intents"
+  ],
   "properties": {
     "justification": {
       "type": "string"
     },
     "claims": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "dependencies": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "intents": {
       "type": "array",
-      "items": { "$ref": "#/definitions/intent" }
+      "items": {
+        "$ref": "#/definitions/intent"
+      }
     }
   },
-
   "definitions": {
     "intent": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
         "ref": {
           "type": "string",
-          "description": "Arbitrary caller-chosen name for this intent, resolvable later via a claim's evidence.source_intent_ref. Meaningful only within this one response."
+          "description": "Arbitrary caller-chosen name for this intent, resolvable later via a claim's evidence.source_intent_ref. Meaningful only within this one response, and must be unique within it."
         },
         "type": {
           "type": "string",
@@ -48,37 +57,110 @@
         }
       },
       "allOf": [
-        { "$ref": "#/definitions/intent_fields_by_type" }
+        {
+          "$ref": "#/definitions/intent_fields_by_type"
+        }
       ]
     },
-
     "intent_fields_by_type": {
-      "if": { "properties": { "type": { "const": "read_file" } } },
-      "then": { "$ref": "#/definitions/read_file" },
+      "if": {
+        "properties": {
+          "type": {
+            "const": "read_file"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/definitions/read_file"
+      },
       "else": {
-        "if": { "properties": { "type": { "const": "write_file" } } },
-        "then": { "$ref": "#/definitions/write_file" },
+        "if": {
+          "properties": {
+            "type": {
+              "const": "write_file"
+            }
+          }
+        },
+        "then": {
+          "$ref": "#/definitions/write_file"
+        },
         "else": {
-          "if": { "properties": { "type": { "const": "delete_file" } } },
-          "then": { "$ref": "#/definitions/delete_file" },
+          "if": {
+            "properties": {
+              "type": {
+                "const": "delete_file"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/definitions/delete_file"
+          },
           "else": {
-            "if": { "properties": { "type": { "const": "file_patch" } } },
-            "then": { "$ref": "#/definitions/file_patch" },
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "file_patch"
+                }
+              }
+            },
+            "then": {
+              "$ref": "#/definitions/file_patch"
+            },
             "else": {
-              "if": { "properties": { "type": { "const": "run_command" } } },
-              "then": { "$ref": "#/definitions/run_command" },
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "run_command"
+                  }
+                }
+              },
+              "then": {
+                "$ref": "#/definitions/run_command"
+              },
               "else": {
-                "if": { "properties": { "type": { "const": "grep" } } },
-                "then": { "$ref": "#/definitions/grep" },
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "grep"
+                    }
+                  }
+                },
+                "then": {
+                  "$ref": "#/definitions/grep"
+                },
                 "else": {
-                  "if": { "properties": { "type": { "const": "glob" } } },
-                  "then": { "$ref": "#/definitions/glob" },
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "const": "glob"
+                      }
+                    }
+                  },
+                  "then": {
+                    "$ref": "#/definitions/glob"
+                  },
                   "else": {
-                    "if": { "properties": { "type": { "const": "claim" } } },
-                    "then": { "$ref": "#/definitions/claim" },
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "claim"
+                        }
+                      }
+                    },
+                    "then": {
+                      "$ref": "#/definitions/claim"
+                    },
                     "else": {
-                      "if": { "properties": { "type": { "const": "report" } } },
-                      "then": { "$ref": "#/definitions/report" }
+                      "if": {
+                        "properties": {
+                          "type": {
+                            "const": "report"
+                          }
+                        }
+                      },
+                      "then": {
+                        "$ref": "#/definitions/report"
+                      }
                     }
                   }
                 }
@@ -88,80 +170,136 @@
         }
       }
     },
-
     "read_file": {
-      "required": ["path"],
+      "required": [
+        "path"
+      ],
       "properties": {
-        "path": { "type": "string" }
+        "path": {
+          "description": "Relative to the project root, e.g. \"lib/signup.ex\". Must not contain \"..\" and must stay inside the project.",
+          "type": "string"
+        }
       }
     },
-
     "write_file": {
-      "required": ["path", "contents"],
+      "description": "Creates a new file. Fails when applied if the file already exists -- change an existing file with file_patch.",
+      "required": [
+        "path",
+        "contents"
+      ],
       "properties": {
-        "path": { "type": "string" },
-        "contents": { "type": "string" }
+        "path": {
+          "description": "Relative to the project root, e.g. \"lib/signup.ex\". Must not contain \"..\" and must stay inside the project.",
+          "type": "string"
+        },
+        "contents": {
+          "description": "The complete contents of the new file.",
+          "type": "string"
+        }
       }
     },
-
     "delete_file": {
-      "required": ["path"],
+      "required": [
+        "path"
+      ],
       "properties": {
-        "path": { "type": "string" }
+        "path": {
+          "description": "Relative to the project root, e.g. \"lib/signup.ex\". Must not contain \"..\" and must stay inside the project.",
+          "type": "string"
+        }
       }
     },
-
     "file_patch": {
-      "required": ["path", "diff"],
+      "description": "Changes an existing file.",
+      "required": [
+        "path",
+        "diff"
+      ],
       "properties": {
-        "path": { "type": "string" },
-        "diff": { "type": "string" }
+        "path": {
+          "description": "Relative to the project root, e.g. \"lib/signup.ex\". Must not contain \"..\" and must stay inside the project.",
+          "type": "string"
+        },
+        "diff": {
+          "description": "A unified diff of this one file -- the format `diff -u` produces -- applied with exactly `patch --batch --forward --fuzz=0 <path> <diff>`. Hunk headers (\"@@ -old_start,old_count +new_start,new_count @@\") need exact line counts, and context and removed lines must match the current file exactly. The ---/+++ file names are ignored; the target is `path`. Other patch formats (e.g. \"*** Begin Patch\") are rejected.",
+          "type": "string"
+        }
       }
     },
-
     "run_command": {
-      "required": ["cmd"],
+      "required": [
+        "cmd"
+      ],
       "properties": {
-        "cmd": { "type": "string" },
+        "cmd": {
+          "description": "An executable name, run in the project root with `args`. Not a shell: no pipes, redirects or globbing.",
+          "type": "string"
+        },
         "args": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
-
     "grep": {
-      "required": ["pattern", "paths"],
+      "required": [
+        "pattern",
+        "paths"
+      ],
       "properties": {
-        "pattern": { "type": "string" },
+        "pattern": {
+          "type": "string"
+        },
         "paths": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "description": "Relative to the project root, e.g. \"lib/signup.ex\". Must not contain \"..\" and must stay inside the project.",
+            "type": "string"
+          }
         }
       }
     },
-
     "glob": {
-      "required": ["pattern"],
+      "required": [
+        "pattern"
+      ],
       "properties": {
-        "pattern": { "type": "string" },
-        "base_dir": { "type": "string" }
+        "pattern": {
+          "description": "A relative glob pattern, e.g. \"**/*.ex\".",
+          "type": "string"
+        },
+        "base_dir": {
+          "description": "Relative to the project root, e.g. \"lib/signup.ex\". Must not contain \"..\" and must stay inside the project. Defaults to \".\".",
+          "type": "string"
+        }
       }
     },
-
     "claim": {
-      "required": ["statement"],
+      "required": [
+        "statement"
+      ],
       "properties": {
-        "statement": { "type": "string" },
-        "evidence": { "$ref": "#/definitions/claim_evidence" }
+        "statement": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/definitions/claim_evidence"
+        }
       }
     },
-
     "claim_evidence": {
       "type": "object",
-      "required": ["source_intent_ref", "condition", "value"],
+      "required": [
+        "source_intent_ref",
+        "condition",
+        "value"
+      ],
       "properties": {
-        "source_intent_ref": { "type": "string" },
+        "source_intent_ref": {
+          "type": "string"
+        },
         "condition": {
           "type": "string",
           "enum": [
@@ -173,10 +311,11 @@
         "value": {}
       }
     },
-
     "report": {
       "properties": {
-        "summary": { "type": "string" }
+        "summary": {
+          "type": "string"
+        }
       }
     }
   }
