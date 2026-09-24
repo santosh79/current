@@ -14,7 +14,13 @@ defmodule Current.LLMProposalBuilderTest do
       FakeLLMClient.set_response({:ok, raw})
 
       assert {:ok, %Proposal{} = proposal, blob_id} =
-               LLMProposalBuilder.build(request(), Id.generate(), Current.FakeLLMClient, @timeout_ms, File.cwd!())
+               LLMProposalBuilder.build(
+                 request(),
+                 Id.generate(),
+                 Current.FakeLLMClient,
+                 @timeout_ms,
+                 File.cwd!()
+               )
 
       assert length(proposal.intents) == 1
       assert {:ok, ^raw} = BlobStore.read(blob_id)
@@ -26,7 +32,13 @@ defmodule Current.LLMProposalBuilderTest do
       FakeLLMClient.set_response({:error, :econnrefused})
 
       assert {:error, %ProposalProductionError{stage: :connection, reason: :econnrefused}} =
-               LLMProposalBuilder.build(request(), Id.generate(), Current.FakeLLMClient, @timeout_ms, File.cwd!())
+               LLMProposalBuilder.build(
+                 request(),
+                 Id.generate(),
+                 Current.FakeLLMClient,
+                 @timeout_ms,
+                 File.cwd!()
+               )
     end
   end
 
@@ -82,7 +94,8 @@ defmodule Current.LLMProposalBuilderTest do
     end
 
     test "a project_dir that isn't a directory is a stage: :project_context error", %{dir: dir} do
-      assert {:error, %ProposalProductionError{stage: :project_context, reason: {:not_a_directory, _}}} =
+      assert {:error,
+              %ProposalProductionError{stage: :project_context, reason: {:not_a_directory, _}}} =
                LLMProposalBuilder.build(
                  request(),
                  Id.generate(),
@@ -98,7 +111,13 @@ defmodule Current.LLMProposalBuilderTest do
       FakeLLMClient.set_response(:hang)
 
       assert {:error, %ProposalProductionError{stage: :timeout, reason: reason}} =
-               LLMProposalBuilder.build(request(), Id.generate(), Current.FakeLLMClient, 50, File.cwd!())
+               LLMProposalBuilder.build(
+                 request(),
+                 Id.generate(),
+                 Current.FakeLLMClient,
+                 50,
+                 File.cwd!()
+               )
 
       assert reason =~ "50ms"
     end
@@ -107,7 +126,13 @@ defmodule Current.LLMProposalBuilderTest do
       FakeLLMClient.set_response({:error, :timeout})
 
       assert {:error, %ProposalProductionError{stage: :timeout}} =
-               LLMProposalBuilder.build(request(), Id.generate(), Current.FakeLLMClient, @timeout_ms, File.cwd!())
+               LLMProposalBuilder.build(
+                 request(),
+                 Id.generate(),
+                 Current.FakeLLMClient,
+                 @timeout_ms,
+                 File.cwd!()
+               )
     end
   end
 
@@ -117,7 +142,13 @@ defmodule Current.LLMProposalBuilderTest do
       FakeLLMClient.set_response({:ok, raw})
 
       assert {:error, %ProposalProductionError{stage: :decode, raw_output_blob_id: blob_id}} =
-               LLMProposalBuilder.build(request(), Id.generate(), Current.FakeLLMClient, @timeout_ms, File.cwd!())
+               LLMProposalBuilder.build(
+                 request(),
+                 Id.generate(),
+                 Current.FakeLLMClient,
+                 @timeout_ms,
+                 File.cwd!()
+               )
 
       assert {:ok, ^raw} = BlobStore.read(blob_id)
     end
@@ -127,7 +158,13 @@ defmodule Current.LLMProposalBuilderTest do
       FakeLLMClient.set_response({:ok, raw})
 
       assert {:error, %ProposalProductionError{stage: :decode, reason: reason}} =
-               LLMProposalBuilder.build(request(), Id.generate(), Current.FakeLLMClient, @timeout_ms, File.cwd!())
+               LLMProposalBuilder.build(
+                 request(),
+                 Id.generate(),
+                 Current.FakeLLMClient,
+                 @timeout_ms,
+                 File.cwd!()
+               )
 
       assert reason =~ "unknown intent type"
     end
@@ -142,9 +179,62 @@ defmodule Current.LLMProposalBuilderTest do
 
     test "surfaces as a connection-stage error, not an exception" do
       assert {:error, %ProposalProductionError{stage: :connection, reason: reason}} =
-               LLMProposalBuilder.build(request(), Id.generate(), RaisingClient, @timeout_ms, File.cwd!())
+               LLMProposalBuilder.build(
+                 request(),
+                 Id.generate(),
+                 RaisingClient,
+                 @timeout_ms,
+                 File.cwd!()
+               )
 
       assert reason =~ "client exploded"
+    end
+  end
+
+  describe "build/5 - file_patch diff format" do
+    test "the prompt asks for a unified diff that patch accepts, with an example" do
+      dir = Path.join(System.tmp_dir!(), "current_project_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      __MODULE__.PromptCapturingClient.set_test_pid(self())
+
+      # Only the prompt matters here, not what is made of the reply.
+      _ =
+        LLMProposalBuilder.build(
+          request(),
+          Id.generate(),
+          __MODULE__.PromptCapturingClient,
+          @timeout_ms,
+          dir
+        )
+
+      assert_receive {:prompt, prompt}
+      assert prompt =~ "patch --batch --forward --fuzz=0 <path> <diff>"
+      assert prompt =~ ~s(do NOT use the\n  "*** Begin Patch")
+      {_before, example_diff, _after} = LLMProposalBuilder.file_patch_example()
+      assert prompt =~ "<diff>\n" <> String.trim_trailing(example_diff) <> "\n</diff>"
+    end
+
+    # Applied exactly the way Current.EffectApplicator applies a file_patch.
+    test "the example diff in the prompt applies with patch" do
+      {before, diff, expected} = LLMProposalBuilder.file_patch_example()
+
+      dir = Path.join(System.tmp_dir!(), "current_example_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      file = Path.join(dir, "greeter.ex")
+      patch_file = Path.join(dir, "greeter.diff")
+      File.write!(file, before)
+      File.write!(patch_file, diff)
+
+      assert {_output, 0} =
+               System.cmd("patch", ["--batch", "--forward", "--fuzz=0", file, patch_file],
+                 stderr_to_stdout: true
+               )
+
+      assert File.read!(file) == expected
     end
   end
 end

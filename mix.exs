@@ -8,7 +8,8 @@ defmodule Current.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
-      deps: deps()
+      deps: deps(),
+      escript: [main_module: Current.CLI, name: "current", app: nil]
     ]
   end
 
