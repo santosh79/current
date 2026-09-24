@@ -128,6 +128,95 @@ defmodule Current.LLMProposalBuilder do
     Return nothing but that JSON object -- no prose, no markdown fences.
 
     #{Current.ProposalWireSchema.raw()}
+
+    #{file_patch_rules()}
+    """
+  end
+
+  ## --- file_patch diff format ---------------------------------------------
+
+  # Current.EffectApplicator applies a file_patch by running exactly
+  # `patch --batch --forward --fuzz=0 <path> <diff>`, so the diff has to
+  # be a unified diff that POSIX patch accepts as is. Models otherwise
+  # tend to fall back on their own patch formats (e.g. "*** Begin
+  # Patch"), which patch rejects.
+
+  @example_before """
+  defmodule Greeter do
+    def hello(name) do
+      "Hello, " <> name
+    end
+  end
+  """
+
+  @example_diff """
+  --- a/lib/greeter.ex
+  +++ b/lib/greeter.ex
+  @@ -1,5 +1,9 @@
+   defmodule Greeter do
+     def hello(name) do
+       "Hello, " <> name
+     end
+  +
+  +  def goodbye(name) do
+  +    "Goodbye, " <> name
+  +  end
+   end
+  """
+
+  @example_after """
+  defmodule Greeter do
+    def hello(name) do
+      "Hello, " <> name
+    end
+
+    def goodbye(name) do
+      "Goodbye, " <> name
+    end
+  end
+  """
+
+  @doc false
+  # The example in the prompt, with the file before and after, so a test
+  # can check the example itself applies with patch.
+  def file_patch_example, do: {@example_before, @example_diff, @example_after}
+
+  defp file_patch_rules do
+    """
+    Rules for file_patch intents:
+
+    - "diff" must be a standard unified diff of that one file -- the format
+      `diff -u` produces. It is applied with exactly:
+        patch --batch --forward --fuzz=0 <path> <diff>
+      Any other patch format is rejected. In particular do NOT use the
+      "*** Begin Patch" / "*** Update File" format, and do not write "@@"
+      lines without line numbers.
+    - Start with "--- a/<path>" and "+++ b/<path>", then one or more hunks.
+    - Each hunk starts with "@@ -<old_start>,<old_count> +<new_start>,<new_count> @@".
+      old_count is the number of context and removed lines in the hunk;
+      new_count is the number of context and added lines. They must be exact.
+    - Every line inside a hunk starts with exactly one character: " " for
+      context, "-" for a removed line, "+" for an added line. A blank
+      context line is a single space.
+    - Context and removed lines must match the file shown above character
+      for character, whitespace included. Give up to 3 lines of context
+      around each change.
+    - The file must already exist. To create a file, use write_file. To
+      rewrite most of a file, prefer write_file with its complete new
+      contents over a large diff.
+
+    Example. For lib/greeter.ex containing
+
+    <file path="lib/greeter.ex">
+    #{String.trim_trailing(@example_before)}
+    </file>
+
+    a file_patch adding a goodbye/1 function has this "diff" (the tags are
+    not part of it):
+
+    <diff>
+    #{String.trim_trailing(@example_diff)}
+    </diff>
     """
   end
 

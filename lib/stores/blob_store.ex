@@ -34,6 +34,26 @@ defmodule Current.BlobStore do
     end
   end
 
+  @doc """
+  Ids of stored blobs starting with `prefix` (e.g. "sha256:6c8e06"), so
+  a shortened id can be resolved. Only lowercase hex is accepted after
+  "sha256:", which also keeps the prefix from being read as a glob.
+  """
+  @spec ids_with_prefix(String.t()) :: [Id.t()]
+  def ids_with_prefix("sha256:" <> hex) do
+    if String.match?(hex, ~r/\A[0-9a-f]*\z/) do
+      @base_dir
+      |> Path.join("sha256-" <> hex <> "*")
+      |> Path.wildcard()
+      |> Enum.map(fn path -> "sha256:" <> String.replace_prefix(Path.basename(path), "sha256-", "") end)
+    else
+      []
+    end
+  end
+
+  def ids_with_prefix(_prefix), do: []
+
   defp safe_id("sha256:" <> hex), do: "sha256-" <> hex
   defp safe_id(id), do: id |> String.replace(":", "-")
 end
+

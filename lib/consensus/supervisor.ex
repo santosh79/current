@@ -3,6 +3,7 @@ defmodule Current.Consensus.Supervisor do
   Supervises the runtime consensus pipeline:
 
       SingleNodeServer -> EventCommitter
+                       -> ActivityLog (console output of each commit)
 
   Current.Consensus.Log is owned directly by Current.Supervisor now (as
   a significant, :temporary child started before this supervisor), not
@@ -27,7 +28,9 @@ defmodule Current.Consensus.Supervisor do
       {Current.Consensus.SingleNodeServer,
        name: Current.Consensus.SingleNodeServer, log: Current.Consensus.Log},
       {Current.EventCommitter,
-       name: Current.EventCommitter, consensus: Current.Consensus.SingleNodeServer}
+       name: Current.EventCommitter, consensus: Current.Consensus.SingleNodeServer},
+      # Also subscribes to SingleNodeServer, so it sits after it too.
+      {Current.ActivityLog, consensus: Current.Consensus.SingleNodeServer}
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)

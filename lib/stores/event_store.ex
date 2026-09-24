@@ -78,12 +78,22 @@ defmodule Current.EventStore do
   """
   @spec list_by_workflow_id(Current.Id.t()) :: [Current.Event.t()]
   def list_by_workflow_id(workflow_id) do
+    workflow_id
+    |> list_entries_by_workflow_id()
+    |> Enum.map(& &1.event)
+  end
+
+  @doc """
+  All entries for a workflow stream -- events with their log positions --
+  oldest first.
+  """
+  @spec list_entries_by_workflow_id(Current.Id.t()) :: [Entry.t()]
+  def list_entries_by_workflow_id(workflow_id) do
     @workflow_index
     |> :ets.lookup(workflow_id)
     |> Enum.map(fn {^workflow_id, position} -> position end)
     |> Enum.sort()
     |> Enum.map(&entry_at!/1)
-    |> Enum.map(& &1.event)
   end
 
   @doc """
@@ -293,3 +303,4 @@ defmodule Current.EventStore do
     )
   end
 end
+

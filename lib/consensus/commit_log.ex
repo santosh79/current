@@ -94,6 +94,10 @@ defmodule Current.Consensus.Log do
 
   @impl true
   def init({name, log_path}) do
+    # Trapped so terminate/2 runs on shutdown and closes the disk_log
+    # cleanly; otherwise every stop, even a graceful one, leaves it
+    # needing a repair on the next open.
+    Process.flag(:trap_exit, true)
     disk_log = disk_log_name(name)
 
     :ok =
@@ -113,6 +117,17 @@ defmodule Current.Consensus.Log do
       )
 
     {:ok, state}
+  end
+
+  # Trapping exits turns a linked process's death (e.g. the disk_log)
+  # into a message. Keep the old behaviour: die with it.
+  @impl true
+  def handle_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    _ = :disk_log.close(state.disk_log)
+    :ok
   end
 
   @impl true
@@ -257,3 +272,4 @@ defmodule Current.Consensus.Log do
     %{state | commits: Map.put(state.commits, commit.index, commit), events: events}
   end
 end
+

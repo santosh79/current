@@ -1,5 +1,7 @@
 .DS_Store
 
+./current
+
 # The directory Mix will write compiled artifacts to.
 /_build/
 
@@ -32,3 +34,7 @@ combined_code.txt
 combined_tests.txt
 
 /examples/nextjs-auth/node_modules/
+
+/examples/
+
+/current

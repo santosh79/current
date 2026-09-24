@@ -4,9 +4,15 @@ OUTPUT := combined.md
 CODE_OUTPUT := combined_code.txt
 TESTS_OUTPUT := combined_tests.txt
 
-.PHONY: all clean code tests
+.PHONY: all clean code tests client
 
 all: $(OUTPUT)
+
+client:
+
+	@echo "Building Current CLI..."
+	@mix escript.build
+	@echo "Built ./current"
 
 code: $(CODE_OUTPUT)
 
