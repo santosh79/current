@@ -22,15 +22,12 @@ defmodule Current.Consensus.Log do
           events: %{optional(Current.Id.t()) => Current.Event.t()}
         }
 
-  @default_path "/tmp/current/consensus/commit_log"
-
   @spec path() :: String.t()
   def path do
-    Application.get_env(
-      :current,
-      :consensus_log_path,
-      @default_path
-    )
+    :current
+    |> Application.fetch_env!(:data_dir)
+    |> Path.expand()
+    |> Path.join("consensus/commit_log")
   end
 
   ## Client API
@@ -272,4 +269,3 @@ defmodule Current.Consensus.Log do
     %{state | commits: Map.put(state.commits, commit.index, commit), events: events}
   end
 end
-

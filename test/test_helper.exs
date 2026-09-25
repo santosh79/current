@@ -1,5 +1,5 @@
-ExUnit.start(
-  exclude: [:live_llm]
-)
+ExUnit.start(exclude: [:live_llm])
 
-# ExUnit.start()
+ExUnit.after_suite(fn _ ->
+  File.rm_rf!(Application.fetch_env!(:current, :data_dir))
+end)

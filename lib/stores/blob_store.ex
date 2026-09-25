@@ -1,13 +1,11 @@
 defmodule Current.BlobStore do
   alias Current.Id
 
-  @base_dir Application.compile_env(:current, :blob_store_dir, "/tmp/current/artifacts")
-
   @spec put(binary()) :: {:ok, Id.t()} | {:error, term()}
   def put(contents) when is_binary(contents) do
     hash = :crypto.hash(:sha256, contents) |> Base.encode16(case: :lower)
     id = "sha256:" <> hash
-    path = Path.join(@base_dir, "sha256-" <> hash)
+    path = Path.join(base_dir(), "sha256-" <> hash)
 
     unless File.exists?(path) do
       File.mkdir_p!(Path.dirname(path))
@@ -19,7 +17,7 @@ defmodule Current.BlobStore do
 
   @spec path_for(Id.t()) :: {:ok, Path.t()} | {:error, :not_found}
   def path_for(id) when is_binary(id) do
-    path = Path.join(@base_dir, safe_id(id))
+    path = Path.join(base_dir(), safe_id(id))
 
     case File.exists?(path) do
       true -> {:ok, path}
@@ -42,10 +40,12 @@ defmodule Current.BlobStore do
   @spec ids_with_prefix(String.t()) :: [Id.t()]
   def ids_with_prefix("sha256:" <> hex) do
     if String.match?(hex, ~r/\A[0-9a-f]*\z/) do
-      @base_dir
+      base_dir()
       |> Path.join("sha256-" <> hex <> "*")
       |> Path.wildcard()
-      |> Enum.map(fn path -> "sha256:" <> String.replace_prefix(Path.basename(path), "sha256-", "") end)
+      |> Enum.map(fn path ->
+        "sha256:" <> String.replace_prefix(Path.basename(path), "sha256-", "")
+      end)
     else
       []
     end
@@ -55,5 +55,11 @@ defmodule Current.BlobStore do
 
   defp safe_id("sha256:" <> hex), do: "sha256-" <> hex
   defp safe_id(id), do: id |> String.replace(":", "-")
-end
 
+  defp base_dir do
+    :current
+    |> Application.fetch_env!(:data_dir)
+    |> Path.expand()
+    |> Path.join("artifacts")
+  end
+end
