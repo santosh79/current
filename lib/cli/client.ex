@@ -77,6 +77,10 @@ defmodule Current.CLI.Client do
   def workflow(client, id), do: call(client, :workflow, [id])
   def proposal(client, id), do: call(client, :proposal, [id])
   def artifact(client, id), do: call(client, :artifact, [id])
+  def review(client, id, opts), do: call(client, :review, [id, opts])
+  def approve(client, id, metadata), do: call(client, :approve, [id, metadata])
+  def reject(client, id, metadata), do: call(client, :reject, [id, metadata])
+  def apply_proposal(client, id), do: call(client, :apply_proposal, [id])
 
   def health(client) do
     case call(client, :health, []) do

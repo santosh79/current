@@ -11,11 +11,11 @@ defmodule Current.RPC do
   history.
 
   Keeping this surface explicit is the point: clients depend on these
-  five functions, not on EventStore, WorkflowStore or BlobStore, which
+  nine functions, not on EventStore, WorkflowStore or BlobStore, which
   stay free to change behind it.
   """
 
-  alias Current.{ActivityLog, Inspector, Request}
+  alias Current.{ActivityLog, Inspector, Request, WorkflowStore}
 
   @doc """
   Submits a task and returns its id straight away. The workflow is
@@ -47,6 +47,103 @@ defmodule Current.RPC do
     result
   end
 
+  @doc """
+  Approves a proposal, by full id or unique prefix, and returns the id
+  of its workflow.
+
+  Approval makes the proposal eligible to be applied; it applies
+  nothing. The workflow parks in `:approved` until `apply_proposal/1`.
+
+  Only proposals from `:apply` workflows can be reviewed. A `:plan`
+  workflow never applies anything, so its proposals are refused here
+  with `{:not_apply_mode, mode}` (and WorkflowReducer refuses the
+  review at commit time regardless).
+
+  `metadata` is recorded verbatim on ProposalApproved.
+  """
+  @spec approve(String.t(), map()) ::
+          {:ok, Current.Id.t()}
+          | {:error, Inspector.lookup_error() | {:not_apply_mode, Current.Mode.t()} | term()}
+  def approve(proposal_id, metadata) when is_binary(proposal_id) and is_map(metadata) do
+    logged(:approve, proposal_id, "approved", fn ref ->
+      with :ok <- Current.review_proposal(ref.proposal_id, {:approve, metadata}) do
+        await_reviewed(ref.workflow_id)
+      end
+    end)
+  end
+
+  @doc """
+  Rejects a proposal, by full id or unique prefix, and returns the id of
+  its workflow. Only a proposal waiting for approval can be rejected.
+  `metadata` is recorded verbatim on ProposalRejected.
+  """
+  @spec reject(String.t(), map()) ::
+          {:ok, Current.Id.t()}
+          | {:error, Inspector.lookup_error() | {:not_apply_mode, Current.Mode.t()} | term()}
+  def reject(proposal_id, metadata) when is_binary(proposal_id) and is_map(metadata) do
+    logged(:reject, proposal_id, "rejected", fn ref ->
+      with :ok <- Current.review_proposal(ref.proposal_id, {:reject, metadata}) do
+        await_reviewed(ref.workflow_id)
+      end
+    end)
+  end
+
+  @doc """
+  Starts applying an approved proposal, by full id or unique prefix, and
+  returns the id of its workflow so the caller can follow it. See
+  Current.apply_proposal/1.
+  """
+  @spec apply_proposal(String.t()) ::
+          {:ok, Current.Id.t()}
+          | {:error, Inspector.lookup_error() | {:not_apply_mode, Current.Mode.t()} | term()}
+  def apply_proposal(proposal_id) when is_binary(proposal_id) do
+    logged(:apply_proposal, proposal_id, "applying", fn ref ->
+      Current.apply_proposal(ref.proposal_id)
+    end)
+  end
+
+  # A review is committed when review_proposal/2 returns but projected
+  # asynchronously. Waiting (briefly) for the projection to move on means
+  # that once approve returns, an apply that follows straight away -- as
+  # in `current approve X && current apply X` -- sees the approval.
+  defp await_reviewed(workflow_id, attempts \\ 200) do
+    case WorkflowStore.get(workflow_id) do
+      {:ok, %{status: :waiting_for_approval}} when attempts > 0 ->
+        Process.sleep(10)
+        await_reviewed(workflow_id, attempts - 1)
+
+      _ ->
+        :ok
+    end
+  end
+
+  # Resolves the proposal, requires an :apply workflow, runs `fun`, and
+  # records the request and its outcome in the activity log.
+  defp logged(function, proposal_id, ok_text, fun) do
+    ActivityLog.rpc(function, [proposal_id])
+
+    result =
+      with {:ok, ref} <- Inspector.resolve_proposal(proposal_id),
+           :ok <- require_apply_mode(ref.mode),
+           :ok <- fun.(ref) do
+        {:ok, ref.workflow_id}
+      end
+
+    ActivityLog.rpc_result(
+      function,
+      case result do
+        {:ok, _workflow_id} -> ok_text
+        {:error, reason} -> "✗ #{inspect(reason)}"
+        other -> "✗ #{inspect(other)}"
+      end
+    )
+
+    result
+  end
+
+  defp require_apply_mode(:apply), do: :ok
+  defp require_apply_mode(mode), do: {:error, {:not_apply_mode, mode}}
+
   @doc "A workflow's canonical history and status, by workflow id, task id or unique prefix."
   @spec workflow(String.t()) ::
           {:ok, Inspector.workflow_view()} | {:error, Inspector.lookup_error()}
@@ -61,6 +158,17 @@ defmodule Current.RPC do
   def proposal(id) do
     ActivityLog.rpc(:proposal, [id])
     Inspector.proposal(id)
+  end
+
+  @doc """
+  A proposal with its artifacts' contents, each cut to `:max_lines`
+  lines; see Current.Inspector.review/2.
+  """
+  @spec review(String.t(), Inspector.review_opts()) ::
+          {:ok, Inspector.review_view()} | {:error, Inspector.lookup_error()}
+  def review(id, opts) when is_binary(id) and is_map(opts) do
+    ActivityLog.rpc(:review, [id])
+    Inspector.review(id, opts)
   end
 
   @doc "An artifact's full id and exact bytes."

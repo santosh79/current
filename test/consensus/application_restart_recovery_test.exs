@@ -280,7 +280,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
       proposal = Map.fetch!(proposal_by_workflow_id, workflow_id)
 
       assert :ok =
-               Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :recovery_test}})
+               Current.TestApproval.approve_and_apply(proposal.id, %{reviewed_by: :recovery_test})
     end)
 
     Enum.each(reject_ids, fn workflow_id ->
@@ -387,9 +387,34 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     crash_log_and_await_runtime_rebuild()
 
     assert {:ok, :waiting_for_approval} = Current.get_status(task_id)
-    assert :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :recovery_test}})
+
+    assert :ok =
+             Current.TestApproval.approve_and_apply(proposal.id, %{reviewed_by: :recovery_test})
 
     # No listeners survive a rebuild, so observe through the projection.
+    :ok = await_status(task_id, :completed)
+  end
+
+  test "an approved workflow stays approved across a runtime rebuild, applying nothing" do
+    {:ok, task_id} =
+      Current.submit_task(%Request{input: "resume me", context: %{}}, self(), System.tmp_dir!())
+
+    %{^task_id => workflow_id} = await_workflow_created_for([task_id])
+    %{^workflow_id => proposal} = await_proposal_validated_for([workflow_id])
+
+    assert :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :recovery_test}})
+    :ok = await_status(task_id, :approved)
+
+    crash_log_and_await_runtime_rebuild()
+
+    # The resumed orchestrator replays ProposalApproved and does nothing.
+    Process.sleep(200)
+    assert {:ok, :approved} = Current.get_status(task_id)
+    events = Current.EventStore.list_by_workflow_id(workflow_id)
+    refute Enum.any?(events, &match?(%Event.EffectApplicationStarted{}, &1))
+
+    # ...and it can still be applied afterwards.
+    assert :ok = Current.apply_proposal(proposal.id)
     :ok = await_status(task_id, :completed)
   end
 
@@ -431,7 +456,9 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     %{^task_id => workflow_id} = await_workflow_created_for([task_id])
     %{^workflow_id => proposal} = await_proposal_validated_for([workflow_id])
 
-    assert :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :recovery_test}})
+    assert :ok =
+             Current.TestApproval.approve_and_apply(proposal.id, %{reviewed_by: :recovery_test})
+
     :ok = await_status(task_id, :applying)
 
     :ok = Application.put_env(:current, :effect_applicator, Current.EffectApplicator)
@@ -472,7 +499,7 @@ defmodule Current.Consensus.ApplicationRestartRecoveryTest do
     [first_intent, second_intent | _] = proposal.intents
 
     assert :ok =
-             Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :stepping_test}})
+             Current.TestApproval.approve_and_apply(proposal.id, %{reviewed_by: :stepping_test})
 
     # Let exactly the first intent apply, and wait for its EffectApplied to
     # be fully durable before touching anything else -- crashing off of

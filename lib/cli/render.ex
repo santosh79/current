@@ -6,26 +6,26 @@ defmodule Current.CLI.Render do
   without a running node. Nothing here reads from Current.
   """
 
-  alias Current.{Event, Intent}
+  alias Current.{EffectResult, Event, Intent}
   alias Current.Error.{ProposalProductionError, ValidationError}
   alias Current.EventStore.Entry
 
   @short_hex 12
 
-  ## current plan
+  ## current plan / run / apply
 
-  def plan_submitted(task_id) do
+  def task_submitted(task_id, mode) do
     """
     Task submitted
       task     #{task_id}
-      mode     plan
+      mode     #{mode}
 
       Ctrl-C detaches; the workflow carries on in the runtime.
       Follow it with: current events #{short(task_id)}
     """
   end
 
-  def plan_outcome(%{entries: entries, workflow_id: workflow_id} = view) do
+  def outcome(%{entries: entries, workflow_id: workflow_id} = view) do
     events = Enum.map(entries, & &1.event)
     root = project_dir(view)
     produced = find(events, Event.ProposalProduced)
@@ -35,9 +35,18 @@ defmodule Current.CLI.Render do
       if(produced, do: proposal_summary(produced, root)),
       "",
       steps(events, produced, root),
+      claim_checks(entries, root),
       "",
-      "MODE: PLAN",
+      "MODE: #{view.mode |> to_string() |> String.upcase()}",
       effects_line(events),
+      if(view.status == :waiting_for_approval and produced != nil,
+        do: [
+          "",
+          "Waiting for approval. Nothing has been applied.",
+          "  current review #{short(produced.proposal.id)}",
+          "  current approve #{short(produced.proposal.id)} [-m <message>]"
+        ]
+      ),
       "",
       "Inspect",
       "  current events   #{short(workflow_id)}",
@@ -103,6 +112,8 @@ defmodule Current.CLI.Render do
         nil ->
           nil
       end,
+      if(find(events, Event.ProposalApproved), do: "✓ Proposal approved"),
+      if(find(events, Event.ProposalRejected), do: "✗ Proposal rejected"),
       case terminal_event(events) do
         %Event.WorkflowCompleted{} -> "✓ Workflow completed"
         %Event.WorkflowFailed{} when already_explained? != nil -> "✗ Workflow failed"
@@ -114,8 +125,38 @@ defmodule Current.CLI.Render do
   end
 
   defp effects_line(events) do
-    applied = Enum.count(events, &match?(%Event.EffectApplied{}, &1))
-    "#{applied} #{if applied == 1, do: "effect", else: "effects"} executed."
+    results = for %Event.EffectApplied{result: result} <- events, do: result
+    verified = Enum.count(results, &match?(%EffectResult.Claim{verified: true}, &1))
+    unverified = Enum.count(results, &match?(%EffectResult.Claim{verified: false}, &1))
+
+    [
+      plural(length(results), "effect") <> " executed",
+      if(verified > 0, do: plural(verified, "claim") <> " verified"),
+      if(unverified > 0, do: plural(unverified, "claim") <> " not verified")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" · ")
+    |> Kernel.<>(".")
+  end
+
+  # Every claim that was checked, with the evidence Current checked it
+  # against. The statement is the model's; the evidence line is what
+  # actually ran.
+  defp claim_checks(entries, root) do
+    applied = applied_effects(entries)
+
+    checks =
+      for %Entry{event: %Event.EffectApplied{result: %EffectResult.Claim{} = claim}} <- entries do
+        [
+          "  #{mark(claim)} #{inspect(claim.statement)}",
+          "      " <>
+            evidence_text(claim, applied, fn {_pos, intent, _result} ->
+              describe_inline(intent, root) <> " ·"
+            end)
+        ]
+      end
+
+    if checks != [], do: ["", "Claim checks", checks]
   end
 
   ## current status
@@ -143,6 +184,7 @@ defmodule Current.CLI.Render do
 
   def events(%{entries: entries} = view) do
     root = project_dir(view)
+    applied = applied_effects(entries)
     header = "#{pad("POS", 6)}#{pad("EVENT", 28)}#{pad("TIME (UTC)", 14)}DETAIL"
 
     [
@@ -157,7 +199,7 @@ defmodule Current.CLI.Render do
       Enum.map(entries, fn %Entry{position: position, event: event} = entry ->
         String.trim_trailing(
           "#{pad(Integer.to_string(position), 6)}#{pad(event_name(event), 28)}" <>
-            "#{pad(time(timestamp(entry)), 14)}#{truncate(event_detail(event, root), 60)}"
+            "#{pad(time(timestamp(entry)), 14)}#{truncate(table_detail(event, applied, root), 60)}"
         )
       end),
       case find(Enum.map(entries, & &1.event), Event.ProposalProduced) do
@@ -167,6 +209,71 @@ defmodule Current.CLI.Render do
     ]
     |> lines()
   end
+
+  # Effects show what they returned, not just what they were asked to
+  # do. A claim's evidence points at the effect it was checked against
+  # by that effect's position in the table.
+  defp table_detail(%Event.EffectApplied{intent: intent, result: result}, applied, root),
+    do: effect_detail(intent, result, applied, root, fn {pos, _intent, _result} -> "##{pos}" end)
+
+  defp table_detail(event, _applied, root), do: event_detail(event, root)
+
+  defp effect_detail(_intent, %EffectResult.Claim{} = claim, applied, _root, source_label),
+    do:
+      "Claim #{mark(claim)} #{evidence_text(claim, applied, source_label)} · #{inspect(claim.statement)}"
+
+  defp effect_detail(intent, %EffectResult.Command{exit_code: code}, _applied, root, _),
+    do: "#{describe_inline(intent, root)} · exit #{code}"
+
+  defp effect_detail(intent, %EffectResult.Grep{match_count: n}, _applied, root, _),
+    do: "#{describe_inline(intent, root)} · #{plural(n, "match", "matches")}"
+
+  defp effect_detail(intent, %EffectResult.Glob{match_count: n}, _applied, root, _),
+    do: "#{describe_inline(intent, root)} · #{plural(n, "match", "matches")}"
+
+  defp effect_detail(intent, _result, _applied, root, _), do: describe_inline(intent, root)
+
+  # intent id => {position, intent, result} for every applied effect.
+  defp applied_effects(entries) do
+    for %Entry{position: pos, event: %Event.EffectApplied{intent: intent, result: result}} <-
+          entries,
+        into: %{},
+        do: {intent.id, {pos, intent, result}}
+  end
+
+  defp mark(%EffectResult.Claim{verified: true}), do: "✓"
+  defp mark(%EffectResult.Claim{}), do: "✗"
+
+  # What the claim was checked against, built from the source effect's
+  # own recorded result. Falls back to the applicator's reason if the
+  # source isn't in this history.
+  defp evidence_text(
+         %EffectResult.Claim{evidence: evidence, reason: reason},
+         applied,
+         source_label
+       ) do
+    with %{source_intent_id: source_id, condition: condition, value: expected} <- evidence,
+         {_pos, _intent, result} = source <- Map.get(applied, source_id),
+         observed when is_binary(observed) <- observed(condition, expected, result) do
+      "#{source_label.(source)} #{observed}"
+    else
+      _ -> reason || ""
+    end
+  end
+
+  defp observed(:exit_code_equals, expected, %EffectResult.Command{exit_code: code}),
+    do: "exit #{code} (expected #{expected})"
+
+  defp observed(:match_count_equals, expected, %{match_count: n}),
+    do: "#{plural(n, "match", "matches")} (expected #{expected})"
+
+  defp observed(:match_count_greater_than, expected, %{match_count: n}),
+    do: "#{plural(n, "match", "matches")} (expected > #{expected})"
+
+  defp observed(_condition, _expected, _result), do: nil
+
+  defp plural(n, singular, plural \\ nil),
+    do: "#{n} #{if n == 1, do: singular, else: plural || singular <> "s"}"
 
   defp event_detail(%Event.TaskCreated{mode: mode, input: input}, _root),
     do: "#{mode} · #{inspect(input)}"
@@ -187,12 +294,23 @@ defmodule Current.CLI.Render do
 
   defp event_detail(%Event.EffectApplied{intent: intent}, root), do: describe_inline(intent, root)
 
+  # The claim itself is on the EffectApplied line just above.
+  defp event_detail(%Event.EffectFailed{intent: %Intent.Claim{}, reason: reason}, _root),
+    do: to_text(reason)
+
   defp event_detail(%Event.EffectFailed{intent: intent, reason: reason}, root),
     do: "#{describe_inline(intent, root)}: #{to_text(reason)}"
 
   defp event_detail(%Event.WorkflowFailed{reason: reason}, _root), do: to_text(reason)
   defp event_detail(%Event.WorkflowAbandoned{reason: reason}, _root), do: to_text(reason)
   defp event_detail(%Event.ModeInvalid{mode: mode}, _root), do: inspect(mode)
+
+  defp event_detail(%Event.ProposalApproved{metadata: %{message: message}}, _root),
+    do: inspect(message)
+
+  defp event_detail(%Event.ProposalRejected{metadata: %{message: message}}, _root),
+    do: inspect(message)
+
   defp event_detail(_event, _root), do: ""
 
   ## current proposal
@@ -228,8 +346,15 @@ defmodule Current.CLI.Render do
         ]
       ),
       case artifact_ids(proposal) do
-        [] -> nil
-        [id | _] -> ["", "View an artifact:  current artifact #{short(id)}"]
+        [] ->
+          nil
+
+        [id | _] ->
+          [
+            "",
+            "View an artifact:  current artifact #{short(id)}",
+            "See them all:      current review #{short(proposal.id)}"
+          ]
       end
     ]
     |> lines()

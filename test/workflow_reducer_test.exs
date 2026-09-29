@@ -708,9 +708,11 @@ defmodule Current.WorkflowReducerTest do
   end)
 
   describe "transition legality: mode independence elsewhere" do
-    test "every rule above except WorkflowCompleted-from-:waiting_for_approval is mode-independent",
+    test "every rule above except the review events and WorkflowCompleted-from-:waiting_for_approval is mode-independent",
          %{fixture: fixture} do
-      Enum.each(@transitions, fn {mod, allowed} ->
+      @transitions
+      |> Enum.reject(fn {mod, _} -> mod in [Event.ProposalApproved, Event.ProposalRejected] end)
+      |> Enum.each(fn {mod, allowed} ->
         Enum.each(allowed, fn status ->
           event = struct(mod, workflow_id: fixture.workflow_id)
 
@@ -752,6 +754,23 @@ defmodule Current.WorkflowReducerTest do
                  bare_workflow(fixture, :waiting_for_approval, :apply),
                  event
                )
+    end
+  end
+
+  describe "transition legality: only :apply workflows can be reviewed" do
+    # A :plan workflow sits in :waiting_for_approval between
+    # ProposalValidated and WorkflowCompleted. A review landing in that
+    # window must not commit.
+    test "ProposalApproved and ProposalRejected are illegal for a :plan workflow", %{
+      fixture: fixture
+    } do
+      waiting = bare_workflow(fixture, :waiting_for_approval, :plan)
+
+      assert {:error, {:invalid_transition, :waiting_for_approval, Event.ProposalApproved}} =
+               WorkflowReducer.apply_event(waiting, proposal_approved(fixture))
+
+      assert {:error, {:invalid_transition, :waiting_for_approval, Event.ProposalRejected}} =
+               WorkflowReducer.apply_event(waiting, proposal_rejected(fixture))
     end
   end
 

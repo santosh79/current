@@ -2,6 +2,7 @@ defmodule Current.WorkflowOrchestrator do
   use GenServer
 
   alias Current.{
+    EffectResult,
     Error,
     Event,
     EventStore,
@@ -174,14 +175,7 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   def handle_info({:effect_failed, intent, reason}, state) do
-    propose(%Event.EffectFailed{
-      id: Id.generate(),
-      workflow_id: state.workflow_id,
-      intent: intent,
-      reason: reason,
-      timestamp: DateTime.utc_now()
-    })
-
+    propose_effect_failed(state, intent, reason)
     {:noreply, state}
   end
 
@@ -191,6 +185,11 @@ defmodule Current.WorkflowOrchestrator do
     case List.last(events) do
       %Event.EffectApplicationStarted{} ->
         fail_interrupted_effects(state)
+
+      # An unverified claim is recorded as EffectApplied first and then
+      # fails the workflow; finish that if the crash fell in between.
+      %Event.EffectApplied{intent: intent, result: %EffectResult.Claim{verified: false} = result} ->
+        propose_effect_failed(state, intent, unverified_claim_reason(result))
 
       %Event.EffectApplied{} ->
         fail_interrupted_effects(state)
@@ -319,23 +318,20 @@ defmodule Current.WorkflowOrchestrator do
     {:noreply, state}
   end
 
-  # Checked before EffectApplicationStarted is recorded, so the log never
-  # claims application started for a task that could not have one.
+  # Approval makes a proposal eligible to be applied; it never applies it.
+  # The workflow parks in :approved until Current.apply_proposal/1 records
+  # EffectApplicationStarted. A task recorded before project_dir existed
+  # could never be applied, so it is abandoned here rather than left
+  # parked forever.
   defp react(%Event.ProposalApproved{}, state) do
-    with_project_dir(state, "apply the proposal", fn ->
-      propose(%Event.EffectApplicationStarted{
-        id: Id.generate(),
-        workflow_id: state.workflow_id,
-        timestamp: DateTime.utc_now()
-      })
-
-      {:noreply, state}
-    end)
+    with_project_dir(state, "apply the proposal", fn -> {:noreply, state} end)
   end
 
   defp react(%Event.EffectApplicationStarted{}, state) do
-    start_effect_application(state)
-    {:noreply, state}
+    with_project_dir(state, "apply the proposal", fn ->
+      start_effect_application(state)
+      {:noreply, state}
+    end)
   end
 
   defp react(%Event.EffectApplicationComplete{intent_results: intent_results}, state) do
@@ -476,6 +472,12 @@ defmodule Current.WorkflowOrchestrator do
     applicator = Application.fetch_env!(:current, :effect_applicator)
 
     case applicator.apply(intent, acc, project_dir) do
+      # A claim that doesn't hold fails the workflow. Its result is still
+      # recorded first, so the evidence that disproved it stays in the log.
+      {:ok, %EffectResult.Claim{verified: false} = result} ->
+        send(orchestrator, {:effect_applied, intent, result})
+        {:error, intent, unverified_claim_reason(result)}
+
       {:ok, result} ->
         send(
           orchestrator,
@@ -608,6 +610,19 @@ defmodule Current.WorkflowOrchestrator do
   end
 
   defp with_project_dir(_state, _step, fun), do: fun.()
+
+  defp propose_effect_failed(state, intent, reason) do
+    propose(%Event.EffectFailed{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      intent: intent,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    })
+  end
+
+  defp unverified_claim_reason(%EffectResult.Claim{reason: reason}),
+    do: "claim not verified: #{reason}"
 
   defp fail_interrupted_effects(state) do
     propose(%Event.WorkflowFailed{

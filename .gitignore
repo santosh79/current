@@ -40,3 +40,5 @@ combined_tests.txt
 /examples/
 
 /current
+
+.env

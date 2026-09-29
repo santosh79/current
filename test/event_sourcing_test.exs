@@ -55,10 +55,9 @@ defmodule Current.EventSourcingTest do
     await(:proposal_validated, workflow_id)
 
     assert :ok =
-             Current.review_proposal(
-               proposal.id,
-               {:approve, %{reviewed_by: :event_sourcing_test}}
-             )
+             Current.TestApproval.approve_and_apply(proposal.id, %{
+               reviewed_by: :event_sourcing_test
+             })
 
     await(:workflow_completed, workflow_id)
 
