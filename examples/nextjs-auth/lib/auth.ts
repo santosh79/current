@@ -8,14 +8,22 @@ const users: User[] = [
   {
     id: 1,
     username: "alice",
-    password: "password123"
+    password: "password123!"
   }
 ];
+
+export function isPasswordValid(password: string): boolean {
+  return /[^a-zA-Z0-9]/.test(password);
+}
 
 export async function authenticate(
   username: string,
   password: string
 ): Promise<User | null> {
+  if (!isPasswordValid(password)) {
+    return null;
+  }
+
   return (
     users.find(
       user =>

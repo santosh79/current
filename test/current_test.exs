@@ -181,14 +181,26 @@ defmodule CurrentTest do
                )
     end
 
-    test "approving a validated proposal completes the workflow" do
+    test "approving a validated proposal parks the workflow in :approved and applies nothing" do
       {:ok, task_id, workflow_id, proposal} = submit_and_await_valid_proposal()
 
-      assert :ok =
-               Current.review_proposal(
-                 proposal.id,
-                 {:approve, %{reviewed_by: :test_user}}
-               )
+      assert :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :test_user}})
+
+      assert_receive {:proposal_approved, %Event.ProposalApproved{workflow_id: ^workflow_id}},
+                     @receive_timeout
+
+      refute_receive {:effect_applied, _}, 300
+      refute_receive {:workflow_completed, _}, 0
+
+      assert {:ok, :approved} = Current.get_status(task_id)
+      events = Current.EventStore.list_by_workflow_id(workflow_id)
+      refute Enum.any?(events, &match?(%Event.EffectApplicationStarted{}, &1))
+    end
+
+    test "applying an approved proposal completes the workflow" do
+      {:ok, task_id, workflow_id, proposal} = submit_and_await_valid_proposal()
+
+      assert :ok = Current.TestApproval.approve_and_apply(proposal.id)
 
       receive do
         {:workflow_completed, %Event.WorkflowCompleted{workflow_id: ^workflow_id}} ->
@@ -286,6 +298,57 @@ defmodule CurrentTest do
 
       assert {:error, {:invalid_transition, :planned, Event.ProposalApproved}} =
                Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :test_user}})
+    end
+  end
+
+  describe "apply_proposal/1" do
+    test "returns not_found for an unknown proposal" do
+      assert {:error, :not_found} =
+               Current.apply_proposal("sha256:" <> String.duplicate("c", 64))
+    end
+
+    test "a proposal waiting for approval can't be applied" do
+      {:ok, task_id, _workflow_id, proposal} = submit_and_await_valid_proposal()
+
+      assert {:error,
+              {:invalid_transition, :waiting_for_approval, Event.EffectApplicationStarted}} =
+               Current.apply_proposal(proposal.id)
+
+      assert {:ok, :waiting_for_approval} = Current.get_status(task_id)
+    end
+
+    test "a rejected proposal can't be applied" do
+      {:ok, _task_id, _workflow_id, proposal} = submit_and_await_valid_proposal()
+
+      :ok = Current.review_proposal(proposal.id, {:reject, %{reviewed_by: :test_user}})
+      :ok = Current.TestApproval.await_status(proposal.id, :rejected)
+
+      assert {:error, {:invalid_transition, :rejected, Event.EffectApplicationStarted}} =
+               Current.apply_proposal(proposal.id)
+    end
+
+    test "an approved proposal can't be approved again, and is applied only once" do
+      {:ok, _task_id, workflow_id, proposal} = submit_and_await_valid_proposal()
+
+      :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :test_user}})
+      :ok = Current.TestApproval.await_status(proposal.id, :approved)
+
+      assert {:error, {:invalid_transition, :approved, Event.ProposalApproved}} =
+               Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :test_user}})
+
+      assert {:error, {:invalid_transition, :approved, Event.ProposalRejected}} =
+               Current.review_proposal(proposal.id, {:reject, %{reviewed_by: :test_user}})
+
+      assert :ok = Current.apply_proposal(proposal.id)
+
+      assert_receive {:workflow_completed, %Event.WorkflowCompleted{workflow_id: ^workflow_id}},
+                     @receive_timeout
+
+      assert {:error, {:invalid_transition, :completed, Event.EffectApplicationStarted}} =
+               Current.apply_proposal(proposal.id)
+
+      events = Current.EventStore.list_by_workflow_id(workflow_id)
+      assert Enum.count(events, &match?(%Event.EffectApplicationStarted{}, &1)) == 1
     end
   end
 
@@ -389,7 +452,7 @@ defmodule CurrentTest do
     :ok = Current.EventNotifier.subscribe(self(), workflow_id, :all)
     :ok = Current.EventNotifier.subscribe(self(), workflow_id, :workflow_completed)
 
-    :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :test_user}})
+    :ok = Current.TestApproval.approve_and_apply(proposal.id, %{reviewed_by: :test_user})
 
     assert_receive {:event_committed,
                     %Current.EventStore.Entry{event: %Current.Event.WorkflowCompleted{}}}

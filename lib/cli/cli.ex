@@ -3,8 +3,13 @@ defmodule Current.CLI do
   The `current` command-line interface (built as an escript).
 
       current plan <prompt> [--dir <project-dir>]
+      current run <prompt> [--dir <project-dir>]
+      current approve <proposal-id> [--message <message>]
+      current reject <proposal-id> [--message <message>]
+      current apply <proposal-id>
       current events <workflow-id>
       current proposal <proposal-id>
+      current review <proposal-id> [--json] [--max-lines <n>] [--raw]
       current artifact <artifact-id>
       current status
 
@@ -14,9 +19,18 @@ defmodule Current.CLI do
   (see `Current.CLI.Client` and `bin/current-server`).
 
   `plan` submits the task, then polls the workflow's canonical projection
-  until it is terminal. The CLI holds no runtime state, so it can be
-  interrupted at any point; the workflow carries on, and `current events
-  <task-id>` picks it up again.
+  until it is terminal. `run` does the same in apply mode, but stops
+  polling once the proposal is waiting for approval.
+
+  Approving and applying are separate steps. `approve` records that the
+  proposal is authorized and returns; the workflow parks in `approved`
+  and nothing is applied. `apply` starts applying an approved proposal
+  and follows the workflow to its end. `reject` ends a proposal that is
+  waiting for approval.
+
+  The CLI holds no runtime state, so it can be interrupted at
+  any point; the workflow carries on, and `current events <task-id>`
+  picks it up again.
 
   Ids may be shortened to any unique prefix of 4+ hex digits, with or
   without the `sha256:` part.
@@ -26,7 +40,7 @@ defmodule Current.CLI do
   """
 
   alias Current.Request
-  alias Current.CLI.{Client, Render}
+  alias Current.CLI.{Client, Render, ReviewJSON, ReviewMarkdown}
 
   @exit_ok 0
   @exit_failed 1
@@ -37,6 +51,10 @@ defmodule Current.CLI do
   # time without any new event.
   @idle_slack_ms 60_000
   @default_model_timeout_ms 120_000
+
+  @default_approval_message "Approved via the current CLI"
+  @default_rejection_message "Rejected via the current CLI"
+  @default_review_max_lines 200
 
   ## Entry points
 
@@ -82,7 +100,22 @@ defmodule Current.CLI do
         :status
 
       ["plan" | rest] ->
-        parse_plan(rest)
+        parse_task(:plan, rest)
+
+      ["run" | rest] ->
+        parse_task(:run, rest)
+
+      ["approve" | rest] ->
+        parse_decision(:approve, @default_approval_message, rest)
+
+      ["reject" | rest] ->
+        parse_decision(:reject, @default_rejection_message, rest)
+
+      ["apply" | rest] ->
+        parse_apply(rest)
+
+      ["review" | rest] ->
+        parse_review(rest)
 
       [command | rest] when command in ["events", "proposal", "artifact"] ->
         parse_id(command, rest)
@@ -92,7 +125,8 @@ defmodule Current.CLI do
     end
   end
 
-  defp parse_plan(args) do
+  # plan and run take the same arguments; only the mode differs.
+  defp parse_task(command, args) do
     case OptionParser.parse(args,
            strict: [dir: :string, help: :boolean],
            aliases: [d: :dir, h: :help]
@@ -102,13 +136,79 @@ defmodule Current.CLI do
 
         cond do
           opts[:help] -> :help
-          prompt == "" -> {:error, "plan needs a prompt"}
-          true -> {:plan, prompt, Keyword.get(opts, :dir, ".")}
+          prompt == "" -> {:error, "#{command} needs a prompt"}
+          true -> {command, prompt, Keyword.get(opts, :dir, ".")}
         end
 
       {_opts, _argv, [{flag, _value} | _]} ->
         {:error, "invalid option #{flag}"}
     end
+  end
+
+  # approve and reject: a proposal id and an optional message.
+  defp parse_decision(command, default_message, args) do
+    case OptionParser.parse(args,
+           strict: [message: :string, help: :boolean],
+           aliases: [m: :message, h: :help]
+         ) do
+      {opts, argv, []} ->
+        message = Keyword.get(opts, :message, default_message)
+
+        cond do
+          opts[:help] -> :help
+          String.trim(message) == "" -> {:error, "#{command}: --message can't be blank"}
+          argv == [] -> {:error, "#{command} needs a proposal id"}
+          length(argv) > 1 -> {:error, "#{command} takes exactly one proposal id"}
+          true -> {command, String.trim(hd(argv)), message}
+        end
+
+      {_opts, _argv, [{flag, _value} | _]} ->
+        {:error, "invalid option #{flag}"}
+    end
+  end
+
+  defp parse_apply(args) do
+    case OptionParser.parse(args, strict: [help: :boolean], aliases: [h: :help]) do
+      {opts, argv, []} ->
+        cond do
+          opts[:help] -> :help
+          argv == [] -> {:error, "apply needs a proposal id"}
+          length(argv) > 1 -> {:error, "apply takes exactly one proposal id"}
+          true -> {:apply, String.trim(hd(argv))}
+        end
+
+      {_opts, _argv, [{flag, _value} | _]} ->
+        {:error, "invalid option #{flag}"}
+    end
+  end
+
+  defp parse_review(args) do
+    case OptionParser.parse(args,
+           strict: [json: :boolean, max_lines: :integer, raw: :boolean, help: :boolean],
+           aliases: [h: :help]
+         ) do
+      {opts, argv, []} ->
+        max_lines = Keyword.get(opts, :max_lines, @default_review_max_lines)
+
+        cond do
+          opts[:help] -> :help
+          max_lines < 1 -> {:error, "review: --max-lines must be at least 1"}
+          argv == [] -> {:error, "review needs a proposal id"}
+          length(argv) > 1 -> {:error, "review takes exactly one proposal id"}
+          true -> {:review, String.trim(hd(argv)), review_opts(opts, max_lines)}
+        end
+
+      {_opts, _argv, [{flag, _value} | _]} ->
+        {:error, "invalid option #{flag}"}
+    end
+  end
+
+  defp review_opts(opts, max_lines) do
+    %{
+      format: if(opts[:json], do: :json, else: :markdown),
+      max_lines: max_lines,
+      raw: Keyword.get(opts, :raw, false)
+    }
   end
 
   defp parse_id(command, args) do
@@ -128,21 +228,35 @@ defmodule Current.CLI do
     """
     Usage:
       current plan <prompt> [--dir <project-dir>]
+      current run <prompt> [--dir <project-dir>]
+      current approve <proposal-id> [--message <message>]
+      current reject <proposal-id> [--message <message>]
+      current apply <proposal-id>
       current events <workflow-id>
       current proposal <proposal-id>
+      current review <proposal-id> [--json] [--max-lines <n>] [--raw]
       current artifact <artifact-id>
       current status
 
     Commands:
       plan      Ask the agent for a proposal and validate it. Nothing is executed.
+      run       Like plan, but in apply mode: stops for approval. Nothing is executed yet.
+      approve   Authorize a proposal from run. Nothing is applied yet.
+      reject    Turn down a proposal from run.
+      apply     Apply an approved proposal, and follow it to the end.
       events    A workflow's canonical event history (a task id works too).
       proposal  A proposal in full: intents, claims, artifacts.
+      review    A proposal with its diffs and file contents, as Markdown (or --json).
       artifact  An artifact's exact bytes, e.g. a proposed diff.
       status    Whether the runtime is up, and how it is configured.
 
     Options:
-      -d, --dir   Project directory for plan (default: the current directory)
-      -h, --help  Show this help
+      -d, --dir      Project directory for plan and run (default: the current directory)
+      -m, --message  Message recorded by approve or reject
+      --json         review: machine-readable output (schema current.review/v1)
+      --max-lines    review: lines shown per artifact (default: #{@default_review_max_lines})
+      --raw          review: include the model's raw output
+      -h, --help     Show this help
 
     Ids can be shortened to a unique prefix (4+ hex digits).
 
@@ -163,7 +277,47 @@ defmodule Current.CLI do
     end
   end
 
-  defp dispatch({:plan, prompt, dir}, client), do: plan(prompt, dir, client)
+  defp dispatch({:plan, prompt, dir}, client), do: submit(:plan, prompt, dir, client)
+  defp dispatch({:run, prompt, dir}, client), do: submit(:apply, prompt, dir, client)
+
+  defp dispatch({:approve, id, message}, client) do
+    case Client.approve(client, id, review_metadata(message)) do
+      {:ok, _workflow_id} ->
+        print(
+          "✓ Approved #{id}\n  message  #{message}\n\n" <>
+            "Nothing has been applied. Apply it with:\n  current apply #{id}"
+        )
+
+      {:error, reason} ->
+        fail(review_error(:approve, id, reason, client))
+    end
+  end
+
+  defp dispatch({:reject, id, message}, client) do
+    case Client.reject(client, id, review_metadata(message)) do
+      {:ok, _workflow_id} ->
+        print("✓ Rejected #{id}\n  message  #{message}")
+
+      {:error, reason} ->
+        fail(review_error(:reject, id, reason, client))
+    end
+  end
+
+  defp dispatch({:apply, id}, client) do
+    with {:ok, health} <- Client.health(client),
+         {:ok, workflow_id} <- Client.apply_proposal(client, id) do
+      IO.puts("✓ Applying #{id}\n")
+
+      # ProposalProductionStarted is long past: don't announce the model.
+      follow(client, workflow_id, health,
+        done?: & &1.terminal,
+        expect: :completed,
+        started?: true
+      )
+    else
+      {:error, reason} -> fail(apply_error(id, reason, client))
+    end
+  end
 
   defp dispatch({:events, id}, client) do
     case Client.workflow(client, id) do
@@ -175,6 +329,14 @@ defmodule Current.CLI do
   defp dispatch({:proposal, id}, client) do
     case Client.proposal(client, id) do
       {:ok, view} -> print(Render.proposal(view))
+      {:error, reason} -> fail(error_message("proposal", id, reason, client))
+    end
+  end
+
+  defp dispatch({:review, id, opts}, client) do
+    case Client.review(client, id, Map.take(opts, [:max_lines, :raw])) do
+      {:ok, review} when opts.format == :json -> print(ReviewJSON.encode(review))
+      {:ok, review} -> print(ReviewMarkdown.render(review))
       {:error, reason} -> fail(error_message("proposal", id, reason, client))
     end
   end
@@ -192,46 +354,27 @@ defmodule Current.CLI do
     end
   end
 
-  ## plan
+  ## plan and run
 
-  defp plan(prompt, dir, client) do
+  # plan (mode :plan) runs to completion; run (mode :apply) stops once
+  # the proposal is waiting for approval -- the runtime itself goes no
+  # further until `current approve` and then `current apply`.
+  defp submit(mode, prompt, dir, client) do
     with {:ok, health} <- Client.health(client),
-         request = %Request{input: prompt, context: %{}, mode: :plan},
+         request = %Request{input: prompt, context: %{}, mode: mode},
          # Relative to where the CLI runs, not the runtime's working
          # directory. absname/1 (unlike expand/1) keeps any "..", so
          # submit_task/3 still applies its own rules to the path as given.
          {:ok, task_id} <- Client.submit_task(client, request, Path.absname(dir)) do
       IO.puts("Current #{health.version} · #{health.node}\n")
-      IO.puts(Render.plan_submitted(task_id))
+      IO.puts(Render.task_submitted(task_id, mode))
 
-      idle_ms = (health.llm_proposal_timeout_ms || @default_model_timeout_ms) + @idle_slack_ms
+      case mode do
+        :plan ->
+          follow(client, task_id, health, done?: & &1.terminal, expect: :planned)
 
-      case await(client, task_id, %{
-             seen: 0,
-             started?: false,
-             idle_ms: idle_ms,
-             last_progress: now()
-           }) do
-        {:ok, view} ->
-          IO.puts(Render.plan_outcome(view))
-          if match?(%{status: :planned}, view), do: @exit_ok, else: @exit_failed
-
-        {:timeout, _state} ->
-          IO.puts("""
-
-          ✗ Stopped waiting: no workflow progress for #{div(idle_ms, 1000)}s.
-            The workflow keeps running in the runtime.
-            current events #{Render.short(task_id)}
-          """)
-
-          @exit_failed
-
-        {:error, reason} ->
-          IO.puts("")
-
-          fail(
-            transport_error(reason, client.node) <> "\n  current events #{Render.short(task_id)}"
-          )
+        :apply ->
+          follow(client, task_id, health, done?: &halted?/1, expect: :waiting_for_approval)
       end
     else
       {:error, {:invalid_project_dir, path, reason}} ->
@@ -242,18 +385,94 @@ defmodule Current.CLI do
     end
   end
 
-  # Polls the canonical projection until it is terminal. Before
-  # WorkflowCreated commits, the task id doesn't resolve yet (:not_found).
-  defp await(client, task_id, state) do
-    case Client.workflow(client, task_id) do
-      {:ok, %{terminal: true} = view} ->
-        {:ok, view}
+  defp halted?(view), do: view.terminal or view.status == :waiting_for_approval
 
+  ## approve, reject, apply
+
+  defp review_metadata(message), do: %{message: message, reviewed_by: reviewer(), via: :cli}
+
+  defp review_error(command, id, {:not_apply_mode, mode}, _client),
+    do: not_apply_mode(command, id, mode)
+
+  defp review_error(command, id, {:invalid_transition, status, _event}, _client),
+    do:
+      "proposal #{id} can't be #{past(command)}: " <>
+        "its workflow is #{status}, not waiting for approval"
+
+  defp review_error(_command, id, reason, client),
+    do: error_message("proposal", id, reason, client)
+
+  defp apply_error(id, {:not_apply_mode, mode}, _client), do: not_apply_mode(:apply, id, mode)
+
+  defp apply_error(id, {:invalid_transition, :waiting_for_approval, _event}, _client) do
+    "proposal #{id} hasn't been approved yet. Approve it first:\n" <>
+      "  current approve #{id}"
+  end
+
+  defp apply_error(id, {:invalid_transition, status, _event}, _client),
+    do: "proposal #{id} can't be applied: its workflow is #{status}, not approved"
+
+  defp apply_error(id, reason, client), do: error_message("proposal", id, reason, client)
+
+  defp not_apply_mode(command, id, mode) do
+    "proposal #{id} is from a #{mode}-mode workflow; " <>
+      "only proposals from `current run` can be #{past(command)}"
+  end
+
+  defp past(:approve), do: "approved"
+  defp past(:reject), do: "rejected"
+  defp past(:apply), do: "applied"
+
+  # Who ran the CLI -- not the runtime's user, which is whoever started
+  # the server.
+  defp reviewer, do: System.get_env("USER") || System.get_env("USERNAME") || "unknown"
+
+  ## Following a workflow
+
+  # Polls `id` (a task or workflow id) until `done?` holds, renders the
+  # outcome, and exits 0 only if the workflow ended in the expected status.
+  defp follow(client, id, health, opts) do
+    idle_ms = (health.llm_proposal_timeout_ms || @default_model_timeout_ms) + @idle_slack_ms
+
+    case await(client, id, %{
+           seen: 0,
+           started?: Keyword.get(opts, :started?, false),
+           idle_ms: idle_ms,
+           last_progress: now(),
+           done?: Keyword.fetch!(opts, :done?)
+         }) do
       {:ok, view} ->
-        view |> observe(state) |> retry(client, task_id)
+        IO.puts(Render.outcome(view))
+        if view.status == Keyword.fetch!(opts, :expect), do: @exit_ok, else: @exit_failed
+
+      {:timeout, _state} ->
+        IO.puts("""
+
+        ✗ Stopped waiting: no workflow progress for #{div(idle_ms, 1000)}s.
+          The workflow keeps running in the runtime.
+          current events #{Render.short(id)}
+        """)
+
+        @exit_failed
+
+      {:error, reason} ->
+        IO.puts("")
+
+        fail(transport_error(reason, client.node) <> "\n  current events #{Render.short(id)}")
+    end
+  end
+
+  # Polls the canonical projection until state.done? holds. Before
+  # WorkflowCreated commits, a task id doesn't resolve yet (:not_found).
+  defp await(client, id, state) do
+    case Client.workflow(client, id) do
+      {:ok, view} ->
+        if state.done?.(view),
+          do: {:ok, view},
+          else: view |> observe(state) |> retry(client, id)
 
       {:error, :not_found} ->
-        retry(state, client, task_id)
+        retry(state, client, id)
 
       {:error, reason} ->
         {:error, reason}
@@ -276,12 +495,12 @@ defmodule Current.CLI do
     end
   end
 
-  defp retry(state, client, task_id) do
+  defp retry(state, client, id) do
     if now() - state.last_progress > state.idle_ms do
       {:timeout, state}
     else
       Process.sleep(@poll_ms)
-      await(client, task_id, state)
+      await(client, id, state)
     end
   end
 

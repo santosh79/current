@@ -106,8 +106,13 @@ defmodule Current.WorkflowReducer do
 
   # --- Approval ------------------------------------------------------------
 
+  # Only :apply workflows can be reviewed. A :plan workflow also passes
+  # through :waiting_for_approval, between ProposalValidated and its
+  # WorkflowCompleted, and a review landing in that window must not
+  # commit: an approved plan workflow could then be applied.
+
   defp apply_event_helper(
-         %Workflow{status: :waiting_for_approval} = w,
+         %Workflow{status: :waiting_for_approval, mode: :apply} = w,
          %Event.ProposalApproved{} = e
        ) do
     ww = %{w | status: :approved, updated_at: e.timestamp}
@@ -115,7 +120,7 @@ defmodule Current.WorkflowReducer do
   end
 
   defp apply_event_helper(
-         %Workflow{status: :waiting_for_approval} = w,
+         %Workflow{status: :waiting_for_approval, mode: :apply} = w,
          %Event.ProposalRejected{} = e
        ) do
     ww = %{w | status: :rejected, updated_at: e.timestamp}

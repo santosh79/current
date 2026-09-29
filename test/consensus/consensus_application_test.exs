@@ -81,7 +81,8 @@ defmodule Current.ConsensusApplicationTest do
       @receive_timeout -> flunk("did not receive proposal_validated")
     end
 
-    assert :ok = Current.review_proposal(proposal.id, {:approve, %{reviewed_by: :consensus_test}})
+    assert :ok =
+             Current.TestApproval.approve_and_apply(proposal.id, %{reviewed_by: :consensus_test})
 
     receive do
       {:workflow_completed, _event} -> :ok

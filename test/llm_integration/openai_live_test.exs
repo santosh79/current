@@ -7,17 +7,56 @@ defmodule Current.LLMIntegration.OpenAILiveTest do
 
   @timeout_ms 240_000
 
+  # A tiny, known project for the model to look at, instead of whatever
+  # happens to be in the repo checkout.
+  @project_files %{
+    "README.md" => """
+    # greeter
+
+    A tiny Elixir library that greets people.
+    """,
+    "mix.exs" => """
+    defmodule Greeter.MixProject do
+      use Mix.Project
+
+      def project do
+        [app: :greeter, version: "0.1.0", elixir: "~> 1.18"]
+      end
+    end
+    """,
+    "lib/greeter.ex" => """
+    defmodule Greeter do
+      def hello(name) do
+        "Hello, " <> name
+      end
+    end
+    """
+  }
+
   setup do
     previous_client = Application.fetch_env!(:current, :llm_client)
 
+    project_dir =
+      Path.join(
+        Current.TestTmp.dir(),
+        "current_live_llm_#{System.unique_integer([:positive])}"
+      )
+
+    for {path, contents} <- @project_files do
+      full_path = Path.join(project_dir, path)
+      File.mkdir_p!(Path.dirname(full_path))
+      File.write!(full_path, contents)
+    end
+
     on_exit(fn ->
       :ok = Application.put_env(:current, :llm_client, previous_client)
+      File.rm_rf!(project_dir)
     end)
 
-    :ok
+    {:ok, project_dir: project_dir}
   end
 
-  test "OpenAI produces a proposal that Current can decode" do
+  test "OpenAI produces a proposal that Current can decode", %{project_dir: project_dir} do
     case System.get_env("OPENAI_API_KEY") in [nil, ""] do
       true -> flunk("OPENAI_API_KEY must be set to run live LLM tests")
       _ -> :ok
@@ -37,7 +76,7 @@ defmodule Current.LLMIntegration.OpenAILiveTest do
                workflow_id,
                Current.LLMClient.OpenAI,
                @timeout_ms,
-               File.cwd!()
+               project_dir
              )
 
     assert proposal.workflow_id == workflow_id

@@ -17,15 +17,53 @@ defmodule Current.ProjectContext do
 
   alias Current.IntentPaths
 
+  # Dependencies, build output, caches and tool state: large, generated,
+  # or both, and never what a request is about.
   @ignored_dirs MapSet.new([
+                  # VCS
                   ".git",
-                  "node_modules",
+                  ".hg",
+                  ".svn",
+                  # Elixir
                   "_build",
-                  "deps"
+                  "deps",
+                  "cover",
+                  ".elixir_ls",
+                  ".lexical",
+                  # JS / TS
+                  "node_modules",
+                  ".next",
+                  ".nuxt",
+                  ".turbo",
+                  ".parcel-cache",
+                  "dist",
+                  "coverage",
+                  # Python
+                  "__pycache__",
+                  ".venv",
+                  "venv",
+                  ".pytest_cache",
+                  ".mypy_cache",
+                  # Rust / JVM
+                  "target",
+                  ".gradle",
+                  # Editors / misc
+                  ".idea",
+                  ".cache",
+                  "tmp"
                 ])
 
+  # Lockfiles and dumps: text, but long and of no use to the model.
   @ignored_files MapSet.new([
-                   "package-lock.json"
+                   "package-lock.json",
+                   "yarn.lock",
+                   "pnpm-lock.yaml",
+                   "mix.lock",
+                   "Cargo.lock",
+                   "poetry.lock",
+                   "Gemfile.lock",
+                   "composer.lock",
+                   "erl_crash.dump"
                  ])
 
   @type t :: %{root: Path.t(), files: %{optional(Path.t()) => binary()}}
@@ -72,10 +110,16 @@ defmodule Current.ProjectContext do
   defp collect_entry(path, name, root) do
     case File.lstat(path) do
       {:ok, %File.Stat{type: :directory}} ->
-        if MapSet.member?(@ignored_dirs, name), do: {:ok, []}, else: collect_files(path, root)
+        case MapSet.member?(@ignored_dirs, name) do
+          true -> {:ok, []}
+          _ -> collect_files(path, root)
+        end
 
       {:ok, %File.Stat{type: :regular}} ->
-        if MapSet.member?(@ignored_files, name), do: {:ok, []}, else: {:ok, [path]}
+        case ignored_file?(name) do
+          true -> {:ok, []}
+          _ -> {:ok, [path]}
+        end
 
       {:ok, %File.Stat{type: :symlink}} ->
         {:ok, symlinked_file(path, name, root)}
@@ -93,7 +137,7 @@ defmodule Current.ProjectContext do
   end
 
   defp symlinked_file(path, name, root) do
-    with false <- MapSet.member?(@ignored_files, name),
+    with false <- ignored_file?(name),
          :ok <- IntentPaths.resolved_within(path, root),
          {:ok, %File.Stat{type: :regular}} <- File.stat(path) do
       [path]
@@ -107,11 +151,21 @@ defmodule Current.ProjectContext do
     Enum.reduce_while(paths, {:ok, %{}}, fn path, {:ok, acc} ->
       case File.read(path) do
         {:ok, contents} ->
-          {:cont, {:ok, Map.put(acc, Path.relative_to(path, root), contents)}}
+          if String.valid?(contents) do
+            {:cont, {:ok, Map.put(acc, Path.relative_to(path, root), contents)}}
+          else
+            # Binary files (.DS_Store, images, ...) can't go in a text prompt.
+            {:cont, {:ok, acc}}
+          end
 
         {:error, reason} ->
           {:halt, {:error, {:project_context_build_error, path, reason}}}
       end
     end)
+  end
+
+  # Secrets must never reach the prompt: .env, .env.local, .env.production, ...
+  defp ignored_file?(name) do
+    MapSet.member?(@ignored_files, name) or String.starts_with?(name, ".env")
   end
 end

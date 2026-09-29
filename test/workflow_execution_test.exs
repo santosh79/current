@@ -47,10 +47,9 @@ defmodule Current.WorkflowExecutionTest do
 
   defp approve(proposal) do
     assert :ok =
-             Current.review_proposal(
-               proposal.id,
-               {:approve, %{reviewed_by: :workflow_execution_test}}
-             )
+             Current.TestApproval.approve_and_apply(proposal.id, %{
+               reviewed_by: :workflow_execution_test
+             })
   end
 
   test "a five-intent proposal produces one artifact per intent and completes" do

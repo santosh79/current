@@ -148,6 +148,38 @@ defmodule Current do
     end
   end
 
+  @doc """
+  Starts applying an approved proposal's effects.
+
+  Approval only makes a proposal eligible to be applied; it never applies
+  it. This is the separate, explicit step that does: it records
+  EffectApplicationStarted, which the workflow's orchestrator reacts to
+  by applying the effects. Only a workflow in `:approved` accepts it --
+  applying a proposal that is still waiting for approval, was rejected,
+  or is already applying/applied returns an invalid transition.
+
+  Like `review_proposal/2`, the status check here is optimistic: the
+  reducer checks the transition again at commit time, so of two
+  concurrent applies only one becomes canonical.
+  """
+  @spec apply_proposal(Current.Id.t()) ::
+          :ok
+          | {:error, :not_found}
+          | {:error, {:invalid_transition, Workflow.status(), module()}}
+          | {:error, term()}
+  def apply_proposal(proposal_id) do
+    with {:ok, proposal} <- ProposalStore.get(proposal_id),
+         {:ok, workflow} <- WorkflowStore.get(proposal.workflow_id),
+         event = %Event.EffectApplicationStarted{
+           id: Id.generate(),
+           workflow_id: proposal.workflow_id,
+           timestamp: DateTime.utc_now()
+         },
+         {:ok, _next} <- WorkflowReducer.apply_event(workflow, event) do
+      Current.Consensus.propose(event)
+    end
+  end
+
   defp decision_event(proposal, {:approve, metadata}) do
     %Event.ProposalApproved{
       id: Id.generate(),

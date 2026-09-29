@@ -4,11 +4,19 @@ defmodule Current.CLITest do
   import ExUnit.CaptureIO
 
   alias Current.CLI
+  alias Current.Event
 
   # Runs a plan through the CLI (in-process) and returns its output.
   defp plan!(prompt \\ "add email validation") do
     capture_io(fn ->
       assert CLI.run(["plan", prompt, "--dir", System.tmp_dir!()]) == 0
+    end)
+  end
+
+  # Runs an apply-mode task through the CLI; it stops at approval.
+  defp run!(prompt \\ "add email validation") do
+    capture_io(fn ->
+      assert CLI.run(["run", prompt, "--dir", System.tmp_dir!()]) == 0
     end)
   end
 
@@ -33,6 +41,36 @@ defmodule Current.CLITest do
       assert CLI.parse(["artifact", "ab12"]) == {:artifact, "ab12"}
       assert {:error, _} = CLI.parse(["events"])
       assert {:error, _} = CLI.parse(["artifact", "a", "b"])
+    end
+
+    test "run takes the same arguments as plan" do
+      assert CLI.parse(["run", "Add rate limiting"]) == {:run, "Add rate limiting", "."}
+      assert CLI.parse(["run", "Add", "--dir", "x"]) == {:run, "Add", "x"}
+      assert CLI.parse(["run", "-d", "x", "Add"]) == {:run, "Add", "x"}
+      assert {:error, _} = CLI.parse(["run"])
+      assert {:error, _} = CLI.parse(["run", "--nope", "x"])
+    end
+
+    test "approve and reject take one proposal id and an optional message" do
+      assert CLI.parse(["approve", "ab12"]) == {:approve, "ab12", "Approved via the current CLI"}
+      assert CLI.parse(["approve", "ab12", "-m", "lgtm"]) == {:approve, "ab12", "lgtm"}
+      assert CLI.parse(["approve", "--message", "lgtm", "ab12"]) == {:approve, "ab12", "lgtm"}
+      assert CLI.parse(["reject", "ab12"]) == {:reject, "ab12", "Rejected via the current CLI"}
+      assert CLI.parse(["reject", "ab12", "-m", "not yet"]) == {:reject, "ab12", "not yet"}
+
+      for command <- ["approve", "reject"] do
+        assert {:error, _} = CLI.parse([command])
+        assert {:error, _} = CLI.parse([command, "a", "b"])
+        assert {:error, _} = CLI.parse([command, "ab12", "-m", "  "])
+        assert {:error, _} = CLI.parse([command, "ab12", "--nope"])
+      end
+    end
+
+    test "apply takes exactly one proposal id and no message" do
+      assert CLI.parse(["apply", "ab12"]) == {:apply, "ab12"}
+      assert {:error, _} = CLI.parse(["apply"])
+      assert {:error, _} = CLI.parse(["apply", "a", "b"])
+      assert {:error, _} = CLI.parse(["apply", "ab12", "-m", "lgtm"])
     end
 
     test "status takes no arguments" do
@@ -110,6 +148,200 @@ defmodule Current.CLITest do
 
     test "the plan output tells you how to follow the workflow after detaching" do
       assert plan!() =~ "Ctrl-C detaches"
+    end
+  end
+
+  describe "run" do
+    test "creates an apply-mode workflow that halts at approval without applying anything" do
+      output = run!()
+
+      assert output =~ "mode     apply"
+      assert output =~ "✓ Proposal validated"
+      assert output =~ "MODE: APPLY\n0 effects executed."
+      assert output =~ "Waiting for approval. Nothing has been applied."
+      assert output =~ "current approve sha256:"
+      refute output =~ "✓ Workflow completed"
+
+      {:ok, view} = Current.Inspector.workflow(id_after(output, "task"))
+      assert view.mode == :apply
+      assert view.status == :waiting_for_approval
+      refute view.terminal
+
+      refute Enum.any?(view.entries, &match?(%{event: %Event.ProposalApproved{}}, &1))
+      refute Enum.any?(view.entries, &match?(%{event: %Event.EffectApplicationStarted{}}, &1))
+    end
+
+    test "the workflow stays halted: nothing moves it on without an approval" do
+      task_id = run!() |> id_after("task")
+      {:ok, before} = Current.Inspector.workflow(task_id)
+
+      Process.sleep(500)
+
+      {:ok, later} = Current.Inspector.workflow(task_id)
+      assert later.status == :waiting_for_approval
+      assert length(later.entries) == length(before.entries)
+    end
+  end
+
+  # The full id of the proposal a `run` output names.
+  defp proposal_in(output), do: id_after(output, "current approve")
+
+  defp approve!(proposal_id, args \\ []) do
+    capture_io(fn -> assert CLI.run(["approve", proposal_id | args]) == 0 end)
+  end
+
+  defp proposal_approved(view) do
+    Enum.find_value(view.entries, fn
+      %{event: %Event.ProposalApproved{} = event} -> event
+      _ -> nil
+    end)
+  end
+
+  defp application_started?(view),
+    do: Enum.any?(view.entries, &match?(%{event: %Event.EffectApplicationStarted{}}, &1))
+
+  describe "approve" do
+    test "records the approval and message, and applies nothing" do
+      output = run!()
+      task_id = id_after(output, "task")
+      proposal_id = proposal_in(output)
+
+      approved = approve!(proposal_id, ["-m", "lgtm, ship it"])
+
+      assert approved =~ "✓ Approved #{proposal_id}"
+      assert approved =~ "message  lgtm, ship it"
+
+      assert approved =~
+               "Nothing has been applied. Apply it with:\n  current apply #{proposal_id}"
+
+      Process.sleep(300)
+      {:ok, view} = Current.Inspector.workflow(task_id)
+      assert view.status == :approved
+      refute application_started?(view)
+
+      assert %Event.ProposalApproved{metadata: metadata} = proposal_approved(view)
+      assert %{message: "lgtm, ship it", via: :cli, reviewed_by: reviewer} = metadata
+      assert is_binary(reviewer)
+    end
+
+    test "without -m, a default message is recorded" do
+      output = run!()
+      approve!(proposal_in(output))
+
+      {:ok, view} = Current.Inspector.workflow(id_after(output, "task"))
+      assert proposal_approved(view).metadata.message == "Approved via the current CLI"
+    end
+
+    test "a proposal can only be approved once" do
+      proposal_id = run!() |> proposal_in()
+      approve!(proposal_id)
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["approve", proposal_id]) == 1 end)
+      assert stderr =~ "can't be approved: its workflow is approved, not waiting for approval"
+    end
+
+    test "refuses a proposal from a plan-mode workflow and leaves it untouched" do
+      output = plan!()
+      proposal_id = id_after(output, "current proposal")
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["approve", proposal_id]) == 1 end)
+      assert stderr =~ "plan-mode workflow"
+
+      {:ok, view} = Current.Inspector.workflow(id_after(output, "task"))
+      assert view.status == :planned
+      refute proposal_approved(view)
+    end
+  end
+
+  describe "reject" do
+    test "rejects a waiting proposal, which then can't be approved or applied" do
+      output = run!()
+      proposal_id = proposal_in(output)
+
+      rejected =
+        capture_io(fn ->
+          assert CLI.run(["reject", proposal_id, "-m", "don't change auth yet"]) == 0
+        end)
+
+      assert rejected =~ "✓ Rejected #{proposal_id}"
+
+      {:ok, view} = Current.Inspector.workflow(id_after(output, "task"))
+      assert view.status == :rejected
+
+      assert %{event: %Event.ProposalRejected{metadata: %{message: "don't change auth yet"}}} =
+               Enum.find(view.entries, &match?(%{event: %Event.ProposalRejected{}}, &1))
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["approve", proposal_id]) == 1 end)
+      assert stderr =~ "its workflow is rejected"
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["apply", proposal_id]) == 1 end)
+      assert stderr =~ "can't be applied: its workflow is rejected, not approved"
+    end
+
+    test "an approved proposal can't be rejected" do
+      proposal_id = run!() |> proposal_in()
+      approve!(proposal_id)
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["reject", proposal_id]) == 1 end)
+      assert stderr =~ "can't be rejected: its workflow is approved"
+    end
+  end
+
+  describe "apply" do
+    test "applies an approved proposal and follows it to completion" do
+      output = run!()
+      task_id = id_after(output, "task")
+      proposal_id = proposal_in(output)
+      approve!(proposal_id)
+
+      applied = capture_io(fn -> assert CLI.run(["apply", proposal_id]) == 0 end)
+
+      assert applied =~ "✓ Applying #{proposal_id}"
+      assert applied =~ "✓ Proposal approved"
+      assert applied =~ "✓ Workflow completed"
+      assert applied =~ "MODE: APPLY\n1 effect executed."
+
+      {:ok, view} = Current.Inspector.workflow(task_id)
+      assert view.status == :completed
+      assert application_started?(view)
+    end
+
+    test "a proposal that hasn't been approved can't be applied, and nothing runs" do
+      output = run!()
+      proposal_id = proposal_in(output)
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["apply", proposal_id]) == 1 end)
+
+      assert stderr =~
+               "hasn't been approved yet. Approve it first:\n  current approve #{proposal_id}"
+
+      {:ok, view} = Current.Inspector.workflow(id_after(output, "task"))
+      assert view.status == :waiting_for_approval
+      refute application_started?(view)
+    end
+
+    test "a proposal can only be applied once" do
+      proposal_id = run!() |> proposal_in()
+      approve!(proposal_id)
+      capture_io(fn -> assert CLI.run(["apply", proposal_id]) == 0 end)
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["apply", proposal_id]) == 1 end)
+      assert stderr =~ "can't be applied: its workflow is completed, not approved"
+    end
+
+    test "refuses a proposal from a plan-mode workflow" do
+      proposal_id = plan!() |> id_after("current proposal")
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["apply", proposal_id]) == 1 end)
+      assert stderr =~ "plan-mode workflow; only proposals from `current run` can be applied"
+    end
+
+    test "unknown proposal ids" do
+      for command <- ["approve", "reject", "apply"] do
+        assert capture_io(:stderr, fn ->
+                 assert CLI.run([command, "sha256:ffffffffffff0000"]) == 1
+               end) =~ "no proposal matches"
+      end
     end
   end
 
