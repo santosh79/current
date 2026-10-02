@@ -1,42 +1,247 @@
 defmodule Current.RPCTest do
+  @moduledoc """
+  Current.RPC is what a client on another node calls. These tests pin
+  its contract -- what each function takes, the shape of what it
+  returns, and its error values -- not workflow behaviour, which is
+  tested through Current.submit_task/3 in test/e2e.
+
+  Nothing here uses listener messages: like a real client, the tests
+  only ever poll.
+  """
+
   use ExUnit.Case, async: false
 
-  alias Current.{Request, RPC}
+  import Current.TestHelpers, only: [request: 0, request: 1, model: 0]
 
-  test "submit_task/2 returns a task id and the workflow can be polled by it" do
-    request = %Request{input: "add email validation", context: %{}, mode: :plan}
-    assert {:ok, task_id} = RPC.submit_task(request, System.tmp_dir!())
+  alias Current.{Event, RPC}
 
-    view = poll_until_terminal(task_id)
-    assert view.status == :planned
-    assert view.task.id == task_id
+  @unknown "sha256:ffffffffffff0000"
+  @reviewer %{reviewed_by: :rpc_test}
+
+  defp poll(id, done?, attempts \\ 200) do
+    case RPC.workflow(id) do
+      {:ok, view} ->
+        cond do
+          done?.(view) -> view
+          attempts == 0 -> flunk("workflow #{id} stayed #{view.status}")
+          true -> retry(id, done?, attempts)
+        end
+
+      {:error, :not_found} when attempts > 0 ->
+        retry(id, done?, attempts)
+    end
   end
 
-  test "submit_task/2 rejects a bad project directory without recording anything" do
-    request = %Request{input: "x", context: %{}, mode: :plan}
-
-    assert {:error, {:invalid_project_dir, _, :not_a_directory}} =
-             RPC.submit_task(request, "/definitely/not/here")
+  defp retry(id, done?, attempts) do
+    Process.sleep(10)
+    poll(id, done?, attempts - 1)
   end
 
-  test "health/0 reports readiness, the WAL head and the model configuration" do
-    health = RPC.health()
-    assert health.status == :ready
-    assert is_integer(health.wal_head)
-    assert health.proposal_builder == Application.fetch_env!(:current, :proposal_builder)
+  # A finished plan-mode workflow.
+  defp planned! do
+    {:ok, task_id} = RPC.submit_task(request(mode: :plan), System.tmp_dir!())
+    poll(task_id, & &1.terminal)
   end
 
-  defp poll_until_terminal(task_id, attempts \\ 100) do
-    case RPC.workflow(task_id) do
-      {:ok, %{terminal: true} = view} ->
-        view
+  # An apply-mode workflow, stopped at approval; returns its view and proposal id.
+  defp waiting_for_approval! do
+    {:ok, task_id} = RPC.submit_task(request(), System.tmp_dir!())
+    view = poll(task_id, &(&1.status == :waiting_for_approval))
+    {view, proposal_id(view)}
+  end
 
-      _not_yet when attempts > 0 ->
-        Process.sleep(20)
-        poll_until_terminal(task_id, attempts - 1)
+  defp proposal_id(view) do
+    Enum.find_value(view.entries, fn
+      %{event: %Event.ProposalProduced{proposal: proposal}} -> proposal.id
+      _ -> nil
+    end)
+  end
 
-      other ->
-        flunk("workflow never became terminal: #{inspect(other)}")
+  defp prefix("sha256:" <> hex, digits \\ 12), do: String.slice(hex, 0, digits)
+
+  describe "submit_task/2" do
+    test "returns a task id, and the workflow can be polled by it" do
+      assert {:ok, task_id} = RPC.submit_task(request(mode: :plan), System.tmp_dir!())
+
+      view = poll(task_id, & &1.terminal)
+      assert view.status == :planned
+      assert view.task.id == task_id
+      assert view.task.model == model()
+    end
+
+    test "rejects a bad project directory" do
+      assert {:error, {:invalid_project_dir, _, :not_a_directory}} =
+               RPC.submit_task(request(), "/definitely/not/here")
+    end
+
+    test "rejects a model the catalog doesn't list" do
+      assert {:error, {:unknown_model, "openai:nope"}} =
+               RPC.submit_task(request(model: "openai:nope"), System.tmp_dir!())
+    end
+  end
+
+  describe "workflow/1" do
+    test "returns the task and its history in log order, TaskCreated first" do
+      view = planned!()
+
+      assert view.mode == :plan
+      assert view.terminal
+      assert [%{event: %Event.TaskCreated{}} | _] = view.entries
+      assert List.last(view.entries).event.__struct__ == Event.WorkflowCompleted
+
+      positions = Enum.map(view.entries, & &1.position)
+      assert positions == Enum.sort(positions)
+    end
+
+    test "accepts a workflow id, a task id, or a unique prefix of either" do
+      view = planned!()
+
+      assert RPC.workflow(view.workflow_id) == {:ok, view}
+      assert RPC.workflow(view.task.id) == {:ok, view}
+      assert RPC.workflow(prefix(view.workflow_id)) == {:ok, view}
+      assert RPC.workflow(prefix(view.task.id)) == {:ok, view}
+    end
+
+    test "unknown and too-short ids are errors" do
+      assert {:error, :not_found} = RPC.workflow(@unknown)
+      assert {:error, :prefix_too_short} = RPC.workflow("ab")
+    end
+  end
+
+  describe "proposal/1 and review/2" do
+    test "a proposal comes with its workflow and what became of it" do
+      view = planned!()
+      id = proposal_id(view)
+
+      assert {:ok, proposal_view} = RPC.proposal(prefix(id))
+      assert proposal_view.proposal.id == id
+      assert proposal_view.workflow_id == view.workflow_id
+      assert proposal_view.status == :planned
+      assert proposal_view.validation_error == nil
+
+      assert {:error, :not_found} = RPC.proposal(@unknown)
+    end
+
+    test "a review adds the artifacts' contents, cut to max_lines" do
+      id = planned!() |> proposal_id()
+
+      assert {:ok, review} = RPC.review(id, %{max_lines: 2})
+      assert review.proposal.id == id
+      assert review.limits.max_lines == 2
+      assert review.raw_output == nil
+
+      assert [excerpt] = Map.values(review.artifacts)
+      assert excerpt.truncated
+      assert excerpt.shown_lines == 2
+
+      assert {:error, :not_found} = RPC.review(@unknown, %{})
+    end
+  end
+
+  describe "artifact/1" do
+    test "returns the full id and exact bytes, by id or unique prefix" do
+      {:ok, id} = Current.BlobStore.put("rpc artifact #{System.unique_integer()}")
+
+      assert {:ok, ^id, "rpc artifact" <> _} = RPC.artifact(id)
+      assert {:ok, ^id, "rpc artifact" <> _} = RPC.artifact(String.slice(id, 0, 20))
+    end
+
+    test "ambiguous, too-short and unknown ids are errors" do
+      ambiguous = colliding_prefix()
+      assert {:error, {:ambiguous, [_, _ | _] = ids}} = RPC.artifact(ambiguous)
+      assert Enum.all?(ids, &String.starts_with?(&1, ambiguous))
+
+      assert {:error, :prefix_too_short} = RPC.artifact("ab")
+      assert {:error, :not_found} = RPC.artifact("not-hex!")
+    end
+
+    # Stores blobs until two share a 4-hex-digit prefix (the shortest that
+    # is accepted); by the birthday bound that takes a few hundred.
+    defp colliding_prefix(seen \\ %{}) do
+      {:ok, "sha256:" <> hex} = Current.BlobStore.put("collide #{System.unique_integer()}")
+      prefix = "sha256:" <> String.slice(hex, 0, 4)
+
+      if Map.has_key?(seen, prefix),
+        do: prefix,
+        else: colliding_prefix(Map.put(seen, prefix, true))
+    end
+  end
+
+  describe "approve/2, reject/2 and apply_proposal/1" do
+    test "approve returns the workflow id once the approval is visible, recording the metadata" do
+      {view, id} = waiting_for_approval!()
+
+      assert {:ok, workflow_id} = RPC.approve(prefix(id), @reviewer)
+      assert workflow_id == view.workflow_id
+
+      # No polling: approve/2 only returns once the projection has moved on.
+      assert {:ok, approved} = RPC.workflow(workflow_id)
+      assert approved.status == :approved
+
+      assert %{event: %Event.ProposalApproved{metadata: @reviewer}} =
+               Enum.find(approved.entries, &match?(%{event: %Event.ProposalApproved{}}, &1))
+    end
+
+    test "apply_proposal starts applying and returns the workflow id to follow" do
+      {view, id} = waiting_for_approval!()
+      {:ok, _} = RPC.approve(id, @reviewer)
+
+      assert {:ok, workflow_id} = RPC.apply_proposal(id)
+      assert workflow_id == view.workflow_id
+      assert poll(workflow_id, & &1.terminal).status == :completed
+    end
+
+    test "reject returns the workflow id and ends the workflow" do
+      {view, id} = waiting_for_approval!()
+
+      assert {:ok, workflow_id} = RPC.reject(id, @reviewer)
+      assert workflow_id == view.workflow_id
+      assert {:ok, %{status: :rejected}} = RPC.workflow(workflow_id)
+    end
+
+    test "a step taken in the wrong state is an invalid transition" do
+      {_view, id} = waiting_for_approval!()
+
+      assert {:error,
+              {:invalid_transition, :waiting_for_approval, Event.EffectApplicationStarted}} =
+               RPC.apply_proposal(id)
+
+      {:ok, _} = RPC.reject(id, @reviewer)
+
+      assert {:error, {:invalid_transition, :rejected, Event.ProposalApproved}} =
+               RPC.approve(id, @reviewer)
+    end
+
+    test "a plan-mode proposal is refused with its mode" do
+      id = planned!() |> proposal_id()
+
+      assert {:error, {:not_apply_mode, :plan}} = RPC.approve(id, @reviewer)
+      assert {:error, {:not_apply_mode, :plan}} = RPC.reject(id, @reviewer)
+      assert {:error, {:not_apply_mode, :plan}} = RPC.apply_proposal(id)
+    end
+
+    test "an unknown proposal is not found" do
+      assert {:error, :not_found} = RPC.approve(@unknown, @reviewer)
+      assert {:error, :not_found} = RPC.reject(@unknown, @reviewer)
+      assert {:error, :not_found} = RPC.apply_proposal(@unknown)
+    end
+  end
+
+  describe "health/0 and models/0" do
+    test "health reports readiness, the WAL head and the builder configuration" do
+      health = RPC.health()
+
+      assert health.status == :ready
+      assert is_integer(health.wal_head)
+      assert health.proposal_builder == Application.fetch_env!(:current, :proposal_builder)
+    end
+
+    test "models lists the catalog's provider-qualified names" do
+      models = RPC.models()
+
+      assert model() in models
+      assert Enum.all?(models, &(&1 =~ ~r/^[a-z]+:.+/))
+      assert models == Enum.sort(models)
     end
   end
 end

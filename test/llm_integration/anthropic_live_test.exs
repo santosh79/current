@@ -34,8 +34,6 @@ defmodule Current.LLMIntegration.AnthropicLiveTest do
   }
 
   setup do
-    previous_client = Application.fetch_env!(:current, :llm_client)
-
     project_dir =
       Path.join(
         Current.TestTmp.dir(),
@@ -49,11 +47,15 @@ defmodule Current.LLMIntegration.AnthropicLiveTest do
     end
 
     on_exit(fn ->
-      :ok = Application.put_env(:current, :llm_client, previous_client)
       File.rm_rf!(project_dir)
     end)
 
     {:ok, project_dir: project_dir}
+  end
+
+  test "list_models" do
+    {:ok, models} = Current.LLMClient.Anthropic.list_models(10_000)
+    assert length(models) > 1
   end
 
   test "Anthropic produces a proposal that Current can decode", %{project_dir: project_dir} do
@@ -65,6 +67,7 @@ defmodule Current.LLMIntegration.AnthropicLiveTest do
     request = %Request{
       input: "Produce a report saying that the live LLM integration test succeeded.",
       context: %{},
+      model: "anthropic:claude-opus-5-5",
       mode: :plan
     }
 

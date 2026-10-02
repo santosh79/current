@@ -3,12 +3,20 @@ defmodule Current.IntentPathsTest do
 
   alias Current.{Id, Intent, IntentPaths, Proposal}
 
-  defp proposal(intents), do: %Proposal{id: Id.generate(), workflow_id: Id.generate(), intents: intents}
+  defp proposal(intents),
+    do: %Proposal{id: Id.generate(), workflow_id: Id.generate(), intents: intents}
 
   describe "absolutize/2" do
     test "expands every path field against project_dir and leaves other intents alone" do
       read = %Intent.ReadFile{id: Id.generate(), proposal_id: Id.generate(), path: "lib/a.ex"}
-      grep = %Intent.Grep{id: Id.generate(), proposal_id: Id.generate(), pattern: "x", paths: ["a", "/abs/b"]}
+
+      grep = %Intent.Grep{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        pattern: "x",
+        paths: ["a", "/abs/b"]
+      }
+
       glob = %Intent.Glob{id: Id.generate(), proposal_id: Id.generate(), pattern: "*.ex"}
       cmd = %Intent.RunCommand{id: Id.generate(), proposal_id: Id.generate(), cmd: "mix"}
 

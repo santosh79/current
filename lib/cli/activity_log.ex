@@ -300,4 +300,3 @@ defmodule Current.ActivityLog do
     {wall, System.monotonic_time(:millisecond)}
   end
 end
-

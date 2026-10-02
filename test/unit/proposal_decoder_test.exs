@@ -3,7 +3,7 @@ defmodule Current.ProposalDecoderTest do
 
   alias Current.{BlobStore, Id, Intent, Proposal, ProposalDecoder, Test.MiniJsonSchema}
 
-  @wire_schema_path Path.join([__DIR__, "..", "priv", "schema", "proposal_response.schema.json"])
+  @wire_schema_path Path.expand("../../priv/schema/proposal_response.schema.json", __DIR__)
 
   @well_formed_fixtures [
     ~s({

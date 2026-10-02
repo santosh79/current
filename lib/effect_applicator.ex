@@ -198,6 +198,7 @@ defmodule Current.EffectApplicator do
           |> Path.wildcard()
           |> Enum.filter(&(IntentPaths.resolved_within(&1, project_dir) == :ok))
           |> Enum.sort()
+
         encoded = :erlang.term_to_binary(matches)
         {:ok, matches_artifact_id} = Current.BlobStore.put(encoded)
 

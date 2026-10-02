@@ -28,7 +28,14 @@ defmodule Current.FakeLLMClient do
   end
 
   @impl true
-  def complete(_prompt, _timeout_ms) do
+  def provider, do: "fake"
+
+  @impl true
+  def list_models(_timeout_ms), do: {:ok, ["model_one_name", "model_two_name"]}
+
+  # The model is ignored: the response is whatever the test set.
+  @impl true
+  def complete(_prompt, _timeout_ms, _model) do
     case :persistent_term.get(@key, {:error, :not_configured}) do
       :hang -> Process.sleep(:infinity)
       response -> response

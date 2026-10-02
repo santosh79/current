@@ -303,4 +303,3 @@ defmodule Current.EventStore do
     )
   end
 end
-

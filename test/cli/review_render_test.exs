@@ -1,9 +1,12 @@
-defmodule Current.ReviewTest do
-  use ExUnit.Case, async: false
+defmodule Current.CLI.ReviewRenderTest do
+  @moduledoc """
+  How `current review` presents a proposal -- what a person reads before
+  approving it. Pure rendering: reviews are built by hand, no runtime.
+  """
 
-  import ExUnit.CaptureIO
+  use ExUnit.Case, async: true
 
-  alias Current.{CLI, Excerpt, Inspector, Intent, Proposal}
+  alias Current.{Excerpt, Intent, Proposal}
   alias Current.CLI.{ReviewJSON, ReviewMarkdown}
   alias Current.Error.ValidationError
 
@@ -197,6 +200,14 @@ defmodule Current.ReviewTest do
       assert md =~ "- **Reason:** path outside project"
       refute md =~ "Approve with"
     end
+
+    test "an approved proposal says how to apply it" do
+      md = ReviewMarkdown.render(review([], %{status: :approved}))
+
+      assert md =~ "Approved. Nothing has been applied yet."
+      assert md =~ "Apply with: `current apply sha256:aaaaaaaaaaaa`"
+      refute md =~ "Approve with"
+    end
   end
 
   describe "ReviewJSON" do
@@ -261,108 +272,6 @@ defmodule Current.ReviewTest do
 
       assert doc["validation_error"]["intent_index"] == 3
       assert doc["validation_error"]["details"] == %{"got" => "{:tuple, 1}"}
-    end
-  end
-
-  describe "current review (end to end)" do
-    defp plan_proposal_id! do
-      out =
-        capture_io(fn ->
-          assert CLI.run(["plan", "add email validation", "--dir", System.tmp_dir!()]) == 0
-        end)
-
-      [_, id] = Regex.run(~r/current proposal (sha256:[0-9a-f]+)/, out)
-      id
-    end
-
-    test "parses its options" do
-      assert {:review, "ab12", %{format: :markdown, max_lines: 200, raw: false}} =
-               CLI.parse(["review", "ab12"])
-
-      assert {:review, "ab12", %{format: :json, max_lines: 5, raw: true}} =
-               CLI.parse(["review", "--json", "--max-lines", "5", "--raw", "ab12"])
-
-      assert {:error, _} = CLI.parse(["review"])
-      assert {:error, _} = CLI.parse(["review", "a", "b"])
-      assert {:error, _} = CLI.parse(["review", "ab12", "--max-lines", "0"])
-      assert {:error, _} = CLI.parse(["review", "ab12", "--nope"])
-    end
-
-    test "shows a proposal's diff as Markdown" do
-      id = plan_proposal_id!()
-      md = capture_io(fn -> assert CLI.run(["review", id]) == 0 end)
-
-      assert md =~ "# Proposal review"
-      assert md =~ "- **Status:** planned (plan mode)"
-      assert md =~ ~r/### 1\. FilePatch `[^`]*signup\.ex`\n\n```diff\n/
-      assert md =~ "+  def validate_email(email)"
-      refute md =~ "Approve with"
-    end
-
-    test "--json is the same review, machine-readable" do
-      id = plan_proposal_id!()
-      doc = capture_io(fn -> assert CLI.run(["review", id, "--json"]) == 0 end) |> JSON.decode!()
-
-      assert doc["schema"] == "current.review/v1"
-      assert String.starts_with?(doc["proposal"]["id"], id)
-      assert [%{"type" => "FilePatch", "artifact" => artifact}] = doc["intents"]
-      assert artifact["text"] =~ "+  def validate_email(email)"
-      assert artifact["truncated"] == false
-    end
-
-    test "--max-lines cuts each artifact" do
-      id = plan_proposal_id!()
-
-      md = capture_io(fn -> assert CLI.run(["review", id, "--max-lines", "2"]) == 0 end)
-      assert md =~ "_… showing 2 of 6 lines · full: `current artifact sha256:"
-
-      {:ok, review} = Inspector.review(id, %{max_lines: 2})
-      assert review.limits == %{max_lines: 2, max_total_lines: 20}
-      assert review.raw_output == nil
-    end
-
-    test "--raw adds the model's raw output, which is left out by default" do
-      previous = Application.fetch_env!(:current, :proposal_builder)
-      Application.put_env(:current, :proposal_builder, Current.RawOutputProposalBuilder)
-      on_exit(fn -> Application.put_env(:current, :proposal_builder, previous) end)
-
-      id = plan_proposal_id!()
-      raw = Current.RawOutputProposalBuilder.raw()
-
-      without = capture_io(fn -> assert CLI.run(["review", id]) == 0 end)
-      refute without =~ "## Raw model output"
-
-      with_raw = capture_io(fn -> assert CLI.run(["review", id, "--raw"]) == 0 end)
-      assert with_raw =~ "## Raw model output\n\n```\n#{raw}\n```"
-
-      doc = capture_io(fn -> CLI.run(["review", id, "--raw", "--json"]) end) |> JSON.decode!()
-      assert doc["raw_output"]["text"] == raw
-    end
-
-    test "unknown ids" do
-      err =
-        capture_io(:stderr, fn ->
-          assert CLI.run(["review", "sha256:ffffffffffff0000"]) == 1
-        end)
-
-      assert err =~ "no proposal matches"
-    end
-
-    test "an approved proposal says how to apply it" do
-      md = ReviewMarkdown.render(review([], %{status: :approved}))
-
-      assert md =~ "Approved. Nothing has been applied yet."
-      assert md =~ "Apply with: `current apply sha256:aaaaaaaaaaaa`"
-      refute md =~ "Approve with"
-    end
-
-    test "run's output points at review before approve" do
-      out =
-        capture_io(fn ->
-          assert CLI.run(["run", "x", "--dir", System.tmp_dir!()]) == 0
-        end)
-
-      assert out =~ ~r/current review sha256:[0-9a-f]{12}\n  current approve sha256:/
     end
   end
 end

@@ -81,6 +81,7 @@ defmodule Current.TaskDispatcher do
         context: event.context,
         mode: event.mode,
         project_dir: event.project_dir,
+        model: event.model,
         submitted_at: event.submitted_at
       }
 

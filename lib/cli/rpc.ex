@@ -22,12 +22,22 @@ defmodule Current.RPC do
   created asynchronously once TaskCreated commits, so poll `workflow/1`
   with the task id (it resolves task ids to their workflow).
 
+  `request.model` is required: one entry of `models/0`, e.g.
+  `"anthropic:claude-opus-5-5"`. The runtime checks it against its
+  catalog before anything is recorded, and answers
+  `{:error, {:unknown_model, model}}` for one that isn't listed.
+
   `project_dir` should be absolute: a relative one would resolve
   against the runtime's working directory, not the client's.
   """
-  @spec submit_task(Request.t(), Path.t()) :: {:ok, Current.Id.t()} | {:error, term()}
+  @spec submit_task(Request.t(), Path.t()) ::
+          {:ok, Current.Id.t()} | {:error, {:unknown_model, String.t()}} | {:error, term()}
   def submit_task(%Request{} = request, project_dir) when is_binary(project_dir) do
-    ActivityLog.rpc(:submit_task, ["#{request.mode} #{inspect(request.input)}", project_dir])
+    ActivityLog.rpc(:submit_task, [
+      "#{request.mode} #{inspect(request.input)}",
+      project_dir,
+      "model #{request.model}"
+    ])
 
     # submit_task/3 wants a listener pid. This call's process exits as
     # soon as it returns, so notifications sent to it are dropped --
@@ -39,6 +49,7 @@ defmodule Current.RPC do
       case result do
         {:ok, "sha256:" <> hex} -> "accepted as task " <> binary_part(hex, 0, 12)
         {:ok, task_id} -> "accepted as task #{task_id}"
+        {:error, {:unknown_model, unknown}} -> "✗ rejected: unknown model #{unknown}"
         {:error, {:invalid_project_dir, path, reason}} -> "✗ rejected: #{path} (#{reason})"
         {:error, reason} -> "✗ failed: #{inspect(reason)}"
       end
@@ -185,6 +196,16 @@ defmodule Current.RPC do
     status()
   end
 
+  @doc """
+  Returns the provider-qualified model names currently present in the runtime's
+  model catalog.
+  """
+  @spec models() :: [String.t()]
+  def models do
+    ActivityLog.rpc(:models)
+    Current.ModelCatalog.all()
+  end
+
   @doc false
   # health/0 without the request being logged, for the server's banner.
   def status do
@@ -198,8 +219,6 @@ defmodule Current.RPC do
       wal_head: wal_head(),
       wal_path: Current.Consensus.Log.path(),
       proposal_builder: Application.get_env(:current, :proposal_builder),
-      llm_client: Application.get_env(:current, :llm_client),
-      model: Application.get_env(:current, :openai_model),
       llm_proposal_timeout_ms: Application.get_env(:current, :llm_proposal_timeout_ms)
     }
   end

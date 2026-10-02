@@ -90,7 +90,9 @@ defmodule Current.EffectApplicatorTest do
         args: ["hello"]
       }
 
-      assert {:ok, %Current.EffectResult.Command{} = result} = EffectApplicator.apply(intent, [], "/")
+      assert {:ok, %Current.EffectResult.Command{} = result} =
+               EffectApplicator.apply(intent, [], "/")
+
       assert result.exit_code == 0
       assert result.stdout_bytes > 0
 
@@ -164,7 +166,9 @@ defmodule Current.EffectApplicatorTest do
         path: path
       }
 
-      assert {:ok, %Current.EffectResult.ReadFile{} = result} = EffectApplicator.apply(intent, [], "/")
+      assert {:ok, %Current.EffectResult.ReadFile{} = result} =
+               EffectApplicator.apply(intent, [], "/")
+
       assert result.path == path
 
       assert is_binary(result.contents_artifact_id)

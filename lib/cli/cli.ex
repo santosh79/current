@@ -2,8 +2,8 @@ defmodule Current.CLI do
   @moduledoc """
   The `current` command-line interface (built as an escript).
 
-      current plan <prompt> [--dir <project-dir>]
-      current run <prompt> [--dir <project-dir>]
+      current plan <prompt> --model <model> [--dir <project-dir>]
+      current run <prompt> --model <model> [--dir <project-dir>]
       current approve <proposal-id> [--message <message>]
       current reject <proposal-id> [--message <message>]
       current apply <proposal-id>
@@ -11,12 +11,18 @@ defmodule Current.CLI do
       current proposal <proposal-id>
       current review <proposal-id> [--json] [--max-lines <n>] [--raw]
       current artifact <artifact-id>
+      current models
       current status
 
   Current is the runtime; `current` is merely a client of it. The CLI
-  boots nothing and knows nothing about which model Current uses: every
+  boots nothing and knows nothing about which models exist: every
   command is a request/response call to `Current.RPC` on a running node
   (see `Current.CLI.Client` and `bin/current-server`).
+
+  `--model` is required on plan and run. It names the model for that one
+  task, as `current models` prints it (e.g. `openai:gpt-5.6`). The CLI
+  passes it on untouched; the runtime checks it against its catalog and
+  refuses the task if it isn't listed. There is no default model.
 
   `plan` submits the task, then polls the workflow's canonical projection
   until it is terminal. `run` does the same in apply mode, but stops
@@ -77,6 +83,11 @@ defmodule Current.CLI do
         IO.puts(:stderr, "current: #{message}\n\n#{usage()}")
         @exit_usage
 
+      # A usage error with a specific way out: say that, not the whole usage.
+      {:error, message, hint} ->
+        IO.puts(:stderr, "current: #{message}\n#{hint}")
+        @exit_usage
+
       command ->
         case connect.() do
           {:ok, client} -> dispatch(command, client)
@@ -95,6 +106,9 @@ defmodule Current.CLI do
 
       [flag] when flag in ["-h", "--help", "help"] ->
         :help
+
+      ["models"] ->
+        :models
 
       ["status"] ->
         :status
@@ -125,19 +139,31 @@ defmodule Current.CLI do
     end
   end
 
+  @models_hint "List the available models with:  current models"
+
   # plan and run take the same arguments; only the mode differs.
+  # --model is required; without one, point at `current models` rather
+  # than repeating the whole usage.
   defp parse_task(command, args) do
     case OptionParser.parse(args,
-           strict: [dir: :string, help: :boolean],
+           strict: [dir: :string, model: :string, help: :boolean],
            aliases: [d: :dir, h: :help]
          ) do
       {opts, argv, []} ->
         prompt = argv |> Enum.join(" ") |> String.trim()
+        dir = Keyword.get(opts, :dir, ".")
+        model = opts |> Keyword.get(:model, "") |> String.trim()
 
         cond do
           opts[:help] -> :help
           prompt == "" -> {:error, "#{command} needs a prompt"}
-          true -> {command, prompt, Keyword.get(opts, :dir, ".")}
+          not Keyword.has_key?(opts, :model) ->
+            {:error, "#{command} needs --model <model>", @models_hint}
+
+          model == "" ->
+            {:error, "#{command}: --model can't be blank", @models_hint}
+
+          true -> {command, prompt, dir, model}
         end
 
       {_opts, _argv, [{flag, _value} | _]} ->
@@ -227,8 +253,8 @@ defmodule Current.CLI do
   defp usage do
     """
     Usage:
-      current plan <prompt> [--dir <project-dir>]
-      current run <prompt> [--dir <project-dir>]
+      current plan <prompt> --model <model> [--dir <project-dir>]
+      current run <prompt> --model <model> [--dir <project-dir>]
       current approve <proposal-id> [--message <message>]
       current reject <proposal-id> [--message <message>]
       current apply <proposal-id>
@@ -236,6 +262,7 @@ defmodule Current.CLI do
       current proposal <proposal-id>
       current review <proposal-id> [--json] [--max-lines <n>] [--raw]
       current artifact <artifact-id>
+      current models
       current status
 
     Commands:
@@ -248,10 +275,13 @@ defmodule Current.CLI do
       proposal  A proposal in full: intents, claims, artifacts.
       review    A proposal with its diffs and file contents, as Markdown (or --json).
       artifact  An artifact's exact bytes, e.g. a proposed diff.
+      models    Models currently discovered from configured LLM providers.
       status    Whether the runtime is up, and how it is configured.
 
     Options:
       -d, --dir      Project directory for plan and run (default: the current directory)
+      --model        Model for plan and run (required), as listed by
+                     `current models`, e.g. openai:gpt-5.6
       -m, --message  Message recorded by approve or reject
       --json         review: machine-readable output (schema current.review/v1)
       --max-lines    review: lines shown per artifact (default: #{@default_review_max_lines})
@@ -277,8 +307,11 @@ defmodule Current.CLI do
     end
   end
 
-  defp dispatch({:plan, prompt, dir}, client), do: submit(:plan, prompt, dir, client)
-  defp dispatch({:run, prompt, dir}, client), do: submit(:apply, prompt, dir, client)
+  defp dispatch({:plan, prompt, dir, model}, client),
+    do: submit(:plan, prompt, dir, model, client)
+
+  defp dispatch({:run, prompt, dir, model}, client),
+    do: submit(:apply, prompt, dir, model, client)
 
   defp dispatch({:approve, id, message}, client) do
     case Client.approve(client, id, review_metadata(message)) do
@@ -354,20 +387,30 @@ defmodule Current.CLI do
     end
   end
 
+  defp dispatch(:models, client) do
+    case Client.models(client) do
+      models when is_list(models) ->
+        print_models(models)
+
+      {:error, reason} ->
+        fail(transport_error(reason, client.node))
+    end
+  end
+
   ## plan and run
 
   # plan (mode :plan) runs to completion; run (mode :apply) stops once
   # the proposal is waiting for approval -- the runtime itself goes no
   # further until `current approve` and then `current apply`.
-  defp submit(mode, prompt, dir, client) do
+  defp submit(mode, prompt, dir, model, client) do
     with {:ok, health} <- Client.health(client),
-         request = %Request{input: prompt, context: %{}, mode: mode},
+         request = %Request{input: prompt, context: %{}, model: model, mode: mode},
          # Relative to where the CLI runs, not the runtime's working
          # directory. absname/1 (unlike expand/1) keeps any "..", so
          # submit_task/3 still applies its own rules to the path as given.
          {:ok, task_id} <- Client.submit_task(client, request, Path.absname(dir)) do
       IO.puts("Current #{health.version} · #{health.node}\n")
-      IO.puts(Render.task_submitted(task_id, mode))
+      IO.puts(Render.task_submitted(task_id, mode, model))
 
       case mode do
         :plan ->
@@ -379,6 +422,9 @@ defmodule Current.CLI do
     else
       {:error, {:invalid_project_dir, path, reason}} ->
         fail("invalid project directory #{path} (#{reason})")
+
+      {:error, {:unknown_model, unknown}} ->
+        fail("unknown model #{unknown}\nList the available models with:  current models")
 
       {:error, reason} ->
         fail(transport_error(reason, client.node))
@@ -552,4 +598,17 @@ defmodule Current.CLI do
 
   defp transport_error({:runtime_raised, message}, node), do: "#{node} raised: #{message}"
   defp transport_error(reason, _node), do: inspect(reason)
+
+  defp print_models([]) do
+    IO.puts("No models are currently available.")
+    @exit_ok
+  end
+
+  defp print_models(models) do
+    models
+    |> Enum.sort()
+    |> Enum.each(&IO.puts/1)
+
+    @exit_ok
+  end
 end

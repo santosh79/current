@@ -428,6 +428,7 @@ defmodule Current.IntentValidatorTest do
     test "passes when condition matches the referenced intent's result type" do
       cmd = %Intent.RunCommand{id: Id.generate(), proposal_id: Id.generate(), cmd: "echo"}
       grep = %Intent.Grep{id: Id.generate(), proposal_id: Id.generate(), pattern: "x", paths: []}
+
       glob = %Intent.Glob{
         id: Id.generate(),
         proposal_id: Id.generate(),

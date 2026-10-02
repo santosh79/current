@@ -47,6 +47,7 @@ defmodule Current.RuntimeSupervisor do
         DynamicSupervisor,
         name: Current.WorkflowSupervisor, strategy: :one_for_one
       },
+      Current.ModelCatalog,
       Current.TaskDispatcher
     ]
 
