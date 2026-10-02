@@ -82,6 +82,11 @@ defmodule Current.CLI.Client do
   def reject(client, id, metadata), do: call(client, :reject, [id, metadata])
   def apply_proposal(client, id), do: call(client, :apply_proposal, [id])
 
+  @spec models(t()) :: [String.t()] | {:error, term()}
+  def models(client) do
+    call(client, :models, [])
+  end
+
   def health(client) do
     case call(client, :health, []) do
       %{status: _} = health -> {:ok, health}

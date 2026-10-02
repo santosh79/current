@@ -96,7 +96,10 @@ defmodule Current.Event.SchemaTest do
       assert_raise Schema.UpcastError, fn -> Schema.migrate(Gap, raw) end
     end
 
-    test "a v1 TaskCreated (before project_dir existed) upcasts with project_dir nil, not a guess" do
+    # v3 made :model required and no model can be invented for a task
+    # that never recorded one, so older events are refused rather than
+    # read with a guess. This is the intended break with old WALs.
+    test "a TaskCreated recorded before model existed (v1, v2) can't be read" do
       now = DateTime.utc_now()
 
       raw = %{
@@ -107,15 +110,21 @@ defmodule Current.Event.SchemaTest do
         context: %{},
         mode: :plan,
         submitted_at: now,
-        timestamp: now,
-        version: 1
+        timestamp: now
       }
 
-      assert %Event.TaskCreated{project_dir: nil, version: 2} =
-               Schema.migrate(Event.TaskCreated, raw)
+      for old <- [
+            Map.put(raw, :version, 1),
+            raw |> Map.put(:project_dir, "/srv/projects/app") |> Map.put(:version, 2)
+          ] do
+        error =
+          assert_raise Schema.UpcastError, fn -> Schema.migrate(Event.TaskCreated, old) end
+
+        assert Exception.message(error) =~ "no upcast from schema version 2"
+      end
     end
 
-    test "a v2 TaskCreated keeps the project_dir it recorded" do
+    test "a current TaskCreated is left as recorded" do
       now = DateTime.utc_now()
 
       event = %Event.TaskCreated{
@@ -125,6 +134,7 @@ defmodule Current.Event.SchemaTest do
         context: %{},
         mode: :plan,
         project_dir: "/srv/projects/app",
+        model: "openai:gpt-5.6",
         submitted_at: now,
         timestamp: now
       }

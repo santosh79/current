@@ -4,6 +4,7 @@ defmodule Current do
     EventStore,
     Id,
     IntentPaths,
+    ModelCatalog,
     ProposalStore,
     Request,
     TaskDispatcher,
@@ -36,20 +37,46 @@ defmodule Current do
   A `project_dir` that contains any `..` segment, isn't a directory, or
   can't be resolved (a symlink loop) is rejected before anything is
   registered or recorded.
+
+  The request must name its model: `req.model` is one entry of
+  `Current.ModelCatalog.all/0`, e.g. `"anthropic:claude-opus-5-5"`. It
+  is checked against the catalog here, up front. One the catalog doesn't
+  list is rejected with `{:error, {:unknown_model, model}}`, and a
+  request without one with `{:error, :model_required}`, in both cases
+  before anything is registered or recorded. An accepted model is
+  recorded on TaskCreated; WorkflowOrchestrator picks the provider's
+  client from it and the proposal builder asks that client for it.
+
+  The catalog is filled asynchronously at startup (and by
+  `Current.ModelCatalog.refresh/0`), so until a provider has answered,
+  its models are unknown and are rejected here.
   """
   @spec submit_task(Request.t(), pid(), Path.t()) ::
           {:ok, Current.Id.t()}
+          | {:error, :model_required}
+          | {:error, {:unknown_model, ModelCatalog.model_name()}}
           | {:error,
              {:invalid_project_dir, Path.t(),
               :parent_segment | :not_a_directory | :too_many_links}}
           | {:error, term()}
-  def submit_task(%Request{} = req, caller_pid, project_dir \\ ".")
+  def submit_task(%Request{model: model} = req, caller_pid, project_dir \\ ".")
       when is_pid(caller_pid) and is_binary(project_dir) do
-    with :ok <- validate_project_dir(project_dir),
+    with :ok <- validate_model(model),
+         :ok <- validate_project_dir(project_dir),
          {:ok, canonical} <- canonical_project_dir(project_dir) do
       do_submit_task(req, caller_pid, canonical)
     end
   end
+
+  defp validate_model(model) when is_binary(model) do
+    if ModelCatalog.available?(model) do
+      :ok
+    else
+      {:error, {:unknown_model, model}}
+    end
+  end
+
+  defp validate_model(_no_model), do: {:error, :model_required}
 
   # realpath/1 keeps components that don't exist yet (right for a file
   # about to be written), so existence is checked separately.
@@ -90,6 +117,7 @@ defmodule Current do
       context: req.context,
       mode: req.mode,
       project_dir: project_dir,
+      model: req.model,
       submitted_at: now,
       timestamp: now
     }

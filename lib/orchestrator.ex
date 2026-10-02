@@ -10,6 +10,7 @@ defmodule Current.WorkflowOrchestrator do
     IntentPaths,
     IntentValidator,
     Mode,
+    ModelCatalog,
     Proposal,
     Error.ProposalProductionError,
     Request,
@@ -66,7 +67,14 @@ defmodule Current.WorkflowOrchestrator do
     state = %{
       listeners: listeners,
       task_id: task.id,
-      request: %Request{input: task.input, context: task.context, mode: task.mode},
+      request: %Request{
+        input: task.input,
+        context: task.context,
+        mode: task.mode,
+        # The model recorded on the task. start_proposal_production/1
+        # picks the client from it.
+        model: task.model
+      },
       # Execution context from the recorded task (nil for a legacy task).
       project_dir: task.project_dir,
       workflow_id: workflow_id,
@@ -387,7 +395,7 @@ defmodule Current.WorkflowOrchestrator do
 
   defp start_proposal_production(state) do
     builder = Application.fetch_env!(:current, :proposal_builder)
-    client = Application.fetch_env!(:current, :llm_client)
+    client = client_module(state.request)
     timeout_ms = Application.fetch_env!(:current, :llm_proposal_timeout_ms)
 
     orchestrator = self()
@@ -398,22 +406,44 @@ defmodule Current.WorkflowOrchestrator do
     pid =
       spawn_link(fn ->
         message =
-          case builder.build(request, workflow_id, client, timeout_ms, project_dir) do
-            {:ok, %Proposal{} = proposal} ->
-              raw_output_blob_id = nil
-              {:proposal_produced, proposal, raw_output_blob_id}
+          case client do
+            {:ok, client_mod} ->
+              case builder.build(request, workflow_id, client_mod, timeout_ms, project_dir) do
+                {:ok, %Proposal{} = proposal} ->
+                  raw_output_blob_id = nil
+                  {:proposal_produced, proposal, raw_output_blob_id}
 
-            {:ok, %Proposal{} = proposal, raw_output_blob_id} ->
-              {:proposal_produced, proposal, raw_output_blob_id}
+                {:ok, %Proposal{} = proposal, raw_output_blob_id} ->
+                  {:proposal_produced, proposal, raw_output_blob_id}
 
-            {:error, %ProposalProductionError{} = err} ->
-              {:proposal_production_failed, err}
+                {:error, %ProposalProductionError{} = err} ->
+                  {:proposal_production_failed, err}
+              end
+
+            {:error, reason} ->
+              {:proposal_production_failed,
+               %ProposalProductionError{
+                 stage: :connection,
+                 reason: reason
+               }}
           end
 
         send(orchestrator, message)
       end)
 
     %{state | proposal_production: pid}
+  end
+
+  # Which LLM client a request runs on: the client of its model's
+  # provider (the model is a Current.ModelCatalog entry, already checked
+  # by Current.submit_task/3). The check at submission can't cover a
+  # provider whose client has since been dropped from the configuration,
+  # so that still fails proposal production here rather than crashing.
+  defp client_module(%Request{model: model}) do
+    case ModelCatalog.client_for(model) do
+      {:ok, client_mod} -> {:ok, client_mod}
+      :error -> {:error, {:no_client_for_model, model}}
+    end
   end
 
   ## Effect application

@@ -15,7 +15,7 @@ defmodule Current.LLMProposalBuilder do
 
   @behaviour Current.ProposalBuilder
 
-  alias Current.{BlobStore, ProjectContext, Proposal, ProposalDecoder, Request}
+  alias Current.{BlobStore, ModelCatalog, ProjectContext, Proposal, ProposalDecoder, Request}
   alias Current.Error.ProposalProductionError
 
   @impl true
@@ -23,12 +23,12 @@ defmodule Current.LLMProposalBuilder do
           {:ok, Proposal.t()}
           | {:ok, Proposal.t(), Current.Id.t()}
           | {:error, ProposalProductionError.t()}
-  def build(%Request{} = req, workflow_id, client, timeout_ms, project_dir)
-      when is_integer(timeout_ms) and timeout_ms > 0 do
+  def build(%Request{model: model} = req, workflow_id, client, timeout_ms, project_dir)
+      when is_binary(model) and is_integer(timeout_ms) and timeout_ms > 0 do
     with {:ok, project} <- project_context(project_dir) do
       req
       |> prompt_for(project)
-      |> request_proposal(workflow_id, client, timeout_ms)
+      |> request_proposal(workflow_id, client, timeout_ms, model)
     end
   end
 
@@ -46,8 +46,8 @@ defmodule Current.LLMProposalBuilder do
     end
   end
 
-  defp request_proposal(prompt, workflow_id, client, timeout_ms) do
-    case call_with_timeout(client, prompt, timeout_ms) do
+  defp request_proposal(prompt, workflow_id, client, timeout_ms, model) do
+    case call_with_timeout(client, prompt, timeout_ms, model) do
       {:ok, raw} ->
         decode(raw, workflow_id)
 
@@ -73,8 +73,8 @@ defmodule Current.LLMProposalBuilder do
   # I/O) and used here as a backstop against clients that ignore it.
   # Whichever fires first, the result is {:error, :timeout}, so the
   # outcome is stage: :timeout either way.
-  defp call_with_timeout(client, prompt, timeout_ms) do
-    task = Task.async(fn -> safe_complete(client, prompt, timeout_ms) end)
+  defp call_with_timeout(client, prompt, timeout_ms, model) do
+    task = Task.async(fn -> safe_complete(client, prompt, timeout_ms, model) end)
 
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> result
@@ -86,8 +86,17 @@ defmodule Current.LLMProposalBuilder do
   # task's function raised -- catching here, inside the task itself,
   # keeps a misbehaving client from ever propagating as an exception at
   # all, rather than relying on a caller-side rescue.
-  defp safe_complete(client, prompt, timeout_ms) do
-    client.complete(prompt, timeout_ms)
+  #
+  # The request's model is a Current.ModelCatalog entry; the client wants
+  # the provider-native ID, so the provider prefix comes off here.
+  defp safe_complete(client, prompt, timeout_ms, model) do
+    case ModelCatalog.split(model) do
+      {:ok, _provider, model_id} ->
+        client.complete(prompt, timeout_ms, model_id)
+
+      :error ->
+        {:error, {:invalid_model, model}}
+    end
   catch
     kind, reason -> {:error, Exception.format_banner(kind, reason)}
   end

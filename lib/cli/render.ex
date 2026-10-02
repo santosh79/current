@@ -14,11 +14,12 @@ defmodule Current.CLI.Render do
 
   ## current plan / run / apply
 
-  def task_submitted(task_id, mode) do
+  def task_submitted(task_id, mode, model) do
     """
     Task submitted
       task     #{task_id}
       mode     #{mode}
+      model    #{model}
 
       Ctrl-C detaches; the workflow carries on in the runtime.
       Follow it with: current events #{short(task_id)}
@@ -167,8 +168,6 @@ defmodule Current.CLI.Render do
       "runtime #{health.status}",
       "  WAL head  #{health.wal_head}",
       "  builder   #{module_name(health.proposal_builder)}",
-      "  client    #{module_name(health.llm_client)}",
-      "  model     #{health.model || "client default"}",
       if(health.llm_proposal_timeout_ms,
         do: "  timeout   #{div(health.llm_proposal_timeout_ms, 1000)}s"
       )
