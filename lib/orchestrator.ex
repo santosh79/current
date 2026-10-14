@@ -10,7 +10,6 @@ defmodule Current.WorkflowOrchestrator do
     IntentPaths,
     IntentValidator,
     Mode,
-    ModelCatalog,
     Proposal,
     Error.ProposalProductionError,
     Request,
@@ -434,13 +433,8 @@ defmodule Current.WorkflowOrchestrator do
     %{state | proposal_production: pid}
   end
 
-  # Which LLM client a request runs on: the client of its model's
-  # provider (the model is a Current.ModelCatalog entry, already checked
-  # by Current.submit_task/3). The check at submission can't cover a
-  # provider whose client has since been dropped from the configuration,
-  # so that still fails proposal production here rather than crashing.
   defp client_module(%Request{model: model}) do
-    case ModelCatalog.client_for(model) do
+    case client_for(model) do
       {:ok, client_mod} -> {:ok, client_mod}
       :error -> {:error, {:no_client_for_model, model}}
     end
@@ -665,5 +659,25 @@ defmodule Current.WorkflowOrchestrator do
     })
 
     :ok
+  end
+
+  defp client_for(model_name) when is_binary(model_name) do
+    with {:ok, provider, _model_id} <- split(model_name),
+         client when not is_nil(client) <-
+           Enum.find(Current.ModelCatalog.llm_clients(), &(&1.provider() == provider)) do
+      {:ok, client}
+    else
+      _ -> :error
+    end
+  end
+
+  defp split(model_name) when is_binary(model_name) do
+    case String.split(model_name, ":", parts: 2) do
+      [provider, model_id] when provider != "" and model_id != "" ->
+        {:ok, provider, model_id}
+
+      _ ->
+        :error
+    end
   end
 end

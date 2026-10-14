@@ -76,6 +76,11 @@ defmodule Current.CLI.Client do
 
   def workflow(client, id), do: call(client, :workflow, [id])
   def proposal(client, id), do: call(client, :proposal, [id])
+
+  @doc "Live activity of a workflow after `after_seq`; see Current.RPC.activity/3."
+  def activity(client, workflow_id, epoch, after_seq),
+    do: call(client, :activity, [workflow_id, epoch, after_seq])
+
   def artifact(client, id), do: call(client, :artifact, [id])
   def review(client, id, opts), do: call(client, :review, [id, opts])
   def approve(client, id, metadata), do: call(client, :approve, [id, metadata])

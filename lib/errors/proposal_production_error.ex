@@ -2,7 +2,11 @@ defmodule Current.Error.ProposalProductionError do
   @enforce_keys [:stage, :reason]
   defstruct [:stage, :reason, :raw_output_blob_id]
 
-  @type stage :: :project_context | :connection | :timeout | :decode | nil
+  # Every stage but :internal is an expected failure at a boundary (the
+  # project directory, the model, its reply). :internal is a bug in the
+  # builder itself.
+  @type stage ::
+          :project_context | :connection | :timeout | :decode | :context_budget | :internal | nil
 
   @type t :: %__MODULE__{
           stage: stage(),
@@ -30,6 +34,12 @@ defmodule Current.Error.ProposalProductionError do
 
   def message(%__MODULE__{stage: :decode, reason: reason}),
     do: "model response could not be decoded: #{inspect(reason)}"
+
+  def message(%__MODULE__{stage: :context_budget, reason: reason}),
+    do: "the model did not produce a proposal: #{inspect(reason)}"
+
+  def message(%__MODULE__{stage: :internal, reason: reason}),
+    do: "the proposal builder failed unexpectedly: #{reason}"
 
   def message(%__MODULE__{stage: nil, reason: reason}),
     do: "proposal production failed: #{inspect(reason)}"

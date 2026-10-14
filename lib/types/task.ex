@@ -10,7 +10,7 @@ defmodule Current.Task do
           # nil for tasks recorded before project_dir existed.
           project_dir: Path.t() | nil,
           # The Current.ModelCatalog entry the task was submitted with.
-          model: Current.ModelCatalog.model_name(),
+          model: String.t(),
           submitted_at: DateTime.t()
         }
 

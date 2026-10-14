@@ -53,8 +53,8 @@ defmodule Current.CLI do
   @exit_usage 2
 
   @poll_ms 250
-  # Give up waiting after the runtime's model timeout plus this much
-  # time without any new event.
+  # Give up waiting after the runtime's bound on producing a proposal
+  # plus this much time without any new event.
   @idle_slack_ms 60_000
   @default_model_timeout_ms 120_000
 
@@ -155,15 +155,20 @@ defmodule Current.CLI do
         model = opts |> Keyword.get(:model, "") |> String.trim()
 
         cond do
-          opts[:help] -> :help
-          prompt == "" -> {:error, "#{command} needs a prompt"}
+          opts[:help] ->
+            :help
+
+          prompt == "" ->
+            {:error, "#{command} needs a prompt"}
+
           not Keyword.has_key?(opts, :model) ->
             {:error, "#{command} needs --model <model>", @models_hint}
 
           model == "" ->
             {:error, "#{command}: --model can't be blank", @models_hint}
 
-          true -> {command, prompt, dir, model}
+          true ->
+            {command, prompt, dir, model}
         end
 
       {_opts, _argv, [{flag, _value} | _]} ->
@@ -478,10 +483,12 @@ defmodule Current.CLI do
   # Polls `id` (a task or workflow id) until `done?` holds, renders the
   # outcome, and exits 0 only if the workflow ended in the expected status.
   defp follow(client, id, health, opts) do
-    idle_ms = (health.llm_proposal_timeout_ms || @default_model_timeout_ms) + @idle_slack_ms
+    idle_ms = model_wait_ms(health) + @idle_slack_ms
 
     case await(client, id, %{
            seen: 0,
+           activity_epoch: nil,
+           activity_seq: 0,
            started?: Keyword.get(opts, :started?, false),
            idle_ms: idle_ms,
            last_progress: now(),
@@ -513,9 +520,17 @@ defmodule Current.CLI do
   defp await(client, id, state) do
     case Client.workflow(client, id) do
       {:ok, view} ->
-        if state.done?.(view),
-          do: {:ok, view},
-          else: view |> observe(state) |> retry(client, id)
+        if state.done?.(view) do
+          # What happened since the last poll still gets shown, before
+          # the outcome.
+          show_activity(state, client, view.workflow_id)
+          {:ok, view}
+        else
+          view
+          |> observe(state)
+          |> show_activity(client, view.workflow_id)
+          |> retry(client, id)
+        end
 
       {:error, :not_found} ->
         retry(state, client, id)
@@ -539,6 +554,34 @@ defmodule Current.CLI do
       _ ->
         %{state | started?: started?}
     end
+  end
+
+  # What the model has asked to see since the last poll, from the runtime's
+  # live activity view (not the event log: nothing is committed for it).
+  # Each item counts as progress, so a model that takes many rounds to
+  # read the project doesn't look stalled. A runtime that can't answer --
+  # an older one -- just shows nothing.
+  defp show_activity(state, client, workflow_id) do
+    case Client.activity(client, workflow_id, state.activity_epoch, state.activity_seq) do
+      %{items: [_ | _] = items, epoch: epoch, last_seq: last_seq} ->
+        items |> Render.activity() |> Enum.each(&IO.puts/1)
+        %{state | activity_epoch: epoch, activity_seq: last_seq, last_progress: now()}
+
+      %{epoch: epoch, last_seq: last_seq} ->
+        %{state | activity_epoch: epoch, activity_seq: last_seq}
+
+      _unavailable ->
+        state
+    end
+  end
+
+  # The longest the runtime can go without committing an event while
+  # all is well: producing a proposal, which may take several model
+  # calls. A runtime that doesn't report the per-task bound (an older
+  # one) is assumed to make a single call.
+  defp model_wait_ms(health) do
+    Map.get(health, :llm_task_timeout_ms) || health.llm_proposal_timeout_ms ||
+      @default_model_timeout_ms
   end
 
   defp retry(state, client, id) do

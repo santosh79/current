@@ -5,6 +5,32 @@ defmodule Current.LLMProposalBuilder do
   response preserved for provenance, always, success or failure) ->
   Current.ProposalDecoder (untrusted bytes -> typed Proposal.t()).
 
+  Producing a proposal is a conversation, not one call. The model is
+  given the project's layout (Current.ProjectContext) -- paths and
+  sizes, no contents. Each reply is either the proposal, which ends the
+  conversation, or a request for context: observations, each wrapping a
+  `read_file`, `glob` or `grep` intent, which Current.Observer runs
+  under the runtime's file-access rules. The model is then asked again
+  with everything it has been shown so far. Nothing is kept between
+  calls but that list, so every prompt is rebuilt from the same inputs.
+
+  While it works, each round is also reported to Current.ActivityHub --
+  what the model asked for, then how each request was settled -- so a
+  client can show progress before there is a proposal. That is a live
+  view only; the record is the proposal's observations:
+
+  What the model looked at is kept with the proposal: its observations
+  (see Current.Observation), in the order it asked, each settled as shown
+  or refused. They hold artifact ids, never contents.
+
+  The conversation is bounded three ways:
+
+    * each model call by the timeout WorkflowOrchestrator passes in;
+    * the number of context requests by @max_observe_rounds, and how much
+      they may return in total by @context_budget_bytes;
+    * the whole build -- every call and every read -- by
+      `task_timeout_ms/0`.
+
   Per Current.ProposalBuilder's @callback contract, this module owns its
   own crash and timeout handling completely -- WorkflowOrchestrator no
   longer enforces either (see start_proposal_production/1). A client
@@ -15,8 +41,35 @@ defmodule Current.LLMProposalBuilder do
 
   @behaviour Current.ProposalBuilder
 
-  alias Current.{BlobStore, ModelCatalog, ProjectContext, Proposal, ProposalDecoder, Request}
+  alias Current.{
+    ActivityHub,
+    BlobStore,
+    ProjectContext,
+    Proposal,
+    ProposalDecoder,
+    Request,
+    Observer
+  }
+
   alias Current.Error.ProposalProductionError
+
+  # How long one task's proposal may take in total, however many times
+  # the model is called. Hard-coded for now; the application env key is
+  # only there so tests don't have to wait this long.
+  @task_timeout_ms 600_000
+
+  # How many times the model may ask for context before it has to
+  # propose, and how many bytes of results it may be shown in total.
+  @max_observe_rounds 8
+  @context_budget_bytes 400_000
+
+  @doc """
+  The bound on one whole build: every model call and every read between
+  them. A build still running after this long is killed and fails at the
+  `:timeout` stage.
+  """
+  @spec task_timeout_ms() :: pos_integer()
+  def task_timeout_ms, do: Application.get_env(:current, :llm_task_timeout_ms, @task_timeout_ms)
 
   @impl true
   @spec build(Request.t(), Current.Id.t(), module(), pos_integer(), Path.t() | nil) ::
@@ -25,19 +78,29 @@ defmodule Current.LLMProposalBuilder do
           | {:error, ProposalProductionError.t()}
   def build(%Request{model: model} = req, workflow_id, client, timeout_ms, project_dir)
       when is_binary(model) and is_integer(timeout_ms) and timeout_ms > 0 do
-    with {:ok, project} <- project_context(project_dir) do
-      req
-      |> prompt_for(project)
-      |> request_proposal(workflow_id, client, timeout_ms, model)
-    end
+    within_task_timeout(fn ->
+      with {:ok, project} <- project_layout(project_dir) do
+        converse(%{
+          request: req,
+          workflow_id: workflow_id,
+          client: client,
+          call_timeout_ms: timeout_ms,
+          project: project,
+          observations: [],
+          shown: [],
+          rounds_left: @max_observe_rounds,
+          budget: @context_budget_bytes
+        })
+      end
+    end)
   end
 
-  defp project_context(nil) do
+  defp project_layout(nil) do
     {:error, %ProposalProductionError{stage: :project_context, reason: :no_project_dir}}
   end
 
-  defp project_context(project_dir) do
-    case ProjectContext.build(project_dir) do
+  defp project_layout(project_dir) do
+    case ProjectContext.layout(project_dir) do
       {:ok, project} ->
         {:ok, project}
 
@@ -46,16 +109,45 @@ defmodule Current.LLMProposalBuilder do
     end
   end
 
-  defp request_proposal(prompt, workflow_id, client, timeout_ms, model) do
-    case call_with_timeout(client, prompt, timeout_ms, model) do
+  ## --- The whole build, with a bound of its own ------------------------------
+
+  # The conversation runs in a task so the bound holds whatever it is
+  # doing when time runs out -- waiting on the model or walking a huge
+  # directory for a glob. The per-call task below is linked to this one,
+  # so killing this one takes an in-flight model call down with it.
+  defp within_task_timeout(build) do
+    timeout_ms = task_timeout_ms()
+    task = Task.async(fn -> contained(build) end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} ->
+        result
+
+      nil ->
+        {:error,
+         %ProposalProductionError{
+           stage: :timeout,
+           reason: "no proposal after #{timeout_ms}ms"
+         }}
+    end
+  end
+
+  ## --- The conversation -----------------------------------------------------
+
+  # One turn: ask, then either finish with the proposal or run what the
+  # model asked to see and ask again.
+  defp converse(state) do
+    prompt = prompt_for(state)
+
+    case call_with_timeout(state.client, prompt, state.call_timeout_ms, state.request.model) do
       {:ok, raw} ->
-        decode(raw, workflow_id)
+        handle_reply(raw, state)
 
       {:error, :timeout} ->
         {:error,
          %ProposalProductionError{
            stage: :timeout,
-           reason: "no response after #{timeout_ms}ms"
+           reason: "no response after #{state.call_timeout_ms}ms"
          }}
 
       {:error, reason} ->
@@ -65,6 +157,85 @@ defmodule Current.LLMProposalBuilder do
            reason: reason
          }}
     end
+  end
+
+  ## --- Decode + provenance ------------------------------------------------
+
+  defp handle_reply(raw, state) do
+    {:ok, raw_output_blob_id} = BlobStore.put(raw)
+
+    case ProposalDecoder.decode_reply(raw, state.workflow_id) do
+      {:ok, {:proposal, %Proposal{} = proposal}} ->
+        proposal = %Proposal{proposal | observations: attach(state.observations, proposal)}
+        {:ok, proposal, raw_output_blob_id}
+
+      # The last prompt said a proposal was required and got another
+      # request instead. Running it would make the limit meaningless.
+      {:ok, {:observe, _intents}} when state.rounds_left == 0 ->
+        {:error,
+         %ProposalProductionError{
+           stage: :context_budget,
+           reason: "still asking for context after #{@max_observe_rounds} requests",
+           raw_output_blob_id: raw_output_blob_id
+         }}
+
+      {:ok, {:observe, requested}} ->
+        # Which reply asked: this one.
+        round = @max_observe_rounds - state.rounds_left + 1
+
+        requested =
+          Enum.map(requested, &%{&1 | round: round, reply_artifact_id: raw_output_blob_id})
+
+        # Live progress for whoever is watching this workflow (see
+        # Current.ActivityHub). Casts: they never wait, and never fail the build.
+        ActivityHub.observe_requested(state.workflow_id, round, requested)
+
+        {made, budget} = Observer.observe(requested, state.project.root, state.budget)
+        {observations, texts} = Enum.unzip(made)
+
+        ActivityHub.observe_settled(state.workflow_id, round, made)
+
+        converse(%{
+          state
+          | observations: state.observations ++ observations,
+            shown: state.shown ++ texts,
+            rounds_left: state.rounds_left - 1,
+            budget: budget
+        })
+
+      {:error, reason} ->
+        {:error,
+         %ProposalProductionError{
+           stage: :decode,
+           reason: reason,
+           raw_output_blob_id: raw_output_blob_id
+         }}
+    end
+  end
+
+  # Anything raised, thrown or exited from inside the build becomes a
+  # result. One line saying what and where is kept: it goes in the event
+  # log, and it is what someone needs to find the bug.
+  defp contained(build) do
+    build.()
+  catch
+    kind, reason ->
+      {:error,
+       %ProposalProductionError{
+         stage: :internal,
+         reason: Exception.format_banner(kind, reason, __STACKTRACE__) <> origin(__STACKTRACE__)
+       }}
+  end
+
+  defp origin([entry | _]), do: " at " <> Exception.format_stacktrace_entry(entry)
+  defp origin([]), do: ""
+
+  # The observations now belong to the proposal they led to, and their
+  # intents say so, like every other intent in it.
+  defp attach(observations, %Proposal{id: proposal_id}) do
+    Enum.map(observations, fn observation ->
+      %{observation | intent: %{observation.intent | proposal_id: proposal_id}}
+    end)
   end
 
   ## --- Client call, with a bound this module owns end to end -----------
@@ -87,12 +258,12 @@ defmodule Current.LLMProposalBuilder do
   # keeps a misbehaving client from ever propagating as an exception at
   # all, rather than relying on a caller-side rescue.
   #
-  # The request's model is a Current.ModelCatalog entry; the client wants
-  # the provider-native ID, so the provider prefix comes off here.
   defp safe_complete(client, prompt, timeout_ms, model) do
-    case ModelCatalog.split(model) do
+    case split(model) do
       {:ok, _provider, model_id} ->
-        client.complete(prompt, timeout_ms, model_id)
+        {:ok, pid} = client.start_link([])
+        response = client.complete(pid, prompt, timeout_ms, model_id)
+        response
 
       :error ->
         {:error, {:invalid_model, model}}
@@ -101,45 +272,116 @@ defmodule Current.LLMProposalBuilder do
     kind, reason -> {:error, Exception.format_banner(kind, reason)}
   end
 
-  ## --- Decode + provenance ------------------------------------------------
-
-  defp decode(raw, workflow_id) do
-    {:ok, raw_output_blob_id} = BlobStore.put(raw)
-
-    case ProposalDecoder.decode(raw, workflow_id) do
-      {:ok, %Proposal{} = proposal} ->
-        {:ok, proposal, raw_output_blob_id}
-
-      {:error, reason} ->
-        {:error,
-         %ProposalProductionError{
-           stage: :decode,
-           reason: reason,
-           raw_output_blob_id: raw_output_blob_id
-         }}
-    end
-  end
-
   ## --- Prompt -----------------------------------------------------------
 
-  defp prompt_for(%Request{input: input, context: context}, project) do
+  # Everything that is the same for every turn of every task on this
+  # project comes first, and the observations are only ever appended to,
+  # so a provider's prompt cache can reuse the longest possible prefix.
+  defp prompt_for(%{request: %Request{input: input, context: context}} = state) do
     """
     You are Current, an agent that proposes structured changes to a codebase.
 
-    Request: #{inspect(input)}
-    Context: #{inspect(context)}
+    On every turn you reply with exactly ONE JSON object -- no prose, no
+    markdown fences. There are two kinds of reply:
 
-    Project files (paths are relative to the project root):
+    1. CONTEXT REQUEST -- {"observe": [...]}. Use it when you need to look
+       at the project before you can propose the complete work. The runtime
+       shows you what you asked for and asks you again.
 
-    #{render_files(project.files)}
+    2. PROPOSAL -- {"intents": [...], ...}. Use it only when you have seen
+       what you need. It ends the exchange.
 
-    Respond with a single JSON object matching the schema described below.
-    Return nothing but that JSON object -- no prose, no markdown fences.
+    Never mix the two in one reply. Do not put read_file, glob or grep in a
+    proposal to find something out that you need in order to write that
+    proposal: that is what a context request is for.
+
+      - read_file / glob / grep inside "observe" mean: "show me this, so I
+        can decide what to propose".
+      - read_file / glob / grep inside a proposal mean: "reading this is
+        itself part of the proposed work" -- for example the evidence a
+        claim cites.
+
+    Both replies are described by the schema below (definitions.context_request
+    and definitions.proposal).
 
     #{Current.ProposalWireSchema.raw()}
 
     #{file_patch_rules()}
+
+    #{observe_rules()}
+
+    Project layout (paths are relative to the project root; contents are not shown):
+
+    #{render_layout(state.project)}
+
+    Request: #{inspect(input)}
+    Context: #{inspect(context)}
+
+    #{render_shown(state.shown)}
+
+    #{render_turn(state.rounds_left)}
     """
+  end
+
+  defp observe_rules do
+    """
+    Seeing the project:
+
+    You are shown the project's layout, not its files. To see more, reply
+    with a context request instead of a proposal -- a JSON object with the
+    single key "observe" (definitions.context_request in the schema above):
+
+    {"observe": [
+      {"reason": "see how greetings are built",
+       "intent": {"type": "read_file", "path": "lib/greeter.ex"}},
+      {"reason": "find the other modules",
+       "intent": {"type": "glob", "pattern": "lib/**/*.ex"}},
+      {"reason": "find every caller of hello",
+       "intent": {"type": "grep", "pattern": "hello(", "paths": ["lib/greeter.ex", "lib/app.ex"]}}
+    ]}
+
+    - Each entry is an observation (definitions.observation): one "intent"
+      and a short "reason" saying why you need to see it. The reason is
+      kept on record with your proposal.
+    - The intent must be a read_file, glob or grep, with the same fields
+      it has in a proposal. Paths are relative to the project root. grep
+      matches a literal string line by line, in the files listed; it does
+      not take directories.
+    - The runtime runs them and asks you again with the results added
+      below. Nothing else happens: a context request changes nothing.
+    - Ask for everything you expect to need at once. The number of context
+      requests and the amount of text you can be shown are both limited.
+    - Only patch or rely on files whose contents you have been shown.
+      Their contents appear below as <file path="...">...</file>.
+    """
+  end
+
+  defp render_layout(%{files: [], omitted: 0}), do: "(the project has no files)"
+
+  defp render_layout(%{files: files, omitted: omitted}) do
+    listed = Enum.map(files, fn %{path: path, bytes: bytes} -> "#{path} (#{bytes} bytes)" end)
+
+    more =
+      if omitted > 0,
+        do: ["... and #{omitted} more files not listed; use glob to find them"],
+        else: []
+
+    Enum.join(listed ++ more, "\n")
+  end
+
+  defp render_shown([]), do: "You have not been shown any file contents yet."
+
+  defp render_shown(texts) do
+    "What you have been shown so far, in the order you asked:\n\n" <> Enum.join(texts, "\n\n")
+  end
+
+  defp render_turn(0) do
+    "You have no context requests left. Reply with the proposal now."
+  end
+
+  defp render_turn(rounds_left) do
+    "You may make #{rounds_left} more context request(s). " <>
+      "Reply with a context request, or with the proposal if you have what you need."
   end
 
   ## --- file_patch diff format ---------------------------------------------
@@ -209,9 +451,9 @@ defmodule Current.LLMProposalBuilder do
     - Every line inside a hunk starts with exactly one character: " " for
       context, "-" for a removed line, "+" for an added line. A blank
       context line is a single space.
-    - Context and removed lines must match the file shown above character
-      for character, whitespace included. Give up to 3 lines of context
-      around each change.
+    - Context and removed lines must match the file as it was shown to
+      you, character for character, whitespace included. Give up to 3
+      lines of context around each change.
     - The file must already exist. To create a new file, use write_file.
       write_file only ever creates files -- it fails if the file already
       exists -- so never use it to rewrite an existing file; change an
@@ -232,11 +474,13 @@ defmodule Current.LLMProposalBuilder do
     """
   end
 
-  defp render_files(files) do
-    files
-    |> Enum.sort_by(fn {path, _contents} -> path end)
-    |> Enum.map_join("\n", fn {path, contents} ->
-      "=== #{path} ===\n#{contents}"
-    end)
+  def split(model_name) when is_binary(model_name) do
+    case String.split(model_name, ":", parts: 2) do
+      [provider, model_id] when provider != "" and model_id != "" ->
+        {:ok, provider, model_id}
+
+      _ ->
+        :error
+    end
   end
 end

@@ -3,8 +3,9 @@ defmodule Current.Test.MiniJsonSchema do
   A deliberately narrow JSON Schema validator -- not a general-purpose
   implementation. It supports exactly the keywords
   priv/schema/proposal_response.schema.json uses: type, required,
-  properties, items, enum, const, allOf, if/then/else, and $ref (pointing
-  only at "#/definitions/<name>", with no sibling keys alongside $ref).
+  properties, additionalProperties (only `false`), items, minItems, enum,
+  const, allOf, oneOf, if/then/else, and $ref (pointing only at
+  "#/definitions/<name>", with no sibling keys alongside $ref).
 
   If the schema file starts using a keyword not listed above, this module
   will silently ignore it rather than validate it -- that's a deliberate
@@ -30,10 +31,13 @@ defmodule Current.Test.MiniJsonSchema do
     |> check_type(schema, instance)
     |> check_required(schema, instance)
     |> check_properties(schema, root, instance)
+    |> check_additional_properties(schema, instance)
     |> check_items(schema, root, instance)
+    |> check_min_items(schema, instance)
     |> check_enum(schema, instance)
     |> check_const(schema, instance)
     |> check_all_of(schema, root, instance)
+    |> check_one_of(schema, root, instance)
     |> check_if_then_else(schema, root, instance)
   end
 
@@ -43,6 +47,38 @@ defmodule Current.Test.MiniJsonSchema do
       schema -> schema
     end
   end
+
+  # Only `additionalProperties: false`: a key the schema doesn't list is an
+  # error. (The decoder itself ignores unknown keys; the schema is the
+  # stricter contract the model is held to.)
+  defp check_additional_properties(errors, %{"additionalProperties" => false} = schema, instance)
+       when is_map(instance) do
+    known = schema |> Map.get("properties", %{}) |> Map.keys()
+
+    case Map.keys(instance) -- known do
+      [] -> errors
+      extra -> ["unexpected key(s): #{inspect(Enum.sort(extra))}" | errors]
+    end
+  end
+
+  defp check_additional_properties(errors, _schema, _instance), do: errors
+
+  defp check_min_items(errors, %{"minItems" => min}, instance)
+       when is_list(instance) and length(instance) < min,
+       do: ["expected at least #{min} item(s), got #{length(instance)}" | errors]
+
+  defp check_min_items(errors, _schema, _instance), do: errors
+
+  # Exactly one alternative must match -- two matching is as wrong as none.
+  defp check_one_of(errors, %{"oneOf" => alternatives}, root, instance) do
+    case Enum.count(alternatives, &(do_validate(&1, root, instance) == [])) do
+      1 -> errors
+      0 -> ["matches none of the #{length(alternatives)} alternatives" | errors]
+      n -> ["matches #{n} alternatives; expected exactly one" | errors]
+    end
+  end
+
+  defp check_one_of(errors, _schema, _root, _instance), do: errors
 
   defp check_type(errors, %{"type" => "object"}, instance) when not is_map(instance),
     do: ["expected an object, got: #{inspect(instance)}" | errors]

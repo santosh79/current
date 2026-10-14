@@ -287,7 +287,7 @@ defmodule Current.CLITest do
     end
 
     test "models lists the catalog, one per line" do
-      assert cli!(["models"]) |> String.split("\n", trim: true) == Current.ModelCatalog.all()
+      assert cli!(["models"]) |> String.split("\n", trim: true) == Current.RPC.models()
     end
   end
 

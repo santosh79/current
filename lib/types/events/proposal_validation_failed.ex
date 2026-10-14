@@ -1,5 +1,5 @@
 defmodule Current.Event.ProposalValidationFailed do
-  use Current.Event.Versioned, version: 1
+  use Current.Event.Versioned, version: 2
 
   @enforce_keys [:id, :workflow_id, :proposal, :error, :timestamp]
   defstruct [:id, :workflow_id, :proposal, :error, :timestamp, version: @schema_version]
@@ -12,4 +12,8 @@ defmodule Current.Event.ProposalValidationFailed do
           timestamp: DateTime.t(),
           version: pos_integer()
         }
+
+  # v2: Current.Proposal gained :observations. The proposal inside a v1
+  # event was written without it.
+  def upcast(fields, 1), do: Map.update(fields, :proposal, nil, &Current.Proposal.upcast/1)
 end

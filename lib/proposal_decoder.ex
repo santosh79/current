@@ -18,17 +18,125 @@ defmodule Current.ProposalDecoder do
   string (e.g. a Claim's evidence.source_intent_ref), never by Current's
   real Current.Id.t() values -- the model can't know those in advance.
   This module assigns real ids and resolves refs into them.
+
+  A model that is still gathering context replies with a different
+  top-level shape, `{"observe": [...]}`: observations (see
+  Current.Observation), each wrapping one read-only intent it wants run
+  before it proposes anything. `decode_reply/2` accepts either shape and
+  says which one it got; `decode/2` accepts only a proposal.
   """
 
-  alias Current.{BlobStore, Id, Intent, Proposal}
+  alias Current.{BlobStore, Id, Intent, Observation, Proposal}
 
   @spec decode(String.t(), Current.Id.t()) :: {:ok, Proposal.t()} | {:error, String.t()}
   def decode(raw, workflow_id) when is_binary(raw) do
+    with {:ok, top} <- parse_top(raw) do
+      decode_proposal(top, workflow_id)
+    end
+  end
+
+  @typedoc """
+  What a model's reply turned out to be: its proposal, or the
+  observations it wants made first. Those come back `:requested` --
+  typed, with ids, and not yet run.
+  """
+  @type reply :: {:proposal, Proposal.t()} | {:observe, [Observation.t()]}
+
+  @observable_types ["read_file", "glob", "grep"]
+
+  @doc """
+  Decodes a reply that may be a proposal (`{"intents": [...]}`) or a
+  request for context (`{"observe": [...]}`).
+
+  The model says which one it is by the key it uses; nothing is inferred
+  from the intents themselves, because a proposal made only of reads is
+  a legitimate proposal.
+
+  Each entry of `observe` is an observation:
+
+      {"reason": "see how sign-up validates input",
+       "intent": {"type": "read_file", "path": "lib/signup.ex"}}
+
+  `intent` is required and must be a read_file, glob or grep, with the
+  fields it has in a proposal; `reason` is optional. A reply with both
+  keys, an empty `observe`, or an entry that isn't such an observation
+  is an error.
+  """
+  @spec decode_reply(String.t(), Current.Id.t()) :: {:ok, reply()} | {:error, String.t()}
+  def decode_reply(raw, workflow_id) when is_binary(raw) do
+    with {:ok, top} <- parse_top(raw) do
+      case top do
+        %{"observe" => _, "intents" => _} ->
+          {:error, ~s(response must have either "observe" or "intents", not both)}
+
+        %{"observe" => raw_observe} ->
+          with {:ok, observations} <- decode_observe(raw_observe) do
+            {:ok, {:observe, observations}}
+          end
+
+        _ ->
+          with {:ok, proposal} <- decode_proposal(top, workflow_id) do
+            {:ok, {:proposal, proposal}}
+          end
+      end
+    end
+  end
+
+  defp parse_top(raw) do
+    with {:ok, decoded} <- parse_json(raw) do
+      require_map(decoded, "top-level response")
+    end
+  end
+
+  defp decode_observe(raw_observe) do
+    with {:ok, raw_observations} <- require_list(raw_observe, "observe") do
+      case raw_observations do
+        [] -> {:error, "observe must not be empty"}
+        _ -> collect(raw_observations, &decode_observation/1)
+      end
+    end
+  end
+
+  # An observation wraps one read-only intent. The intent is not part of
+  # a proposal yet, so it has no proposal_id; Current.LLMProposalBuilder
+  # sets it when the observation is attached to the proposal it led to.
+  defp decode_observation(%{"intent" => %{"type" => type} = raw_intent} = raw)
+       when type in @observable_types do
+    with {:ok, reason} <- optional_string_default(raw, "reason", nil),
+         {:ok, intent} <- build_intent(Id.generate(), nil, raw_intent, %{}) do
+      {:ok, %Observation{id: Id.generate(), intent: intent, reason: reason}}
+    end
+  end
+
+  defp decode_observation(%{"intent" => %{"type" => type}}),
+    do: {:error, "an observation's intent must be read_file, glob or grep, got: #{inspect(type)}"}
+
+  defp decode_observation(%{"intent" => _}),
+    do: {:error, "an observation's intent must be a JSON object with a type"}
+
+  defp decode_observation(%{}),
+    do: {:error, "observation missing required field: intent"}
+
+  defp decode_observation(_other), do: {:error, "observation must be a JSON object"}
+
+  defp collect(items, decode) do
+    items
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, acc} ->
+      case decode.(item) do
+        {:ok, decoded} -> {:cont, {:ok, [decoded | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      error -> error
+    end
+  end
+
+  defp decode_proposal(top, workflow_id) do
     proposal_id = Id.generate()
 
-    with {:ok, decoded} <- parse_json(raw),
-         {:ok, top} <- require_map(decoded, "top-level response"),
-         {:ok, raw_intents} <- require_list(Map.get(top, "intents"), "intents"),
+    with {:ok, raw_intents} <- require_list(Map.get(top, "intents"), "intents"),
          {:ok, intents} <- decode_intents(raw_intents, proposal_id) do
       {:ok,
        %Proposal{

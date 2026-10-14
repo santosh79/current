@@ -4,7 +4,6 @@ defmodule Current do
     EventStore,
     Id,
     IntentPaths,
-    ModelCatalog,
     ProposalStore,
     Request,
     TaskDispatcher,
@@ -54,7 +53,7 @@ defmodule Current do
   @spec submit_task(Request.t(), pid(), Path.t()) ::
           {:ok, Current.Id.t()}
           | {:error, :model_required}
-          | {:error, {:unknown_model, ModelCatalog.model_name()}}
+          | {:error, {:unknown_model, String.t()}}
           | {:error,
              {:invalid_project_dir, Path.t(),
               :parent_segment | :not_a_directory | :too_many_links}}
@@ -69,10 +68,11 @@ defmodule Current do
   end
 
   defp validate_model(model) when is_binary(model) do
-    if ModelCatalog.available?(model) do
-      :ok
-    else
-      {:error, {:unknown_model, model}}
+    {:ok, pid} = Current.ModelCatalog.find_supervisor_pid()
+
+    case Current.ModelCatalog.available?(pid, model) do
+      true -> :ok
+      _ -> {:error, {:unknown_model, model}}
     end
   end
 

@@ -28,8 +28,14 @@ defmodule Current.IntentPaths do
 
   @spec absolutize(Proposal.t(), Path.t()) :: Proposal.t()
   def absolutize(%Proposal{intents: intents} = proposal, project_dir) do
+    %{proposal | intents: absolutize_intents(intents, project_dir)}
+  end
+
+  @doc "`absolutize/2` for intents that aren't part of a proposal."
+  @spec absolutize_intents([Intent.t()], Path.t()) :: [Intent.t()]
+  def absolutize_intents(intents, project_dir) when is_list(intents) do
     root = Path.expand(project_dir)
-    %{proposal | intents: Enum.map(intents, &absolutize_intent(&1, root))}
+    Enum.map(intents, &absolutize_intent(&1, root))
   end
 
   @doc """

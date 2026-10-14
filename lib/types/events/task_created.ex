@@ -41,7 +41,7 @@ defmodule Current.Event.TaskCreated do
           # ("provider:model_id"), checked against the catalog at
           # submission (see Current.submit_task/3). Always present: a task
           # can't be submitted without one.
-          model: Current.ModelCatalog.model_name(),
+          model: String.t(),
           submitted_at: DateTime.t(),
           timestamp: DateTime.t(),
           version: pos_integer()
