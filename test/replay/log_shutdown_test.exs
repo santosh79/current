@@ -18,9 +18,12 @@ defmodule Current.Consensus.LogShutdownTest do
           strategy: :one_for_one
         )
 
-      Enum.each(1..1_000, fn num ->
-        commit = Commit.new(num, [], nil)
+      # The log only accepts a commit that extends its head, so each commit
+      # links to the one before it.
+      Enum.reduce(1..1_000, nil, fn num, previous_hash ->
+        commit = Commit.new(num, [], previous_hash)
         :ok = Log.put(commit, :shutdown_test_log)
+        Commit.hash(commit)
       end)
 
       old_log_head = Log.head(:shutdown_test_log)
