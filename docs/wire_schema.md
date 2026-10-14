@@ -1,23 +1,33 @@
 # Proposal Response Wire Schema
 
-This document specifies the JSON shape the agent (LLM) must return when
-asked to produce a proposal, and is the contract between two things that
-don't otherwise check each other: the prompt that tells the model what to
+This document specifies the JSON the agent (LLM) must return when asked
+to produce a proposal, and is the contract between two things that don't
+otherwise check each other: the prompt that tells the model what to
 send, and `Current.ProposalDecoder`, which parses what it sends back.
+
+A reply takes one of two shapes:
+
+- a **proposal** (`{"intents": [...]}`), which ends the exchange -- see
+  [Top-level shape](#top-level-shape);
+- a **context request** (`{"observe": [...]}`), which asks to see more
+  of the project first -- see [Context requests](#context-requests).
 
 If you change the prompt's description of the response format, update
 this document. If you change what `ProposalDecoder` accepts, update this
 document. Treat drift between this file and either of those two as a bug.
 
 A machine-checkable version of this contract lives at
-`priv/schema/proposal_response.schema.json`; `test/proposal_decoder_test.exs`
-asserts that every well-formed fixture in that test file validates against
-it, so the two can't silently drift apart.
+`priv/schema/proposal_response.schema.json`;
+`test/unit/proposal_decoder_test.exs` asserts that every well-formed
+fixture in that test file validates against it, so the two can't
+silently drift apart. The schema's top level describes a proposal; the
+context request is `definitions.context_request` in the same file.
 
 The prompt is built by `Current.LLMProposalBuilder`. It includes that JSON
 schema verbatim -- so the `description`s in it are instructions the model
 reads -- followed by the `file_patch` diff rules and example described
-under [`file_patch`](#file_patch) below.
+under [`file_patch`](#file_patch) below, the rules for context requests,
+and the project's layout (paths and sizes, no file contents).
 
 ## Where this fits
 
@@ -32,12 +42,17 @@ Current.LLMClient          -- talks to the model, owns connection/timeout
 Current.BlobStore.put/1    -- raw bytes preserved for provenance, always,
         │                     whether decode succeeds or fails
         ▼
-Current.ProposalDecoder    -- can these bytes become a Proposal.t()?
+Current.ProposalDecoder    -- can these bytes become a Proposal.t(), or
+        │                     a list of Observation.t()?
         │
         ├── failure ──────► Current.ProposalProductionError{stage: :decode}
         │
+        ├── context request ► Current.Observer makes each observation;
+        │                     the model is asked again with the results
+        │                     (back to the top, a bounded number of times)
         ▼
-Current.Proposal.t()       -- a real, typed proposal now exists
+Current.Proposal.t()       -- a real, typed proposal now exists, carrying
+        │                     the observations that led to it
         │
         ▼
 Current.IntentValidator    -- is this proposal acceptable to run?
@@ -75,13 +90,118 @@ module doc for that boundary in more detail.
 | `dependencies`   | array of strings  | no       | Same rule as `claims`.                                     |
 | `intents`        | array of objects  | **yes**  | Must be present and a JSON array, even if empty (`[]`).    |
 
-Anything at the top level besides these four keys is ignored, not rejected.
+Anything at the top level besides these four keys is ignored, not
+rejected -- with one exception: `observe`. A reply with `observe` and no
+`intents` is a context request (next section); a reply with both is a
+decode failure.
+
+## Context requests
+
+The model is shown the project's layout, not its files. To see more
+before proposing, it replies with a context request instead of a
+proposal:
+
+```json
+{
+  "observe": [
+    { "reason": "see how sign-up validates input",
+      "intent": { "type": "read_file", "path": "lib/signup.ex" } },
+    { "reason": "find the other modules",
+      "intent": { "type": "glob", "pattern": "lib/**/*.ex" } },
+    { "intent": { "type": "grep", "pattern": "validate_email", "paths": ["lib/signup.ex"] } }
+  ]
+}
+```
+
+| Field     | Type             | Required | Notes                                          |
+|-----------|------------------|----------|------------------------------------------------|
+| `observe` | array of objects | **yes**  | Must be a non-empty JSON array of observations. |
+
+**Each entry is an observation** -- one thing to look at, and why:
+
+| Field    | Type   | Required | Notes                                                                 |
+|----------|--------|----------|-----------------------------------------------------------------------|
+| `intent` | object | **yes**  | A `read_file`, `glob` or `grep`, with the fields it has in a proposal. |
+| `reason` | string | no       | Why the model wants to see this. Recorded with the proposal.           |
+
+Decode failures: `observe` not an array or empty; an entry that isn't an
+object or has no `intent` (a bare intent is not an observation); an
+`intent` of any other type, or missing one of its required fields; a
+`reason` that isn't a string. A `ref` on an observation's intent is
+ignored.
+
+`ProposalDecoder.decode_reply/2` accepts either reply shape and says
+which it got; a context request decodes to a list of
+`Current.Observation.t()`, each with a real id and status `:requested`.
+`ProposalDecoder.decode/2` accepts only a proposal.
+
+The model says which shape it is sending by the key it uses. Nothing is
+inferred from the intents: a proposal made only of reads is a legitimate
+proposal.
+
+### What happens to a context request
+
+Nothing is proposed and nothing is changed. `Current.Observer` makes
+each observation, in order, and the model is called again with the same
+prompt plus everything it has been shown so far. Each observation is
+settled one of two ways:
+
+- **shown** -- the read ran, and the model is given the result: a file's
+  contents, the paths a glob matched, or the lines a grep matched.
+- **refused** -- the model is told why instead. This is an answer, not a
+  failure of the workflow: a mistyped path is something the model can
+  correct on its next reply.
+
+An observation is refused when its path is outside the project (with
+symlinks followed), when it names something `Current.ReadPolicy` never
+shows a model (dependencies, build output, lockfiles, `.env*`), when the
+file doesn't exist, is binary or is too large, or when a limit below is
+reached. Glob results are filtered by the same policy.
+
+The exchange is bounded (all hard-coded today):
+
+| Limit                                      | Value      |
+|--------------------------------------------|------------|
+| Context requests before a proposal is due  | 8          |
+| Observations made per reply                | 20         |
+| Largest file `read_file` will show         | 200 KB     |
+| Paths or lines shown per glob / grep       | 200        |
+| Total result text shown per task           | 400 KB     |
+| Whole build, every call and read           | 10 minutes |
+
+A model that sends a context request after its last allowed one fails
+production at the `:context_budget` stage; running out of time fails it
+at `:timeout`.
+
+### What is recorded
+
+The observations are attached to the proposal they led to, as
+`Current.Proposal.observations`, and so end up in the `ProposalProduced`
+event. Each records:
+
+| Field               | Meaning                                                              |
+|---------------------|----------------------------------------------------------------------|
+| `id`                | Assigned by the decoder.                                             |
+| `intent`, `reason`  | What the model asked for and why, as it wrote them.                  |
+| `round`             | Which context request it was part of (1 for the first).              |
+| `reply_artifact_id` | The model's raw reply that asked for it.                             |
+| `status`            | `:shown` or `:refused`.                                              |
+| `artifact_id`       | When shown: the artifact holding what the model was shown.           |
+| `error`             | When refused: why.                                                   |
+
+An observation holds ids, never contents. For `read_file` the artifact
+is the file exactly as read; for `glob` and `grep` it is the listing as
+shown, after the read policy and the limits.
+
+A production that fails has no proposal, and its observations are not
+recorded.
 
 ## Paths
 
 Every path field (`path`, `grep`'s `paths`, `glob`'s `base_dir`) is
 relative to the project root -- the directory the task was submitted for,
-e.g. `lib/signup.ex`.
+e.g. `lib/signup.ex`. That holds for the intents in a proposal and for
+the intent inside an observation alike.
 
 What is recorded, and when:
 
@@ -101,6 +221,12 @@ the model actually sent.
 `IntentValidator` then rejects any path that contains a `..` segment or
 lands outside the project directory. `EffectApplicator` checks again at
 apply time, with symlinks followed.
+
+An observation's paths are handled differently, because it is made
+before any proposal exists. `Current.Observer` resolves them against the
+project directory at the moment it reads, applies the same containment
+check with symlinks followed, and then the read policy. The observation
+is recorded with the paths as the model wrote them.
 
 ## Referencing intents: `ref` and `source_intent_ref`
 
@@ -223,8 +349,8 @@ So:
   `*** Update File` format some models default to.
 
 The prompt states these rules and gives a worked example
-(`LLMProposalBuilder.file_patch_example/0`, which
-`test/llm_proposal_builder_test.exs` applies with the command above).
+(`LLMProposalBuilder.file_patch_example/0`). The model is told to patch
+only files whose contents it has been shown; nothing enforces that yet.
 Whether a given diff applies is currently only discovered at apply time;
 see "What this schema does not enforce."
 
@@ -252,6 +378,10 @@ not through a shell, so pipes, redirects, `&&` and globbing don't apply.
 |-----------|------------------|----------|
 | `pattern` | string           | yes      |
 | `paths`   | array of strings | yes      |
+
+`pattern` is a literal string matched line by line, not a regular
+expression. `paths` are files; directories are not searched (find the
+files with `glob` first).
 
 ### `glob`
 
@@ -344,8 +474,16 @@ proposal will run against — not on whether the response is well-formed:
   mode a proposal can therefore validate and still fail on apply.
   Checking it at validation (`patch --dry-run` against the current file)
   is a candidate for `IntentValidator`.
+- Whether a `file_patch` targets a file the model was actually shown.
+  The proposal's `observations` say what it saw, so this too is a
+  candidate for `IntentValidator`.
 
-## Full example
+For context requests, the decoder checks shape only. Whether an
+observation's path exists, is inside the project, or may be shown is
+decided by `Observer` when it makes the observation, and the answer goes
+back to the model, not into a failure.
+
+## Full example: a proposal
 
 ```json
 {
@@ -378,10 +516,28 @@ proposal will run against — not on whether the response is well-formed:
 }
 ```
 
+## Full example: a context request
+
+```json
+{
+  "observe": [
+    {
+      "reason": "find where sign-up lives",
+      "intent": { "type": "glob", "pattern": "lib/**/*signup*" }
+    },
+    {
+      "reason": "see the current validation before changing it",
+      "intent": { "type": "read_file", "path": "lib/signup.ex" }
+    }
+  ]
+}
+```
+
 ## Versioning
 
 This is version 1 of the wire schema — there is no `"version"` field on
-the response itself yet. If the schema needs a breaking change later
+the response itself yet. The context request was added as a second reply
+shape without changing the proposal's, so it is additive. If the schema needs a breaking change later
 (new required field, changed meaning of an existing one), add an explicit
 `"version"` field to the top-level object and give `ProposalDecoder` a
 per-version code path, the same way `Current.Event.Versioned` handles

@@ -142,6 +142,40 @@ defmodule Current.Event.SchemaTest do
       assert Schema.upcast(event) == event
     end
 
+    test "a proposal recorded before observations existed reads back with none" do
+      # As it sits in an old WAL: a proposal without the new key.
+      old_proposal = %{
+        __struct__: Current.Proposal,
+        id: Id.generate(),
+        workflow_id: Id.generate(),
+        intents: [],
+        justification: "old",
+        claims: nil,
+        dependencies: nil
+      }
+
+      for {module, version, extra} <- [
+            {Event.ProposalProduced, 2, %{raw_output_blob_id: nil}},
+            {Event.ProposalValidated, 1, %{}},
+            {Event.ProposalValidationFailed, 1, %{error: nil}}
+          ] do
+        raw =
+          Map.merge(extra, %{
+            __struct__: module,
+            id: Id.generate(),
+            workflow_id: old_proposal.workflow_id,
+            proposal: old_proposal,
+            timestamp: DateTime.utc_now(),
+            version: version
+          })
+
+        assert %{proposal: %Current.Proposal{observations: [], justification: "old"}} =
+                 migrated = Schema.migrate(module, raw)
+
+        assert migrated.version == version + 1
+      end
+    end
+
     test "an additive version bump still requires an explicit identity upcast" do
       raw = %{__struct__: Additive, id: 123, version: 1}
       assert %Additive{id: 123, new_field: :default, version: 2} = Schema.migrate(Additive, raw)

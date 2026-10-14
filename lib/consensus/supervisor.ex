@@ -3,7 +3,8 @@ defmodule Current.Consensus.Supervisor do
   Supervises the runtime consensus pipeline:
 
       SingleNodeServer -> EventCommitter
-                       -> ActivityLog (console output of each commit)
+                       -> ActivityHub (live per-workflow activity)
+                          -> ActivityLog (console output of that activity)
 
   Current.Consensus.Log is owned directly by Current.Supervisor now (as
   a significant, :temporary child started before this supervisor), not
@@ -29,8 +30,11 @@ defmodule Current.Consensus.Supervisor do
        name: Current.Consensus.SingleNodeServer, log: Current.Consensus.Log},
       {Current.EventCommitter,
        name: Current.EventCommitter, consensus: Current.Consensus.SingleNodeServer},
-      # Also subscribes to SingleNodeServer, so it sits after it too.
-      {Current.ActivityLog, consensus: Current.Consensus.SingleNodeServer}
+      # Subscribes to SingleNodeServer, so it sits after it too.
+      {Current.ActivityHub, consensus: Current.Consensus.SingleNodeServer},
+      # A subscriber of the hub, so it sits after the hub: whenever the hub
+      # is replaced this restarts and subscribes again.
+      Current.ActivityLog
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)

@@ -4,28 +4,30 @@ defmodule Current.TestOpenAIModelCatalogClient do
   # exist in tests ("openai:gpt-5.6", ...) and which client a task's
   # model resolves to. Completions go to Current.FakeLLMClient, so
   # FakeLLMClient.set_response/1 controls what "the model" says.
-  @behaviour Current.LLMClient
 
-  @impl true
   def provider, do: "openai"
 
-  @impl true
-  def list_models(_timeout_ms), do: {:ok, ["gpt-5.6", "gpt-5.6-sol"]}
+  def start_link([]) do
+    pid = spawn(fn -> :ok end)
+    {:ok, pid}
+  end
 
-  @impl true
-  defdelegate complete(prompt, timeout_ms, model), to: Current.FakeLLMClient
+  def list_models(_pid, _timeout_ms), do: {:ok, ["gpt-5.6", "gpt-5.6-sol"]}
+
+  defdelegate complete(pid, prompt, timeout_ms, model), to: Current.FakeLLMClient
 end
 
 defmodule Current.TestAnthropicModelCatalogClient do
   @moduledoc false
-  @behaviour Current.LLMClient
 
-  @impl true
   def provider, do: "anthropic"
 
-  @impl true
-  def list_models(_timeout_ms), do: {:ok, ["claude-opus-5-5", "claude-sonnet-4-5"]}
+  def start_link([]) do
+    pid = spawn(fn -> :ok end)
+    {:ok, pid}
+  end
 
-  @impl true
-  defdelegate complete(prompt, timeout_ms, model), to: Current.FakeLLMClient
+  def list_models(_pid, _timeout_ms), do: {:ok, ["claude-opus-5-5", "claude-sonnet-4-5"]}
+
+  defdelegate complete(pid, prompt, timeout_ms, model), to: Current.FakeLLMClient
 end

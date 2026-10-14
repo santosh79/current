@@ -1,36 +1,104 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://current.internal/schema/proposal_response.schema.json",
-  "title": "Proposal response",
-  "description": "The wire shape an agent (LLM) must return when asked to produce a proposal. Every path in it is relative to the project root. See docs/wire_schema.md for the human-readable version of this same contract -- keep the two in sync.",
-  "type": "object",
-  "required": [
-    "intents"
-  ],
-  "properties": {
-    "justification": {
-      "type": "string"
+  "title": "Agent reply",
+  "description": "Every reply is exactly ONE JSON object, in one of two shapes. (1) A context request, {\"observe\": [...]}, when you need to look at the project before you can propose: the runtime shows you what you asked for and asks again. (2) A proposal, {\"intents\": [...]}, when you have what you need: it ends the exchange. Never both in one reply, and no other top-level keys. Every path in it is relative to the project root. See docs/wire_schema.md for the human-readable version of this same contract -- keep the two in sync.",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/context_request"
     },
-    "claims": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "dependencies": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "intents": {
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/intent"
-      }
+    {
+      "$ref": "#/definitions/proposal"
     }
-  },
+  ],
   "definitions": {
+    "proposal": {
+      "description": "Your final answer: the complete work you propose. Send it only once you have seen what you need -- if you still need to look at the project, send a context request instead. A read_file, glob or grep inside a proposal is part of the proposed work (for example the evidence a claim cites); it is not a way to look at the project.",
+      "type": "object",
+      "required": [
+        "intents"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "justification": {
+          "type": "string"
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "intents": {
+          "description": "The proposed work, in order. Every intent needed to carry it out.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/intent"
+          }
+        }
+      }
+    },
+    "context_request": {
+      "description": "Send this INSTEAD of a proposal when you need to see files before you can propose: a list of observations. The runtime makes each one, read-only, and asks you again with the results; nothing is changed and nothing is proposed. The whole reply is this one object.",
+      "type": "object",
+      "required": [
+        "observe"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "observe": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/observation"
+          }
+        }
+      }
+    },
+    "observation": {
+      "description": "One thing to look at before proposing, and why. Wraps a single read-only intent. The runtime records each observation with the proposal it leads to, together with what you were shown.",
+      "type": "object",
+      "required": [
+        "intent"
+      ],
+      "properties": {
+        "reason": {
+          "description": "Why you need to see this, in one short sentence. Kept on record with the proposal.",
+          "type": "string"
+        },
+        "intent": {
+          "$ref": "#/definitions/observation_intent"
+        }
+      }
+    },
+    "observation_intent": {
+      "description": "The intent an observation wraps: a read_file, glob or grep, with exactly the fields that intent has in a proposal. No other intent type is allowed here.",
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "read_file",
+            "glob",
+            "grep"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/intent_fields_by_type"
+        }
+      ]
+    },
     "intent": {
       "type": "object",
       "required": [
@@ -250,9 +318,11 @@
       ],
       "properties": {
         "pattern": {
+          "description": "A literal string, matched line by line. Not a regular expression.",
           "type": "string"
         },
         "paths": {
+          "description": "Files to search. Directories are not searched; list files (find them with glob).",
           "type": "array",
           "items": {
             "description": "Relative to the project root, e.g. \"lib/signup.ex\". Must not contain \"..\" and must stay inside the project.",
@@ -320,4 +390,3 @@
     }
   }
 }
-

@@ -1,7 +1,15 @@
 defmodule Current.ProposalDecoderTest do
   use ExUnit.Case, async: false
 
-  alias Current.{BlobStore, Id, Intent, Proposal, ProposalDecoder, Test.MiniJsonSchema}
+  alias Current.{
+    BlobStore,
+    Id,
+    Intent,
+    Observation,
+    Proposal,
+    ProposalDecoder,
+    Test.MiniJsonSchema
+  }
 
   @wire_schema_path Path.expand("../../priv/schema/proposal_response.schema.json", __DIR__)
 
@@ -226,19 +234,145 @@ defmodule Current.ProposalDecoderTest do
     end
   end
 
+  describe "decode_reply/2" do
+    test "a reply with intents is a proposal" do
+      json = ~s({"intents": [{"type": "read_file", "path": "lib/a.ex"}]})
+      wid = workflow_id()
+
+      assert {:ok, {:proposal, %Proposal{workflow_id: ^wid, intents: [%Intent.ReadFile{}]}}} =
+               ProposalDecoder.decode_reply(json, wid)
+    end
+
+    test "a reply with observe is a request for context: typed, requested observations" do
+      json = ~s({"observe": [
+        {"reason": "see the module", "intent": {"type": "read_file", "path": "lib/a.ex"}},
+        {"intent": {"type": "glob", "pattern": "lib/**/*.ex"}},
+        {"reason": "find callers",
+         "intent": {"type": "grep", "pattern": "def hello", "paths": ["lib/a.ex"]}}
+      ]})
+
+      assert {:ok, {:observe, [read, glob, grep]}} =
+               ProposalDecoder.decode_reply(json, workflow_id())
+
+      assert %Observation{status: :requested, reason: "see the module", artifact_id: nil} = read
+      assert %Intent.ReadFile{path: "lib/a.ex", proposal_id: nil} = read.intent
+
+      assert %Observation{reason: nil} = glob
+      assert %Intent.Glob{pattern: "lib/**/*.ex", base_dir: "."} = glob.intent
+
+      assert %Intent.Grep{pattern: "def hello", paths: ["lib/a.ex"]} = grep.intent
+
+      ids = Enum.map([read, glob, grep], & &1.id)
+      assert Enum.uniq(ids) == ids
+    end
+
+    test "an observation may only wrap a read" do
+      for type <- ["write_file", "delete_file", "file_patch", "run_command", "claim", "report"] do
+        json = ~s({"observe": [
+          {"intent": {"type": "read_file", "path": "a"}},
+          {"intent": {"type": "#{type}"}}
+        ]})
+
+        assert {:error, reason} = ProposalDecoder.decode_reply(json, workflow_id())
+        assert reason =~ "must be read_file, glob or grep"
+      end
+    end
+
+    test "a bare intent is not an observation" do
+      json = ~s({"observe": [{"type": "read_file", "path": "lib/a.ex"}]})
+
+      assert {:error, "observation missing required field: intent"} =
+               ProposalDecoder.decode_reply(json, workflow_id())
+    end
+
+    test "a reply must be one or the other" do
+      json = ~s({"observe": [{"intent": {"type": "read_file", "path": "a"}}], "intents": []})
+
+      assert {:error, reason} = ProposalDecoder.decode_reply(json, workflow_id())
+      assert reason =~ "not both"
+    end
+
+    test "an empty or malformed observe is an error" do
+      assert {:error, "observe must not be empty"} =
+               ProposalDecoder.decode_reply(~s({"observe": []}), workflow_id())
+
+      assert {:error, reason} = ProposalDecoder.decode_reply(~s({"observe": "x"}), workflow_id())
+      assert reason =~ "observe must be a JSON array"
+
+      assert {:error, "observation must be a JSON object"} =
+               ProposalDecoder.decode_reply(~s({"observe": ["x"]}), workflow_id())
+
+      assert {:error, reason} =
+               ProposalDecoder.decode_reply(
+                 ~s({"observe": [{"intent": {"type": "read_file"}}]}),
+                 workflow_id()
+               )
+
+      assert reason =~ "path"
+
+      assert {:error, reason} =
+               ProposalDecoder.decode_reply(
+                 ~s({"observe": [{"reason": 1, "intent": {"type": "read_file", "path": "a"}}]}),
+                 workflow_id()
+               )
+
+      assert reason =~ "reason"
+    end
+
+    test "the wire schema describes exactly this shape" do
+      schema = @wire_schema_path |> File.read!() |> :json.decode()
+
+      valid = :json.decode(~s({"observe": [
+        {"reason": "why", "intent": {"type": "read_file", "path": "lib/a.ex"}}
+      ]}))
+
+      assert :ok = MiniJsonSchema.validate(schema, valid)
+
+      for invalid <- [
+            ~s({"observe": []}),
+            ~s({"observe": [{"type": "read_file", "path": "lib/a.ex"}]}),
+            ~s({"observe": [{"intent": {"type": "read_file"}}]}),
+            ~s({"observe": [{"intent": {"type": "write_file", "path": "a", "contents": "b"}}]})
+          ] do
+        assert {:error, _} = MiniJsonSchema.validate(schema, :json.decode(invalid)),
+               "should not validate: #{invalid}"
+      end
+    end
+
+    test "decode/2 still accepts only a proposal" do
+      json = ~s({"observe": [{"intent": {"type": "read_file", "path": "a"}}]})
+      assert {:error, reason} = ProposalDecoder.decode(json, workflow_id())
+      assert reason =~ "intents"
+    end
+  end
+
   describe "wire schema conformance" do
     setup do
       schema = @wire_schema_path |> File.read!() |> :json.decode()
       %{schema: schema}
     end
 
-    test "the published schema file parses and has the expected top-level shape", %{
+    test "the published schema's root is a choice between a context request and a proposal", %{
       schema: schema
     } do
-      assert %{"type" => "object", "required" => ["intents"], "definitions" => definitions} =
-               schema
+      # The protocol is the first thing the schema says: a reply is one
+      # or the other. Not a proposal with a context request tucked away
+      # in the definitions.
+      assert %{"oneOf" => alternatives, "definitions" => definitions} = schema
 
-      assert is_map(definitions)
+      assert alternatives == [
+               %{"$ref" => "#/definitions/context_request"},
+               %{"$ref" => "#/definitions/proposal"}
+             ]
+
+      refute Map.has_key?(schema, "required")
+      refute Map.has_key?(schema, "properties")
+
+      assert %{"required" => ["intents"], "additionalProperties" => false} =
+               definitions["proposal"]
+
+      assert %{"required" => ["observe"], "additionalProperties" => false} =
+               definitions["context_request"]
     end
 
     test "every well-formed fixture used in this file validates against the published schema", %{
@@ -255,6 +389,50 @@ defmodule Current.ProposalDecoderTest do
         # the schema or the decoder has drifted from docs/wire_schema.md.
         assert {:ok, %Proposal{}} = ProposalDecoder.decode(fixture, workflow_id())
       end
+    end
+
+    test "a reply is exactly one of the two shapes, never both and never neither", %{
+      schema: schema
+    } do
+      proposal = ~s("intents": [{"type": "report", "summary": "done"}])
+      context_request = ~s("observe": [{"intent": {"type": "read_file", "path": "lib/a.ex"}}])
+
+      # Either shape on its own is a reply...
+      assert :ok = MiniJsonSchema.validate(schema, :json.decode("{#{proposal}}"))
+      assert :ok = MiniJsonSchema.validate(schema, :json.decode("{#{context_request}}"))
+
+      # ...mixing them is not...
+      assert {:error, _} =
+               MiniJsonSchema.validate(schema, :json.decode("{#{proposal}, #{context_request}}"))
+
+      # ...nor is a reply that is neither, or one with keys of its own.
+      assert {:error, _} = MiniJsonSchema.validate(schema, :json.decode("{}"))
+
+      assert {:error, _} =
+               MiniJsonSchema.validate(schema, :json.decode(~s({"files": ["lib/a.ex"]})))
+
+      assert {:error, _} =
+               MiniJsonSchema.validate(schema, :json.decode(~s({#{proposal}, "notes": "x"})))
+
+      assert {:error, _} =
+               MiniJsonSchema.validate(
+                 schema,
+                 :json.decode(~s({#{context_request}, "justification": "x"}))
+               )
+    end
+
+    test "a proposal made only of reads is still a valid proposal", %{schema: schema} do
+      # The overlap is real: reads are legitimate proposal intents (a claim
+      # can cite one as evidence). The schema doesn't forbid them; the
+      # prompt says what each is for.
+      decoded =
+        :json.decode(~s({"intents": [
+          {"ref": "g", "type": "grep", "pattern": "minLength", "paths": ["lib/auth.ts"]},
+          {"type": "claim", "statement": "length is enforced",
+           "evidence": {"source_intent_ref": "g", "condition": "match_count_greater_than", "value": 0}}
+        ]}))
+
+      assert :ok = MiniJsonSchema.validate(schema, decoded)
     end
 
     test "a response missing the required top-level intents key fails schema validation", %{

@@ -162,6 +162,41 @@ defmodule Current.CLI.Render do
 
   ## current status
 
+  @activity_label_width 38
+
+  @doc """
+  The lines `current plan` / `current run` print for one item of live
+  activity (see Current.RPC.activity/2): when the model asks to see
+  something, then how each request turned out.
+
+      … round 1: the model asked to see 3 things
+          ✓ glob lib/*.ex                          1.2 KB
+          ✗ read_file .env                         refused: .env is excluded
+  """
+  @spec activity([map()] | map()) :: [String.t()]
+  def activity(items) when is_list(items), do: Enum.flat_map(items, &activity/1)
+
+  def activity(%{type: :requested, round: round, entries: entries}) do
+    count = length(entries)
+
+    [
+      "  … round #{round}: the model asked to see #{count} #{if count == 1, do: "thing", else: "things"}"
+    ]
+  end
+
+  def activity(%{type: :settled, entries: entries}) do
+    Enum.map(entries, fn
+      %{status: :shown, label: label, bytes: bytes} ->
+        "      ✓ #{String.pad_trailing(label, @activity_label_width)} #{activity_size(bytes)}"
+
+      %{status: :refused, label: label, error: error} ->
+        "      ✗ #{String.pad_trailing(label, @activity_label_width)} refused: #{error}"
+    end)
+  end
+
+  defp activity_size(bytes) when bytes < 1024, do: "#{bytes} B"
+  defp activity_size(bytes), do: "#{:erlang.float_to_binary(bytes / 1024, decimals: 1)} KB"
+
   def status(health) do
     [
       "Current #{health.version} · #{health.node}",
@@ -169,7 +204,10 @@ defmodule Current.CLI.Render do
       "  WAL head  #{health.wal_head}",
       "  builder   #{module_name(health.proposal_builder)}",
       if(health.llm_proposal_timeout_ms,
-        do: "  timeout   #{div(health.llm_proposal_timeout_ms, 1000)}s"
+        do: "  timeout   #{div(health.llm_proposal_timeout_ms, 1000)}s per model call"
+      ),
+      if(health[:llm_task_timeout_ms],
+        do: "            #{div(health.llm_task_timeout_ms, 1000)}s per task"
       )
     ]
     |> lines()
@@ -326,6 +364,7 @@ defmodule Current.CLI.Render do
       if(present?(proposal.justification),
         do: ["", "Justification", indent(proposal.justification, 2)]
       ),
+      observed(Map.get(proposal, :observations) || []),
       "",
       "Intents",
       proposal.intents
@@ -530,6 +569,48 @@ defmodule Current.CLI.Render do
   end
 
   defp pad(text, width), do: String.pad_trailing(text, width)
+
+  # What the agent looked at before proposing, one entry per
+  # observation: the round it asked in, what it asked and why, and the
+  # artifact holding what it was shown (print it with `current
+  # artifact`) or why it got nothing.
+  defp observed([]), do: nil
+
+  defp observed(observations) do
+    [
+      "",
+      "Observed before proposing",
+      Enum.map(observations, &observation/1)
+    ]
+  end
+
+  defp observation(%Current.Observation{} = observation) do
+    [
+      "  #{observation.round || "?"}. #{asked(observation.intent)}",
+      if(present?(observation.reason), do: "       why      #{observation.reason}"),
+      "       #{settled(observation)}"
+    ]
+  end
+
+  # A proposal recorded while observations were still listed by record
+  # id: say so, and give the id, which `current artifact` can still print.
+  defp observation(record_id) when is_binary(record_id),
+    do: "  ?. recorded in an older format: #{record_id}"
+
+  defp observation(_other), do: "  ?. unreadable observation"
+
+  defp asked(%Intent.ReadFile{path: path}), do: "read_file #{path}"
+
+  defp asked(%Intent.Glob{pattern: pattern, base_dir: base_dir}),
+    do: "glob #{pattern} in #{base_dir}"
+
+  defp asked(%Intent.Grep{pattern: pattern, paths: paths}),
+    do: "grep #{inspect(pattern)} in #{Enum.join(paths, ", ")}"
+
+  defp settled(%{status: :shown, artifact_id: artifact_id}), do: "shown    #{artifact_id}"
+  defp settled(%{status: :refused, error: error}), do: "refused  #{error}"
+  defp settled(%{status: status}), do: to_string(status)
+
   defp present?(value), do: is_binary(value) and String.trim(value) != ""
   defp list_present?(value), do: is_list(value) and value != []
 
