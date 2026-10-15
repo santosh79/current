@@ -1,80 +1,37 @@
 defmodule Current.LLMClient.OpenAI do
-  use GenServer
+  @behaviour Current.LLMClient
 
   @connect_timeout_ms 10_000
   @models_endpoint "https://api.openai.com/v1/models"
   @endpoint "https://api.openai.com/v1/responses"
 
-  def provider() do
-    "openai"
-  end
-
-  def start_link([]) do
-    GenServer.start_link(__MODULE__, :ok)
-  end
+  @impl true
+  def provider(), do: "openai"
 
   @impl true
-  def init(:ok) do
-    case System.get_env("OPENAI_API_KEY") do
-      nil ->
-        {:error, :missing_openai_api_key}
-
-      "" ->
-        {:error, :missing_openai_api_key}
-
-      key ->
-        {:ok, %{api_key: key}}
+  def list_models(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0 do
+    with {:ok, api_key} <- api_key(),
+         {:ok, body} <- request_models(api_key, timeout_ms) do
+      decode_models(body)
     end
   end
 
-  def list_models(pid, timeout_ms)
-      when is_integer(timeout_ms) and timeout_ms > 0 do
-    GenServer.call(pid, {:list_models, timeout_ms}, timeout_ms)
-  end
-
-  def complete(pid, prompt, timeout_ms, model)
+  @impl true
+  def complete(prompt, timeout_ms, model)
       when is_binary(prompt) and is_integer(timeout_ms) and timeout_ms > 0 and is_binary(model) do
-    GenServer.call(pid, {:complete, prompt, model, timeout_ms}, timeout_ms)
+    with {:ok, api_key} <- api_key(),
+         {:ok, body} <- encode_request(prompt, model),
+         {:ok, response} <- request(api_key, body, timeout_ms) do
+      extract_text(response)
+    end
   end
 
-  @impl true
-  def handle_call({:complete, prompt, model, timeout_ms}, _from, %{api_key: api_key} = state) do
-    res =
-      case encode_request(prompt, model) do
-        {:error, reason} ->
-          {:error, reason}
-
-        {:ok, body} ->
-          case request(api_key, body, timeout_ms) do
-            {:error, reason} ->
-              {:error, reason}
-
-            {:ok, response} ->
-              case extract_text(response) do
-                {:error, reason} -> {:error, reason}
-                {:ok, text} -> {:ok, text}
-              end
-          end
-      end
-
-    {:reply, res, state}
-  end
-
-  @impl true
-  def handle_call({:list_models, timeout_ms}, _from, %{api_key: api_key} = state) do
-    res =
-      case request_models(api_key, timeout_ms) do
-        {:error, reason} ->
-          {:error, reason}
-
-        {:ok, body} ->
-          case decode_models(body) do
-            {:error, reason} -> {:error, reason}
-            {:ok, model_ids} -> {:ok, model_ids}
-          end
-      end
-
-    {:reply, res, state}
+  # Read per call: the key is the only "state" this client has.
+  defp api_key do
+    case System.get_env("OPENAI_API_KEY") do
+      key when key in [nil, ""] -> {:error, :missing_openai_api_key}
+      key -> {:ok, key}
+    end
   end
 
   defp decode_models(body) do

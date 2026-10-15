@@ -99,13 +99,14 @@ defmodule Current.ModelCatalog do
     |> Enum.sort()
   end
 
+  # A provider that is unconfigured or unreachable contributes no models;
+  # it must not take the catalog (and the runtime under it) down.
   defp models_for_client(client) do
-    {:ok, pid} = client.start_link([])
-    provider = client.provider()
-    {:ok, models} = client.list_models(pid, @timeout_ms)
-
-    Enum.map(models, fn model ->
-      "#{provider}:#{model}"
-    end)
+    case client.list_models(@timeout_ms) do
+      {:ok, models} -> Enum.map(models, &"#{client.provider()}:#{&1}")
+      {:error, _reason} -> []
+    end
+  catch
+    _kind, _reason -> []
   end
 end

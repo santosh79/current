@@ -261,9 +261,7 @@ defmodule Current.LLMProposalBuilder do
   defp safe_complete(client, prompt, timeout_ms, model) do
     case split(model) do
       {:ok, _provider, model_id} ->
-        {:ok, pid} = client.start_link([])
-        response = client.complete(pid, prompt, timeout_ms, model_id)
-        response
+        client.complete(prompt, timeout_ms, model_id)
 
       :error ->
         {:error, {:invalid_model, model}}

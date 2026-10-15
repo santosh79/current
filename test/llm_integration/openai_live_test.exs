@@ -54,10 +54,8 @@ defmodule Current.LLMIntegration.OpenAILiveTest do
   end
 
   test "list_models" do
-    {:ok, pid} = Current.LLMClient.OpenAI.start_link([])
-    {:ok, models} = Current.LLMClient.OpenAI.list_models(pid, 10_000)
+    {:ok, models} = Current.LLMClient.OpenAI.list_models(10_000)
     assert length(models) > 1
-    :ok = GenServer.stop(pid, :normal)
   end
 
   test "OpenAI produces a proposal that Current can decode", %{project_dir: project_dir} do

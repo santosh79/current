@@ -1,5 +1,5 @@
 defmodule Current.LLMClient.Anthropic do
-  use GenServer
+  @behaviour Current.LLMClient
 
   @endpoint "https://api.anthropic.com/v1/messages"
   @models_endpoint "https://api.anthropic.com/v1/models"
@@ -10,60 +10,33 @@ defmodule Current.LLMClient.Anthropic do
   @max_tokens 16_000
   @connect_timeout_ms 10_000
 
-  def provider() do
-    "anthropic"
-  end
-
-  def start_link([]) do
-    GenServer.start_link(__MODULE__, :ok)
-  end
+  @impl true
+  def provider(), do: "anthropic"
 
   @impl true
-  def init(:ok) do
-    case System.get_env("ANTHROPIC_API_KEY") do
-      nil ->
-        {:error, :missing_anthropic_api_key}
-
-      "" ->
-        {:error, :missing_anthropic_api_key}
-
-      key ->
-        {:ok, %{api_key: key}}
+  def list_models(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0 do
+    with {:ok, api_key} <- api_key(),
+         {:ok, response} <- request_models(api_key, timeout_ms) do
+      extract_model_ids(response)
     end
   end
 
-  def list_models(pid, timeout_ms)
-      when is_integer(timeout_ms) and
-             timeout_ms > 0 do
-    GenServer.call(pid, {:list_models, timeout_ms}, timeout_ms)
-  end
-
-  def complete(pid, prompt, timeout_ms, model)
-      when is_binary(prompt) and is_integer(timeout_ms) and
-             timeout_ms > 0 and is_binary(model) do
-    GenServer.call(pid, {:complete, prompt, model, timeout_ms}, timeout_ms)
-  end
-
-  def handle_call({:complete, prompt, model, timeout_ms}, _from, %{api_key: api_key} = state) do
-    response =
-      with {:ok, body} <- encode_request(prompt, model),
-           {:ok, response} <- request(api_key, body, timeout_ms),
-           {:ok, text} <- extract_text(response) do
-        {:ok, text}
-      end
-
-    {:reply, response, state}
-  end
-
   @impl true
-  def handle_call({:list_models, timeout_ms}, _from, %{api_key: api_key} = state) do
-    response =
-      with {:ok, response} <- request_models(api_key, timeout_ms),
-           {:ok, model_ids} <- extract_model_ids(response) do
-        {:ok, model_ids}
-      end
+  def complete(prompt, timeout_ms, model)
+      when is_binary(prompt) and is_integer(timeout_ms) and timeout_ms > 0 and is_binary(model) do
+    with {:ok, api_key} <- api_key(),
+         {:ok, body} <- encode_request(prompt, model),
+         {:ok, response} <- request(api_key, body, timeout_ms) do
+      extract_text(response)
+    end
+  end
 
-    {:reply, response, state}
+  # Read per call: the key is the only "state" this client has.
+  defp api_key do
+    case System.get_env("ANTHROPIC_API_KEY") do
+      key when key in [nil, ""] -> {:error, :missing_anthropic_api_key}
+      key -> {:ok, key}
+    end
   end
 
   defp request_models(api_key, timeout_ms) do

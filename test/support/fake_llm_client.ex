@@ -32,10 +32,10 @@ defmodule Current.FakeLLMClient do
 
   def provider, do: "fake"
 
-  def list_models(_pid, _timeout_ms), do: {:ok, ["model_one_name", "model_two_name"]}
+  def list_models(_timeout_ms), do: {:ok, ["model_one_name", "model_two_name"]}
 
   # The model is ignored: the response is whatever the test set.
-  def complete(_pid, prompt, _timeout_ms, _model) do
+  def complete(prompt, _timeout_ms, _model) do
     case :persistent_term.get(@key, {:error, :not_configured}) do
       fun when is_function(fun, 1) -> respond(fun.(prompt))
       response -> respond(response)

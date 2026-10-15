@@ -54,8 +54,7 @@ defmodule Current.LLMIntegration.AnthropicLiveTest do
   end
 
   test "list_models" do
-    {:ok, pid} = Current.LLMClient.Anthropic.start_link([])
-    {:ok, models} = Current.LLMClient.Anthropic.list_models(pid, 10_000)
+    {:ok, models} = Current.LLMClient.Anthropic.list_models(10_000)
     assert length(models) > 1
   end
 
