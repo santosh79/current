@@ -1,0 +1,56 @@
+HTTP API
+========
+
+Wiring (already in the repo)
+----------------------------
+
+1. mix.exs, deps/0:
+
+     {:bandit, "~> 1.5"},
+     {:plug, "~> 1.16"},
+
+2. lib/runtime_supervisor.ex, init/1: the HTTP child comes last, after
+   Current.TaskDispatcher, so it only accepts requests once everything
+   RPC depends on is up. It restarts with the runtime, like the rest.
+
+     children = [ ..., Current.TaskDispatcher ] ++ Current.HTTP.Server.children()
+
+3. config/config.exs (defaults shown):
+
+     config :current, http: [port: 4000, ip: {127, 0, 0, 1}]
+
+   config/test.exs: keep the listener off in tests (the router tests call
+   the router directly, no socket needed):
+
+     config :current, http: [enabled: false]
+
+   Environment overrides: CURRENT_HTTP_PORT, CURRENT_HTTP_IP.
+
+Try it
+------
+
+  ANTHROPIC_API_KEY=... bin/current-server    # 127.0.0.1:4000
+
+  curl -s localhost:4000/v1/health
+
+  curl -s localhost:4000/v1/tasks -H 'content-type: application/json' \
+    -d '{"prompt":"add input validation","model":"anthropic:claude-opus-5-5","dir":"/abs/path","mode":"apply"}'
+  # => {"task_id":"sha256:..."}
+
+  curl -s localhost:4000/v1/workflows/<task_id>
+  curl -s localhost:4000/v1/proposals/<proposal_id>/review
+  curl -s -X POST localhost:4000/v1/proposals/<proposal_id>/approve \
+    -H 'content-type: application/json' -d '{"message":"ok"}'
+  curl -s -X POST localhost:4000/v1/proposals/<proposal_id>/apply
+  curl -s localhost:4000/v1/artifacts/<artifact_id>     # raw bytes
+
+README / threat model
+---------------------
+
+Current does no authentication: anyone who can reach the port can submit
+tasks, approve and apply. It listens on loopback by default and refuses
+requests that carry an Origin header (browsers). Control access at the
+network or gateway layer. Erlang distribution is still how the CLI
+connects until it is moved onto HTTP, so the cookie caveat stands until
+then.
+

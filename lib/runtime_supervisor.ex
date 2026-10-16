@@ -22,34 +22,35 @@ defmodule Current.RuntimeSupervisor do
 
   @impl true
   def init(_opts) do
-    children = [
-      Supervisor.child_spec(
-        Current.Consensus.Log,
-        restart: :temporary,
-        significant: true
-      ),
-      Current.Consensus.FailedEventsLog,
-      Supervisor.child_spec(
-        {Registry, keys: :duplicate, name: Current.EventRegistry},
-        restart: :temporary,
-        significant: true
-      ),
-      Supervisor.child_spec(
-        Current.EventStore,
-        restart: :temporary,
-        significant: true
-      ),
-      Current.Consensus.Supervisor,
-      Current.TaskStore,
-      Current.ProposalStore,
-      Current.WorkflowStore,
-      {
-        DynamicSupervisor,
-        name: Current.WorkflowSupervisor, strategy: :one_for_one
-      },
-      Current.ModelCatalog,
-      Current.TaskDispatcher
-    ]
+    children =
+      [
+        Supervisor.child_spec(
+          Current.Consensus.Log,
+          restart: :temporary,
+          significant: true
+        ),
+        Current.Consensus.FailedEventsLog,
+        Supervisor.child_spec(
+          {Registry, keys: :duplicate, name: Current.EventRegistry},
+          restart: :temporary,
+          significant: true
+        ),
+        Supervisor.child_spec(
+          Current.EventStore,
+          restart: :temporary,
+          significant: true
+        ),
+        Current.Consensus.Supervisor,
+        Current.TaskStore,
+        Current.ProposalStore,
+        Current.WorkflowStore,
+        {
+          DynamicSupervisor,
+          name: Current.WorkflowSupervisor, strategy: :one_for_one
+        },
+        Current.ModelCatalog,
+        Current.TaskDispatcher
+      ] ++ Current.HTTP.Server.children()
 
     Supervisor.init(
       children,
