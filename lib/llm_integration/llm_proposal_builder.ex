@@ -28,8 +28,8 @@ defmodule Current.LLMProposalBuilder do
     * each model call by the timeout WorkflowOrchestrator passes in;
     * the number of context requests by @max_observe_rounds, and how much
       they may return in total by @context_budget_bytes;
-    * the whole build -- every call and every read -- by
-      `task_timeout_ms/0`.
+    * the whole build -- every call and every read -- by the task's own
+      `timeout_ms` when it was submitted with one, else `task_timeout_ms/0`.
 
   Per Current.ProposalBuilder's @callback contract, this module owns its
   own crash and timeout handling completely -- WorkflowOrchestrator no
@@ -78,7 +78,7 @@ defmodule Current.LLMProposalBuilder do
           | {:error, ProposalProductionError.t()}
   def build(%Request{model: model} = req, workflow_id, client, timeout_ms, project_dir)
       when is_binary(model) and is_integer(timeout_ms) and timeout_ms > 0 do
-    within_task_timeout(fn ->
+    within_task_timeout(req, fn ->
       with {:ok, project} <- project_layout(project_dir) do
         converse(%{
           request: req,
@@ -115,8 +115,8 @@ defmodule Current.LLMProposalBuilder do
   # doing when time runs out -- waiting on the model or walking a huge
   # directory for a glob. The per-call task below is linked to this one,
   # so killing this one takes an in-flight model call down with it.
-  defp within_task_timeout(build) do
-    timeout_ms = task_timeout_ms()
+  defp within_task_timeout(%Request{timeout_ms: requested}, build) do
+    timeout_ms = requested || task_timeout_ms()
     task = Task.async(fn -> contained(build) end)
 
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do

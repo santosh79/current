@@ -15,6 +15,10 @@ defmodule Current do
           {:approve, metadata :: map()}
           | {:reject, metadata :: map()}
 
+  # The bounds on a task's own timeout, in milliseconds.
+  @min_timeout_ms 1_000
+  @max_timeout_ms 3_600_000
+
   @doc """
   Submits a task for `project_dir` (default: the current working
   directory).
@@ -49,6 +53,13 @@ defmodule Current do
   The catalog is filled asynchronously at startup (and by
   `Current.ModelCatalog.refresh/0`), so until a provider has answered,
   its models are unknown and are rejected here.
+
+  `req.timeout_ms` bounds how long producing the proposal may take. nil
+  (the default) means the runtime's own bound; otherwise it is a number
+  of milliseconds between one second and one hour, and anything else is
+  rejected with `{:error, {:invalid_timeout, value}}` before anything is
+  recorded. It is recorded on TaskCreated, so a workflow resumed after a
+  restart keeps it.
   """
   @spec submit_task(Request.t(), pid(), Path.t()) ::
           {:ok, Current.Id.t()}
@@ -61,11 +72,21 @@ defmodule Current do
   def submit_task(%Request{model: model} = req, caller_pid, project_dir \\ ".")
       when is_pid(caller_pid) and is_binary(project_dir) do
     with :ok <- validate_model(model),
+         :ok <- validate_timeout(req.timeout_ms),
          :ok <- validate_project_dir(project_dir),
          {:ok, canonical} <- canonical_project_dir(project_dir) do
       do_submit_task(req, caller_pid, canonical)
     end
   end
+
+  # nil is "the runtime's default". Anything else must be a sane bound.
+  defp validate_timeout(nil), do: :ok
+
+  defp validate_timeout(ms)
+       when is_integer(ms) and ms >= @min_timeout_ms and ms <= @max_timeout_ms,
+       do: :ok
+
+  defp validate_timeout(other), do: {:error, {:invalid_timeout, other}}
 
   defp validate_model(model) when is_binary(model) do
     {:ok, pid} = Current.ModelCatalog.find_supervisor_pid()
@@ -118,6 +139,7 @@ defmodule Current do
       mode: req.mode,
       project_dir: project_dir,
       model: req.model,
+      timeout_ms: req.timeout_ms,
       submitted_at: now,
       timestamp: now
     }

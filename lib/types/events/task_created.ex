@@ -1,5 +1,5 @@
 defmodule Current.Event.TaskCreated do
-  use Current.Event.Versioned, version: 3
+  use Current.Event.Versioned, version: 4
 
   @enforce_keys [
     :id,
@@ -23,6 +23,7 @@ defmodule Current.Event.TaskCreated do
     :timestamp,
     :project_dir,
     :model,
+    :timeout_ms,
     version: @schema_version
   ]
 
@@ -42,6 +43,10 @@ defmodule Current.Event.TaskCreated do
           # submission (see Current.submit_task/3). Always present: a task
           # can't be submitted without one.
           model: String.t(),
+          # The bound, in milliseconds, on producing this task's proposal
+          # (see Current.submit_task/3). nil is the runtime's default,
+          # which is what every task before v4 got.
+          timeout_ms: pos_integer() | nil,
           submitted_at: DateTime.t(),
           timestamp: DateTime.t(),
           version: pos_integer()
@@ -60,4 +65,8 @@ defmodule Current.Event.TaskCreated do
   def upcast(_fields, 2) do
     raise Current.Event.Schema.UpcastError, module: __MODULE__, from: 2, to: 3
   end
+
+  # v4 adds :timeout_ms, which is optional: nil means "the runtime's
+  # default", which is exactly what a v3 task was given.
+  def upcast(fields, 3), do: Map.put(fields, :timeout_ms, nil)
 end

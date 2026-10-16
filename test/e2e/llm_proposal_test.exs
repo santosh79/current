@@ -344,6 +344,21 @@ defmodule Current.E2E.LLMProposalTest do
     refute Enum.any?(events(workflow_id), &is_struct(&1, Event.WorkflowAbandoned))
   end
 
+  test "a task's own timeout bounds its build, whatever the runtime default is" do
+    # The per-call bound is minutes; only the task's own 1s can fire.
+    FakeLLMClient.set_response(:hang)
+
+    {:ok, task_id} = Current.submit_task(request(mode: :plan, timeout_ms: 1_000), self())
+    workflow_id = await_workflow_created(task_id)
+
+    error = production_error(workflow_id)
+    assert error.stage == :timeout
+    assert error.reason == "no proposal after 1000ms"
+
+    await(:workflow_failed, workflow_id)
+    assert {:ok, :failed} = Current.get_status(task_id)
+  end
+
   test "a model that never answers fails production at the timeout stage" do
     put_env(:llm_proposal_timeout_ms, 100)
 

@@ -82,6 +82,7 @@ defmodule Current.TaskDispatcher do
         mode: event.mode,
         project_dir: event.project_dir,
         model: event.model,
+        timeout_ms: event.timeout_ms,
         submitted_at: event.submitted_at
       }
 

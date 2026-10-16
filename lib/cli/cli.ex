@@ -2,8 +2,8 @@ defmodule Current.CLI do
   @moduledoc """
   The `current` command-line interface (built as an escript).
 
-      current plan <prompt> --model <model> [--dir <project-dir>]
-      current run <prompt> --model <model> [--dir <project-dir>]
+      current plan <prompt> --model <model> [--dir <project-dir>] [--timeout-minutes <n>]
+      current run <prompt> --model <model> [--dir <project-dir>] [--timeout-minutes <n>]
       current approve <proposal-id> [--message <message>]
       current reject <proposal-id> [--message <message>]
       current apply <proposal-id>
@@ -61,6 +61,9 @@ defmodule Current.CLI do
   @default_approval_message "Approved via the current CLI"
   @default_rejection_message "Rejected via the current CLI"
   @default_review_max_lines 200
+
+  # The longest --timeout-minutes accepted (the runtime enforces the same bound).
+  @max_timeout_minutes 60
 
   ## Entry points
 
@@ -146,13 +149,14 @@ defmodule Current.CLI do
   # than repeating the whole usage.
   defp parse_task(command, args) do
     case OptionParser.parse(args,
-           strict: [dir: :string, model: :string, help: :boolean],
+           strict: [dir: :string, model: :string, timeout_minutes: :integer, help: :boolean],
            aliases: [d: :dir, h: :help]
          ) do
       {opts, argv, []} ->
         prompt = argv |> Enum.join(" ") |> String.trim()
         dir = Keyword.get(opts, :dir, ".")
         model = opts |> Keyword.get(:model, "") |> String.trim()
+        minutes = Keyword.get(opts, :timeout_minutes)
 
         cond do
           opts[:help] ->
@@ -167,8 +171,13 @@ defmodule Current.CLI do
           model == "" ->
             {:error, "#{command}: --model can't be blank", @models_hint}
 
+          minutes != nil and minutes not in 1..@max_timeout_minutes ->
+            {:error,
+             "#{command}: --timeout-minutes must be a whole number from 1 to " <>
+               "#{@max_timeout_minutes}"}
+
           true ->
-            {command, prompt, dir, model}
+            {command, prompt, dir, model, minutes && minutes * 60_000}
         end
 
       {_opts, _argv, [{flag, _value} | _]} ->
@@ -258,8 +267,8 @@ defmodule Current.CLI do
   defp usage do
     """
     Usage:
-      current plan <prompt> --model <model> [--dir <project-dir>]
-      current run <prompt> --model <model> [--dir <project-dir>]
+      current plan <prompt> --model <model> [--dir <project-dir>] [--timeout-minutes <n>]
+      current run <prompt> --model <model> [--dir <project-dir>] [--timeout-minutes <n>]
       current approve <proposal-id> [--message <message>]
       current reject <proposal-id> [--message <message>]
       current apply <proposal-id>
@@ -287,6 +296,9 @@ defmodule Current.CLI do
       -d, --dir      Project directory for plan and run (default: the current directory)
       --model        Model for plan and run (required), as listed by
                      `current models`, e.g. openai:gpt-5.6
+      --timeout-minutes
+                     plan and run: how long the agent may take to produce its
+                     proposal, 1 to 60 (default: the runtime's own bound)
       -m, --message  Message recorded by approve or reject
       --json         review: machine-readable output (schema current.review/v1)
       --max-lines    review: lines shown per artifact (default: #{@default_review_max_lines})
@@ -312,11 +324,11 @@ defmodule Current.CLI do
     end
   end
 
-  defp dispatch({:plan, prompt, dir, model}, client),
-    do: submit(:plan, prompt, dir, model, client)
+  defp dispatch({:plan, prompt, dir, model, timeout_ms}, client),
+    do: submit(:plan, prompt, dir, model, timeout_ms, client)
 
-  defp dispatch({:run, prompt, dir, model}, client),
-    do: submit(:apply, prompt, dir, model, client)
+  defp dispatch({:run, prompt, dir, model, timeout_ms}, client),
+    do: submit(:apply, prompt, dir, model, timeout_ms, client)
 
   defp dispatch({:approve, id, message}, client) do
     case Client.approve(client, id, review_metadata(message)) do
@@ -407,9 +419,15 @@ defmodule Current.CLI do
   # plan (mode :plan) runs to completion; run (mode :apply) stops once
   # the proposal is waiting for approval -- the runtime itself goes no
   # further until `current approve` and then `current apply`.
-  defp submit(mode, prompt, dir, model, client) do
+  defp submit(mode, prompt, dir, model, timeout_ms, client) do
     with {:ok, health} <- Client.health(client),
-         request = %Request{input: prompt, context: %{}, model: model, mode: mode},
+         request = %Request{
+           input: prompt,
+           context: %{},
+           model: model,
+           mode: mode,
+           timeout_ms: timeout_ms
+         },
          # Relative to where the CLI runs, not the runtime's working
          # directory. absname/1 (unlike expand/1) keeps any "..", so
          # submit_task/3 still applies its own rules to the path as given.
@@ -419,10 +437,18 @@ defmodule Current.CLI do
 
       case mode do
         :plan ->
-          follow(client, task_id, health, done?: & &1.terminal, expect: :planned)
+          follow(client, task_id, health,
+            done?: & &1.terminal,
+            expect: :planned,
+            timeout_ms: timeout_ms
+          )
 
         :apply ->
-          follow(client, task_id, health, done?: &halted?/1, expect: :waiting_for_approval)
+          follow(client, task_id, health,
+            done?: &halted?/1,
+            expect: :waiting_for_approval,
+            timeout_ms: timeout_ms
+          )
       end
     else
       {:error, {:invalid_project_dir, path, reason}} ->
@@ -430,6 +456,9 @@ defmodule Current.CLI do
 
       {:error, {:unknown_model, unknown}} ->
         fail("unknown model #{unknown}\nList the available models with:  current models")
+
+      {:error, {:invalid_timeout, value}} ->
+        fail("invalid timeout #{inspect(value)}")
 
       {:error, reason} ->
         fail(transport_error(reason, client.node))
@@ -483,7 +512,8 @@ defmodule Current.CLI do
   # Polls `id` (a task or workflow id) until `done?` holds, renders the
   # outcome, and exits 0 only if the workflow ended in the expected status.
   defp follow(client, id, health, opts) do
-    idle_ms = model_wait_ms(health) + @idle_slack_ms
+    # A task submitted with its own timeout may be quiet for that long.
+    idle_ms = (Keyword.get(opts, :timeout_ms) || model_wait_ms(health)) + @idle_slack_ms
 
     case await(client, id, %{
            seen: 0,

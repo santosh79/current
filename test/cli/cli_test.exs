@@ -37,12 +37,32 @@ defmodule Current.CLITest do
   describe "parse/1" do
     test "plan defaults --dir to the current directory" do
       assert CLI.parse(["plan", "Add rate limiting", "--model", "openai:gpt-5.6"]) ==
-               {:plan, "Add rate limiting", ".", "openai:gpt-5.6"}
+               {:plan, "Add rate limiting", ".", "openai:gpt-5.6", nil}
     end
 
     test "--dir and --model may come before or after the prompt" do
-      assert CLI.parse(["plan", "Add", "--dir", "x", "--model", "m"]) == {:plan, "Add", "x", "m"}
-      assert CLI.parse(["plan", "-d", "x", "--model", "m", "Add"]) == {:plan, "Add", "x", "m"}
+      assert CLI.parse(["plan", "Add", "--dir", "x", "--model", "m"]) ==
+               {:plan, "Add", "x", "m", nil}
+
+      assert CLI.parse(["plan", "-d", "x", "--model", "m", "Add"]) ==
+               {:plan, "Add", "x", "m", nil}
+    end
+
+    test "--timeout-minutes is given in minutes and passed on in milliseconds" do
+      assert CLI.parse(["plan", "Add", "--model", "m", "--timeout-minutes", "15"]) ==
+               {:plan, "Add", ".", "m", 900_000}
+
+      assert CLI.parse(["run", "--timeout-minutes", "1", "Add", "--model", "m"]) ==
+               {:run, "Add", ".", "m", 60_000}
+    end
+
+    test "--timeout-minutes must be a whole number of minutes from 1 to 60" do
+      for bad <- ["0", "61", "abc", "1.5"] do
+        assert {:error, message} =
+                 CLI.parse(["plan", "Add", "--model", "m", "--timeout-minutes", bad])
+
+        assert message =~ "--timeout-minutes"
+      end
     end
 
     test "plan and run require --model, and say where to find one" do
@@ -65,10 +85,14 @@ defmodule Current.CLITest do
 
     test "run takes the same arguments as plan" do
       assert CLI.parse(["run", "Add rate limiting", "--model", "m"]) ==
-               {:run, "Add rate limiting", ".", "m"}
+               {:run, "Add rate limiting", ".", "m", nil}
 
-      assert CLI.parse(["run", "Add", "--dir", "x", "--model", "m"]) == {:run, "Add", "x", "m"}
-      assert CLI.parse(["run", "-d", "x", "--model", "m", "Add"]) == {:run, "Add", "x", "m"}
+      assert CLI.parse(["run", "Add", "--dir", "x", "--model", "m"]) ==
+               {:run, "Add", "x", "m", nil}
+
+      assert CLI.parse(["run", "-d", "x", "--model", "m", "Add"]) ==
+               {:run, "Add", "x", "m", nil}
+
       assert {:error, _} = CLI.parse(["run"])
       assert {:error, _} = CLI.parse(["run", "--nope", "x"])
     end

@@ -17,13 +17,16 @@ defmodule Current.Request do
     :input,
     :context,
     :model,
-    mode: Current.Mode.default()
+    mode: Current.Mode.default(),
+    # nil: the runtime's own bound on producing a proposal.
+    timeout_ms: nil
   ]
 
   @type t :: %__MODULE__{
           input: String.t() | map(),
           context: map(),
           model: Current.ModelCatalog.model_name(),
-          mode: Current.Mode.t()
+          mode: Current.Mode.t(),
+          timeout_ms: pos_integer() | nil
         }
 end

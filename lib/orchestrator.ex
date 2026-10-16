@@ -72,7 +72,10 @@ defmodule Current.WorkflowOrchestrator do
         mode: task.mode,
         # The model recorded on the task. start_proposal_production/1
         # picks the client from it.
-        model: task.model
+        model: task.model,
+        # The task's own bound on producing a proposal (nil: the default),
+        # which the proposal builder reads off the request.
+        timeout_ms: task.timeout_ms
       },
       # Execution context from the recorded task (nil for a legacy task).
       project_dir: task.project_dir,

@@ -142,6 +142,27 @@ defmodule Current.Event.SchemaTest do
       assert Schema.upcast(event) == event
     end
 
+    test "a TaskCreated recorded before timeouts existed (v3) reads back with none" do
+      now = DateTime.utc_now()
+
+      raw = %{
+        __struct__: Event.TaskCreated,
+        id: Id.generate(),
+        task_id: Id.generate(),
+        input: "v3 task",
+        context: %{},
+        mode: :plan,
+        project_dir: "/srv/projects/app",
+        model: "openai:gpt-5.6",
+        submitted_at: now,
+        timestamp: now,
+        version: 3
+      }
+
+      assert %Event.TaskCreated{timeout_ms: nil, version: 4, model: "openai:gpt-5.6"} =
+               Schema.migrate(Event.TaskCreated, raw)
+    end
+
     test "a proposal recorded before observations existed reads back with none" do
       # As it sits in an old WAL: a proposal without the new key.
       old_proposal = %{

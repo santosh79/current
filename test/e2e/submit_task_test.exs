@@ -60,6 +60,31 @@ defmodule Current.E2E.SubmitTaskTest do
     end
   end
 
+  describe "timeout" do
+    test "defaults to none, meaning the runtime's own bound" do
+      task_id = submit!()
+      await_workflow_created(task_id)
+
+      assert {:ok, %Current.Task{timeout_ms: nil}} = Current.Task.get(task_id)
+    end
+
+    test "a task's own timeout is recorded on it" do
+      task_id = submit!(timeout_ms: 90_000)
+      await_workflow_created(task_id)
+
+      assert {:ok, %Current.Task{timeout_ms: 90_000}} = Current.Task.get(task_id)
+    end
+
+    test "one that isn't a sensible number of milliseconds is rejected, recording nothing" do
+      for bad <- [0, -1, 999, 3_600_001, 1.5, "60000"] do
+        assert {:error, {:invalid_timeout, ^bad}} =
+                 Current.submit_task(request(timeout_ms: bad), self(), System.tmp_dir!())
+      end
+
+      refute_receive {:workflow_created, _}, 200
+    end
+  end
+
   describe "project_dir" do
     test "defaults to the working directory, recorded canonically" do
       {:ok, task_id} = Current.submit_task(request(), self())
