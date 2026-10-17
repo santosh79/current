@@ -28,27 +28,22 @@ defmodule Current.HTTP.Server do
 
   require Logger
 
-  @doc "Child specs for the supervisor: `[]` when the API is disabled."
+  @doc "Child specs for the supervisor."
   @spec children() :: [Supervisor.child_spec()]
   def children do
     config = Application.get_env(:current, :http, [])
+    port = port(config)
+    ip = ip(config)
 
-    if Keyword.get(config, :enabled, true) do
-      port = port(config)
-      ip = ip(config)
-
-      if ip != {127, 0, 0, 1} and ip != {0, 0, 0, 0, 0, 0, 0, 1} do
-        Logger.warning(
-          "HTTP API is bound to #{:inet.ntoa(ip)}, which does no authentication; " <>
-            "restrict access with network rules or a gateway"
-        )
-      end
-
-      Logger.info("HTTP API listening on #{:inet.ntoa(ip)}:#{port}")
-      [{Bandit, plug: Current.HTTP.Router, scheme: :http, ip: ip, port: port}]
-    else
-      []
+    if ip != {127, 0, 0, 1} and ip != {0, 0, 0, 0, 0, 0, 0, 1} do
+      Logger.warning(
+        "HTTP API is bound to #{:inet.ntoa(ip)}, which does no authentication; " <>
+          "restrict access with network rules or a gateway"
+      )
     end
+
+    Logger.info("HTTP API listening on #{:inet.ntoa(ip)}:#{port}")
+    [{Bandit, plug: Current.HTTP.Router, scheme: :http, ip: ip, port: port}]
   end
 
   defp port(config) do
