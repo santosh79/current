@@ -187,51 +187,70 @@ defmodule Current.IntentValidatorTest do
     end
   end
 
-  describe "validate/2 - file_patch" do
-    test "passes when path exists and diff blob resolves" do
-      path = tmp_file!()
-      {:ok, diff_id} = BlobStore.put("--- a\n+++ b\n")
+  describe "validate/2 - edit_file" do
+    defp edit_intent(path, old, new, replace_all \\ false) do
+      {:ok, old_id} = BlobStore.put(old)
+      {:ok, new_id} = BlobStore.put(new)
 
-      intent = %Intent.FilePatch{
+      %Intent.EditFile{
         id: Id.generate(),
         proposal_id: Id.generate(),
         path: path,
-        diff_artifact_id: diff_id
+        old_artifact_id: old_id,
+        new_artifact_id: new_id,
+        replace_all: replace_all
       }
+    end
 
-      assert :ok = IntentValidator.validate(proposal([intent]), "/")
+    test "passes when the file exists and old_string matches exactly once" do
+      path = tmp_file!("hello world")
+      assert :ok = IntentValidator.validate(proposal([edit_intent(path, "hello", "bye")]), "/")
     end
 
     test "fails when path does not exist" do
-      {:ok, diff_id} = BlobStore.put("--- a\n+++ b\n")
-
-      intent = %Intent.FilePatch{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        path: "/nope",
-        diff_artifact_id: diff_id
-      }
-
       assert {:error, %ValidationError{reason: reason}} =
-               IntentValidator.validate(proposal([intent]), "/")
+               IntentValidator.validate(proposal([edit_intent("/nope", "a", "b")]), "/")
 
       assert reason =~ "path does not exist"
     end
 
-    test "fails when diff blob does not resolve" do
-      path = tmp_file!()
+    test "fails when old_string is not in the file" do
+      path = tmp_file!("hello")
 
-      intent = %Intent.FilePatch{
+      assert {:error, %ValidationError{reason: reason}} =
+               IntentValidator.validate(proposal([edit_intent(path, "zzz", "b")]), "/")
+
+      assert reason =~ "not found in the file"
+    end
+
+    test "fails when old_string is ambiguous, unless replace_all" do
+      path = tmp_file!("foo foo")
+
+      assert {:error, %ValidationError{reason: reason}} =
+               IntentValidator.validate(proposal([edit_intent(path, "foo", "bar")]), "/")
+
+      assert reason =~ "matches 2 places"
+
+      assert :ok =
+               IntentValidator.validate(proposal([edit_intent(path, "foo", "bar", true)]), "/")
+    end
+
+    test "fails when a blob does not resolve" do
+      path = tmp_file!("hello")
+      {:ok, new_id} = BlobStore.put("x")
+
+      intent = %Intent.EditFile{
         id: Id.generate(),
         proposal_id: Id.generate(),
         path: path,
-        diff_artifact_id: "sha256:" <> String.duplicate("a", 64)
+        old_artifact_id: "sha256:" <> String.duplicate("a", 64),
+        new_artifact_id: new_id
       }
 
       assert {:error, %ValidationError{reason: reason}} =
                IntentValidator.validate(proposal([intent]), "/")
 
-      assert reason =~ "diff blob does not exist"
+      assert reason =~ "old_string blob does not exist"
     end
   end
 
@@ -529,11 +548,12 @@ defmodule Current.IntentValidatorTest do
           proposal_id: Id.generate(),
           path: "/nope"
         },
-        Intent.FilePatch => %Intent.FilePatch{
+        Intent.EditFile => %Intent.EditFile{
           id: Id.generate(),
           proposal_id: Id.generate(),
           path: "/nope",
-          diff_artifact_id: "sha256:" <> String.duplicate("a", 64)
+          old_artifact_id: "sha256:" <> String.duplicate("a", 64),
+          new_artifact_id: "sha256:" <> String.duplicate("a", 64)
         },
         Intent.RunCommand => %Intent.RunCommand{
           id: Id.generate(),

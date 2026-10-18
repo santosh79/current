@@ -10,7 +10,7 @@ defmodule Current.ProposalDecoder do
 
   Pure: no network calls, no knowledge of the LLM client, never raises.
   The one side effect is Current.BlobStore.put/1 for intent payloads
-  carried inline on the wire (diff/contents text) -- everything else
+  carried inline on the wire (edit/contents text) -- everything else
   about talking to a model, and about persisting the raw response for
   provenance, is the caller's (Current.LLMProposalBuilder's) job.
 
@@ -267,16 +267,22 @@ defmodule Current.ProposalDecoder do
     end
   end
 
-  defp build_intent(id, proposal_id, %{"type" => "file_patch"} = map, _refs) do
+  defp build_intent(id, proposal_id, %{"type" => "edit_file"} = map, _refs) do
     with {:ok, path} <- require_string(map, "path"),
-         {:ok, diff} <- require_string(map, "diff"),
-         {:ok, blob_id} <- BlobStore.put(diff) do
+         {:ok, old_string} <- require_string(map, "old_string"),
+         {:ok, new_string} <- require_string(map, "new_string"),
+         :ok <- check_edit(old_string, new_string),
+         {:ok, replace_all} <- optional_boolean_default(map, "replace_all", false),
+         {:ok, old_id} <- BlobStore.put(old_string),
+         {:ok, new_id} <- BlobStore.put(new_string) do
       {:ok,
-       %Intent.FilePatch{
+       %Intent.EditFile{
          id: id,
          proposal_id: proposal_id,
          path: path,
-         diff_artifact_id: blob_id
+         old_artifact_id: old_id,
+         new_artifact_id: new_id,
+         replace_all: replace_all
        }}
     end
   end
@@ -390,6 +396,20 @@ defmodule Current.ProposalDecoder do
 
       _ ->
         {:error, "intent field #{key} must be a list of strings"}
+    end
+  end
+
+  defp check_edit("", _new),
+    do: {:error, "edit_file old_string must not be empty; create a file with write_file"}
+
+  defp check_edit(same, same), do: {:error, "edit_file old_string and new_string are identical"}
+  defp check_edit(_old, _new), do: :ok
+
+  defp optional_boolean_default(map, key, default) do
+    case Map.get(map, key) do
+      nil -> {:ok, default}
+      value when is_boolean(value) -> {:ok, value}
+      _ -> {:error, "intent field #{key} must be true or false"}
     end
   end
 

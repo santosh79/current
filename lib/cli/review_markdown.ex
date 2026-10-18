@@ -2,8 +2,8 @@ defmodule Current.CLI.ReviewMarkdown do
   @moduledoc """
   Renders Current.Inspector.review/2 as Markdown, laid out like a pull
   request: what the proposal is and why, then each intent in order with
-  its artifact inline -- a diff for a FilePatch, the new contents for a
-  WriteFile.
+  its artifact inline -- the old and new text for an EditFile, the new
+  contents for a WriteFile.
 
   Pure, like Current.CLI.Render: data in, string out.
   """
@@ -56,14 +56,28 @@ defmodule Current.CLI.ReviewMarkdown do
     ["", "### #{n}. #{heading(intent, root)}", "", body(intent, review, root)]
   end
 
-  defp heading(%Intent.FilePatch{path: path}, root), do: "FilePatch #{code(rel(path, root))}"
+  defp heading(%Intent.EditFile{path: path}, root), do: "EditFile #{code(rel(path, root))}"
   defp heading(%Intent.WriteFile{path: path}, root), do: "WriteFile #{code(rel(path, root))}"
   defp heading(%Intent.ReadFile{path: path}, root), do: "ReadFile #{code(rel(path, root))}"
   defp heading(%Intent.DeleteFile{path: path}, root), do: "DeleteFile #{code(rel(path, root))}"
   defp heading(%{__struct__: mod}, _root), do: mod |> Module.split() |> List.last()
 
-  defp body(%Intent.FilePatch{diff_artifact_id: id}, review, _root),
-    do: artifact(Map.get(review.artifacts, id, missing(id)), "diff")
+  defp body(%Intent.EditFile{} = edit, review, _root) do
+    language = language(edit.path)
+    old = Map.get(review.artifacts, edit.old_artifact_id, missing(edit.old_artifact_id))
+    new = Map.get(review.artifacts, edit.new_artifact_id, missing(edit.new_artifact_id))
+
+    [
+      if(edit.replace_all, do: ["_Replaces every occurrence._", ""]),
+      "**Replace**",
+      "",
+      artifact(old, language),
+      "",
+      "**With**",
+      "",
+      artifact(new, language)
+    ]
+  end
 
   defp body(%Intent.WriteFile{path: path, contents_artifact_id: id}, review, _root),
     do: artifact(Map.get(review.artifacts, id, missing(id)), language(path))

@@ -1,12 +1,20 @@
-defmodule Current.Intent.FilePatch do
-  @enforce_keys [:id, :proposal_id, :path, :diff_artifact_id]
-  defstruct [:id, :proposal_id, :path, :diff_artifact_id]
+defmodule Current.Intent.EditFile do
+  @moduledoc """
+  Replaces `old_string` with `new_string` in an existing file. Both
+  strings are artifacts, like WriteFile's contents. See Current.Edit for
+  what counts as a match.
+  """
+
+  @enforce_keys [:id, :proposal_id, :path, :old_artifact_id, :new_artifact_id]
+  defstruct [:id, :proposal_id, :path, :old_artifact_id, :new_artifact_id, replace_all: false]
 
   @type t :: %__MODULE__{
           id: Current.Id.t(),
           proposal_id: Current.Id.t(),
           path: String.t(),
-          diff_artifact_id: Current.Id.t()
+          old_artifact_id: Current.Id.t(),
+          new_artifact_id: Current.Id.t(),
+          replace_all: boolean()
         }
 end
 
@@ -106,7 +114,7 @@ end
 
 defmodule Current.Intent do
   @type t ::
-          Current.Intent.FilePatch.t()
+          Current.Intent.EditFile.t()
           | Current.Intent.WriteFile.t()
           | Current.Intent.DeleteFile.t()
           | Current.Intent.RunCommand.t()
@@ -120,7 +128,7 @@ defmodule Current.Intent do
     Current.Intent.ReadFile,
     Current.Intent.WriteFile,
     Current.Intent.DeleteFile,
-    Current.Intent.FilePatch,
+    Current.Intent.EditFile,
     Current.Intent.RunCommand,
     Current.Intent.Glob,
     Current.Intent.Grep,

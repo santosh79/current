@@ -23,7 +23,7 @@ defmodule Current.EffectApplicator do
   alias Current.{Intent, IntentPaths}
 
   @type result ::
-          Current.EffectResult.FilePatch.t()
+          Current.EffectResult.EditFile.t()
           | Current.EffectResult.WriteFile.t()
           | Current.EffectResult.DeleteFile.t()
           | Current.EffectResult.Command.t()
@@ -53,21 +53,25 @@ defmodule Current.EffectApplicator do
   defp describe(:parent_segment), do: "must not contain '..'"
   defp describe(:too_many_links), do: "has too many levels of symbolic links"
 
-  defp do_apply(%Current.Intent.FilePatch{} = intent, _prior_results, _project_dir) do
+  defp do_apply(%Current.Intent.EditFile{} = intent, _prior_results, _project_dir) do
     path = intent.path
 
-    case File.exists?(path) do
-      false ->
-        {:error, "file not found: #{path}"}
+    with {:ok, old} <- read_edit_artifact(intent, intent.old_artifact_id),
+         {:ok, new} <- read_edit_artifact(intent, intent.new_artifact_id),
+         {:ok, before_contents} <- read_edit_target(path),
+         {:ok, after_contents, replacements} <-
+           edit_error(Current.Edit.replace(before_contents, old, new, intent.replace_all), path),
+         :ok <- write_edit_target(path, after_contents) do
+      {:ok, before_artifact_id} = Current.BlobStore.put(before_contents)
+      {:ok, after_artifact_id} = Current.BlobStore.put(after_contents)
 
-      _ ->
-        case System.find_executable("patch") do
-          nil ->
-            {:error, "patch executable not found on PATH"}
-
-          patch_executable ->
-            apply_patch(intent, path, patch_executable)
-        end
+      {:ok,
+       %Current.EffectResult.EditFile{
+         path: path,
+         before_artifact_id: before_artifact_id,
+         after_artifact_id: after_artifact_id,
+         replacements: replacements
+       }}
     end
   end
 
@@ -433,47 +437,31 @@ defmodule Current.EffectApplicator do
     {:error, "condition #{condition} is not supported for #{result.__struct__}"}
   end
 
-  defp apply_patch(intent, path, patch_executable) do
-    case Current.BlobStore.read(intent.diff_artifact_id) do
+  defp read_edit_artifact(intent, artifact_id) do
+    case Current.BlobStore.read(artifact_id) do
+      {:ok, contents} ->
+        {:ok, contents}
+
       {:error, :not_found} ->
-        {:error, "diff artifact not found for intent #{intent.id}: #{intent.diff_artifact_id}"}
-
-      {:ok, diff} ->
-        before_contents = File.read!(path)
-        {:ok, before_artifact_id} = Current.BlobStore.put(before_contents)
-
-        patch_path =
-          Path.join(
-            System.tmp_dir!(),
-            "current_patch_#{System.unique_integer([:positive])}.diff"
-          )
-
-        try do
-          :ok = File.write!(patch_path, diff)
-
-          {_output, exit_code} =
-            System.cmd(patch_executable, ["--batch", "--forward", "--fuzz=0", path, patch_path],
-              stderr_to_stdout: true
-            )
-
-          case exit_code do
-            0 ->
-              after_contents = File.read!(path)
-              {:ok, after_artifact_id} = Current.BlobStore.put(after_contents)
-
-              {:ok,
-               %Current.EffectResult.FilePatch{
-                 path: path,
-                 before_artifact_id: before_artifact_id,
-                 after_artifact_id: after_artifact_id
-               }}
-
-            _ ->
-              {:error, "effect patch: #{intent.id} failed with exit code #{exit_code}"}
-          end
-        after
-          :ok = File.rm(patch_path)
-        end
+        {:error, "edit artifact not found for intent #{intent.id}: #{artifact_id}"}
     end
   end
+
+  defp read_edit_target(path) do
+    case File.read(path) do
+      {:ok, contents} -> {:ok, contents}
+      {:error, :enoent} -> {:error, "file not found: #{path}"}
+      {:error, reason} -> {:error, "edit_file failed to read #{path}: #{inspect(reason)}"}
+    end
+  end
+
+  defp write_edit_target(path, contents) do
+    case File.write(path, contents) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "edit_file failed to write #{path}: #{inspect(reason)}"}
+    end
+  end
+
+  defp edit_error({:error, message}, path), do: {:error, "edit_file #{path}: #{message}"}
+  defp edit_error(ok, _path), do: ok
 end

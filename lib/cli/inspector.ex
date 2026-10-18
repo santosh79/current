@@ -131,8 +131,8 @@ defmodule Current.Inspector do
   end
 
   @doc """
-  A proposal with the contents of its artifacts -- each FilePatch's diff
-  and each WriteFile's contents -- for reviewing it in one place.
+  A proposal with the contents of its artifacts -- each EditFile's old and
+  new text and each WriteFile's contents -- for reviewing it in one place.
 
   Every artifact is cut to `max_lines` lines (default #{@review_max_lines}),
   and the review as a whole to #{@review_budget_factor}× that; see
@@ -167,7 +167,7 @@ defmodule Current.Inspector do
 
   defp proposal_artifact_ids(%Proposal{intents: intents}) do
     Enum.flat_map(intents, fn
-      %Intent.FilePatch{diff_artifact_id: id} -> [id]
+      %Intent.EditFile{old_artifact_id: old, new_artifact_id: new} -> [old, new]
       %Intent.WriteFile{contents_artifact_id: id} -> [id]
       _ -> []
     end)

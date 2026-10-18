@@ -221,7 +221,7 @@ disk. Each commit carries the hash of the one before it, and the log
 refuses to start if the chain is broken. In-memory views of tasks,
 proposals and workflows are rebuilt from the log on every start.
 
-Contents (diffs, file snapshots, command output, the model's raw replies)
+Contents (file text, edits, snapshots, command output, the model's raw replies)
 are stored as **artifacts**: immutable blobs named by their SHA-256. Events
 refer to artifacts by id.
 
@@ -235,7 +235,7 @@ refer to artifacts by id.
 | `glob` | Lists files matching a relative pattern | yes |
 | `grep` | Finds lines containing a literal string in listed files | yes |
 | `write_file` | Creates a new file; fails if it already exists | |
-| `file_patch` | Applies a unified diff with `patch --fuzz=0`; stores before and after | |
+| `edit_file` | Replaces exact text (`old_string` → `new_string`) in an existing file; `old_string` must match once unless `replace_all`; stores before and after | |
 | `delete_file` | Deletes a file; stores its contents first | |
 | `run_command` | Runs an executable with arguments in the project directory; stores stdout, stderr and exit code | |
 | `claim` | Checks a statement against an earlier intent's result (`exit_code_equals`, `match_count_equals`, `match_count_greater_than`) | |
@@ -251,13 +251,13 @@ The exact JSON is specified in [docs/wire_schema.md](docs/wire_schema.md).
 |---|---|
 | `current plan <prompt> --model <m> [--dir <d>] [--timeout-minutes <n>]` | Produce and validate a proposal. Nothing is executed. |
 | `current run <prompt> --model <m> [--dir <d>] [--timeout-minutes <n>]` | The same in apply mode; stops when the proposal waits for approval. |
-| `current review <proposal-id> [--json] [--max-lines <n>] [--raw]` | A proposal with its diffs and file contents. `--json` emits `current.review/v1`. |
+| `current review <proposal-id> [--json] [--max-lines <n>] [--raw]` | A proposal with its edits and file contents. `--json` emits `current.review/v1`. |
 | `current approve <proposal-id> [-m <message>]` | Record approval. Nothing is applied. |
 | `current reject <proposal-id> [-m <message>]` | Turn a proposal down; the workflow ends. |
 | `current apply <proposal-id>` | Apply an approved proposal, and follow it to the end. |
 | `current events <workflow-or-task-id>` | A workflow's events, in log order. |
 | `current proposal <proposal-id>` | A proposal in full: intents, observations, artifacts. |
-| `current artifact <artifact-id>` | An artifact's exact bytes, for piping (e.g. into `git apply`). |
+| `current artifact <artifact-id>` | An artifact's exact bytes, for piping. |
 | `current models` | Models discovered from the configured providers. |
 | `current status` | Whether the runtime is up, and how it is configured. |
 

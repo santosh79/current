@@ -413,8 +413,15 @@ defmodule Current.CLI.Render do
   defp fields(%Intent.ReadFile{path: p}, _, root), do: [{"path", rel(p, root)}]
   defp fields(%Intent.DeleteFile{path: p}, _, root), do: [{"path", rel(p, root)}]
 
-  defp fields(%Intent.FilePatch{path: p, diff_artifact_id: id}, _, root),
-    do: [{"path", rel(p, root)}, {"diff", id}]
+  defp fields(%Intent.EditFile{path: p} = edit, _, root),
+    do:
+      [
+        {"path", rel(p, root)},
+        {"old", edit.old_artifact_id},
+        {"new", edit.new_artifact_id},
+        if(edit.replace_all, do: {"replace_all", "yes"})
+      ]
+      |> Enum.reject(&is_nil/1)
 
   defp fields(%Intent.WriteFile{path: p, contents_artifact_id: id}, _, root),
     do: [{"path", rel(p, root)}, {"contents", id}]
@@ -455,7 +462,7 @@ defmodule Current.CLI.Render do
 
   defp artifact_ids(proposal) do
     Enum.flat_map(proposal.intents, fn
-      %Intent.FilePatch{diff_artifact_id: id} -> [id]
+      %Intent.EditFile{old_artifact_id: old, new_artifact_id: new} -> [old, new]
       %Intent.WriteFile{contents_artifact_id: id} -> [id]
       _ -> []
     end)
@@ -502,8 +509,8 @@ defmodule Current.CLI.Render do
   defp describe(%Intent.WriteFile{path: path, contents_artifact_id: id}, root),
     do: {"WriteFile", "#{rel(path, root)}  (contents #{short(id)})"}
 
-  defp describe(%Intent.FilePatch{path: path, diff_artifact_id: id}, root),
-    do: {"FilePatch", "#{rel(path, root)}  (diff #{short(id)})"}
+  defp describe(%Intent.EditFile{path: path, old_artifact_id: old, new_artifact_id: new}, root),
+    do: {"EditFile", "#{rel(path, root)}  (#{short(old)} → #{short(new)})"}
 
   defp describe(%Intent.RunCommand{cmd: cmd, args: args}, _root),
     do: {"RunCommand", Enum.join([cmd | args || []], " ")}

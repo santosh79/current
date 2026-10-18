@@ -7,7 +7,7 @@ defmodule Current.HTTP.Encode do
 
     * a struct becomes a map of its fields, plus `"type"`: the last part of
       the module name (`Current.Event.TaskCreated` -> `"TaskCreated"`,
-      `Current.Intent.FilePatch` -> `"FilePatch"`);
+      `Current.Intent.EditFile` -> `"EditFile"`);
     * an atom becomes a string (`nil`, `true` and `false` stay as they are);
     * a tuple becomes a list (`{intent, result}` -> `[intent, result]`);
     * a `DateTime` becomes an ISO 8601 string;
