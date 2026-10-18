@@ -53,6 +53,9 @@ defmodule Current.LLMProposalBuilder do
 
   alias Current.Error.ProposalProductionError
 
+  @max_repairs 2
+  # state gains: repairs_left: @max_repairs, repair: nil
+
   # How long one task's proposal may take in total, however many times
   # the model is called. Hard-coded for now; the application env key is
   # only there so tests don't have to wait this long.
@@ -89,6 +92,8 @@ defmodule Current.LLMProposalBuilder do
           observations: [],
           shown: [],
           rounds_left: @max_observe_rounds,
+          repairs_left: @max_repairs,
+          repair: nil,
           budget: @context_budget_bytes
         })
       end
@@ -200,8 +205,13 @@ defmodule Current.LLMProposalBuilder do
           | observations: state.observations ++ observations,
             shown: state.shown ++ texts,
             rounds_left: state.rounds_left - 1,
+            repair: nil,
+            repairs_left: @max_repairs,
             budget: budget
         })
+
+      {:error, reason} when state.repairs_left > 0 ->
+        converse(%{state | repairs_left: state.repairs_left - 1, repair: reason})
 
       {:error, reason} ->
         {:error,
@@ -316,6 +326,8 @@ defmodule Current.LLMProposalBuilder do
     Context: #{inspect(context)}
 
     #{render_shown(state.shown)}
+
+    #{render_repair(state.repair)}
 
     #{render_turn(state.rounds_left)}
     """
@@ -465,6 +477,14 @@ defmodule Current.LLMProposalBuilder do
      "old_string": #{JSON.encode!(@example_old)},
      "new_string": #{JSON.encode!(@example_new)}}
     """
+  end
+
+  defp render_repair(nil), do: ""
+
+  defp render_repair(reason) do
+    "Your previous reply could not be used (#{reason}). Reply again with exactly " <>
+      "ONE bare JSON object: either {\"observe\": [...]} or {\"intents\": [...]}. " <>
+      "No tags, no markdown fences, no prose."
   end
 
   def split(model_name) when is_binary(model_name) do
