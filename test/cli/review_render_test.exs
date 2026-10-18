@@ -109,24 +109,26 @@ defmodule Current.CLI.ReviewRenderTest do
   end
 
   describe "ReviewMarkdown.render/1" do
-    test "a FilePatch shows its diff inline, and a waiting proposal says how to approve it" do
-      patch = %Intent.FilePatch{
+    test "an EditFile shows old and new text, and a waiting proposal says how to approve it" do
+      edit = %Intent.EditFile{
         id: "i1",
         proposal_id: "p",
         path: "/proj/lib/a.ex",
-        diff_artifact_id: "d"
+        old_artifact_id: "o",
+        new_artifact_id: "n"
       }
 
-      diff = "--- a/lib/a.ex\n+++ b/lib/a.ex\n-old\n+new"
-
-      md = ReviewMarkdown.render(review([patch], %{artifacts: %{"d" => excerpt("d", diff)}}))
+      md =
+        ReviewMarkdown.render(
+          review([edit], %{artifacts: %{"o" => excerpt("o", "old"), "n" => excerpt("n", "new")}})
+        )
 
       assert md =~ "# Proposal review"
       assert md =~ "- **Status:** waiting_for_approval (apply mode)"
       assert md =~ "## Justification\n\nBecause."
-      assert md =~ "### 1. FilePatch `lib/a.ex`\n\n```diff\n#{diff}\n```"
+      assert md =~ "### 1. EditFile `lib/a.ex`"
+      assert md =~ "**Replace**\n\n```elixir\nold\n```\n\n**With**\n\n```elixir\nnew\n```"
       assert md =~ "Approve with: `current approve sha256:aaaaaaaaaaaa -m \"<message>\"`"
-      assert md =~ "Approving doesn't apply it; `current apply` does that afterwards."
     end
 
     test "content containing a fence gets a longer fence" do
@@ -214,11 +216,12 @@ defmodule Current.CLI.ReviewRenderTest do
     test "a versioned document with full ids, 1-based indexes and explicit artifacts" do
       cmd = %Intent.RunCommand{id: "c1", proposal_id: "p", cmd: "npm", args: ["test"]}
 
-      patch = %Intent.FilePatch{
+      patch = %Intent.EditFile{
         id: "i1",
         proposal_id: "p",
         path: "/proj/lib/a.ex",
-        diff_artifact_id: "d"
+        old_artifact_id: "d",
+        new_artifact_id: "e"
       }
 
       claim = %Intent.Claim{
@@ -232,7 +235,10 @@ defmodule Current.CLI.ReviewRenderTest do
 
       doc =
         review([cmd, patch, claim], %{
-          artifacts: %{"d" => excerpt("d", "+x", truncated: true, total_lines: 9)},
+          artifacts: %{
+            "d" => excerpt("d", "+x", truncated: true, total_lines: 9),
+            "e" => excerpt("e", "y")
+          },
           validation_error: error
         })
         |> ReviewJSON.encode()
@@ -259,9 +265,10 @@ defmodule Current.CLI.ReviewRenderTest do
              }
 
       assert p["relative_path"] == "lib/a.ex"
-      assert p["artifact"]["status"] == "ok"
-      assert p["artifact"]["truncated"] == true
-      assert {p["artifact"]["shown_lines"], p["artifact"]["total_lines"]} == {1, 9}
+      assert p["old_string"]["status"] == "ok"
+      assert p["new_string"]["status"] == "ok"
+      assert p["replace_all"] == false
+      assert {p["old_string"]["shown_lines"], p["old_string"]["total_lines"]} == {1, 9}
 
       assert cl["evidence"] == %{
                "source_intent_id" => "c1",

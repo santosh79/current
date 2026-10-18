@@ -15,6 +15,8 @@ defmodule Current.CLI.ReviewJSON do
         "intents": [
           {"index", "id", "type", ...type-specific fields,
            "artifact": artifact | absent}
+          (an EditFile has "old_string" and "new_string" artifacts and
+          "replace_all" instead of "artifact")
         ],
         "raw_output": artifact | null,
         "limits": {"max_lines_per_artifact", "max_total_lines"}
@@ -86,8 +88,13 @@ defmodule Current.CLI.ReviewJSON do
     )
   end
 
-  defp fields(%Intent.FilePatch{path: path, diff_artifact_id: id}, review),
-    do: Map.merge(path(path, review), %{"artifact" => artifact_for(id, review)})
+  defp fields(%Intent.EditFile{} = edit, review),
+    do:
+      Map.merge(path(edit.path, review), %{
+        "old_string" => artifact_for(edit.old_artifact_id, review),
+        "new_string" => artifact_for(edit.new_artifact_id, review),
+        "replace_all" => edit.replace_all
+      })
 
   defp fields(%Intent.WriteFile{path: path, contents_artifact_id: id}, review),
     do: Map.merge(path(path, review), %{"artifact" => artifact_for(id, review)})

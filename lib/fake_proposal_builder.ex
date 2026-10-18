@@ -17,22 +17,20 @@ defmodule Current.FakeProposalBuilder do
     path = Path.join(dir, "signup.ex")
     File.write!(path, "defmodule Signup do\nend\n")
 
-    diff = """
-    --- a/signup.ex
-    +++ b/signup.ex
-    @@ -1,2 +1,3 @@
-     defmodule Signup do
-    +  def validate_email(email), do: String.contains?(email, "@")
-     end
-    """
+    old_string = "defmodule Signup do\n"
 
-    {:ok, diff_artifact_id} = Current.BlobStore.put(diff)
+    new_string =
+      "defmodule Signup do\n  def validate_email(email), do: String.contains?(email, \"@\")\n"
 
-    intent = %Current.Intent.FilePatch{
+    {:ok, old_artifact_id} = Current.BlobStore.put(old_string)
+    {:ok, new_artifact_id} = Current.BlobStore.put(new_string)
+
+    intent = %Current.Intent.EditFile{
       id: Current.Id.generate(),
       proposal_id: proposal_id,
       path: path,
-      diff_artifact_id: diff_artifact_id
+      old_artifact_id: old_artifact_id,
+      new_artifact_id: new_artifact_id
     }
 
     proposal = %Current.Proposal{

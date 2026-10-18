@@ -34,25 +34,19 @@ defmodule Current.SecondIntentFailsProposalBuilder do
     already_existing_path = Path.join(dir, "already_existing.ex")
     :ok = File.write!(already_existing_path, "defmodule Existing do\nend\n")
 
-    good_diff = """
-    --- a/stub.ex
-    +++ b/stub.ex
-    @@ -1,2 +1,3 @@
-     defmodule Stub do
-    +  def ok, do: true
-     end
-    """
+    {:ok, old_artifact_id} = Current.BlobStore.put("defmodule Stub do\n")
+    {:ok, new_artifact_id} = Current.BlobStore.put("defmodule Stub do\n  def ok, do: true\n")
 
-    {:ok, good_diff_artifact_id} = Current.BlobStore.put(good_diff)
     contents = "defmodule Replacement do\nend\n"
     {:ok, write_file_contents_artifact_id} = Current.BlobStore.put(contents)
 
     intents = [
-      %Intent.FilePatch{
+      %Intent.EditFile{
         id: Id.generate(),
         proposal_id: proposal_id,
         path: patch_path,
-        diff_artifact_id: good_diff_artifact_id
+        old_artifact_id: old_artifact_id,
+        new_artifact_id: new_artifact_id
       },
       %Intent.WriteFile{
         id: Id.generate(),

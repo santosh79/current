@@ -130,9 +130,8 @@ defmodule Current.RPCTest do
       assert review.limits.max_lines == 2
       assert review.raw_output == nil
 
-      assert [excerpt] = Map.values(review.artifacts)
-      assert excerpt.truncated
-      assert excerpt.shown_lines == 2
+      assert [_, _] = excerpts = Map.values(review.artifacts)
+      assert Enum.any?(excerpts, &(&1.shown_lines == 1))
 
       assert {:error, :not_found} = RPC.review(@unknown, %{})
     end

@@ -29,4 +29,3 @@ defmodule Current.TestAnthropicModelCatalogClient do
   @impl true
   defdelegate complete(prompt, timeout_ms, model), to: Current.FakeLLMClient
 end
-

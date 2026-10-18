@@ -304,7 +304,7 @@ defmodule Current.LLMProposalBuilder do
 
     #{Current.ProposalWireSchema.raw()}
 
-    #{file_patch_rules()}
+    #{edit_file_rules()}
 
     #{observe_rules()}
 
@@ -349,7 +349,7 @@ defmodule Current.LLMProposalBuilder do
       below. Nothing else happens: a context request changes nothing.
     - Ask for everything you expect to need at once. The number of context
       requests and the amount of text you can be shown are both limited.
-    - Only patch or rely on files whose contents you have been shown.
+    - Only edit or rely on files whose contents you have been shown.
       Their contents appear below as <file path="...">...</file>.
     """
   end
@@ -382,13 +382,11 @@ defmodule Current.LLMProposalBuilder do
       "Reply with a context request, or with the proposal if you have what you need."
   end
 
-  ## --- file_patch diff format ---------------------------------------------
+  ## --- edit_file rules ------------------------------------------------------
 
-  # Current.EffectApplicator applies a file_patch by running exactly
-  # `patch --batch --forward --fuzz=0 <path> <diff>`, so the diff has to
-  # be a unified diff that POSIX patch accepts as is. Models otherwise
-  # tend to fall back on their own patch formats (e.g. "*** Begin
-  # Patch"), which patch rejects.
+  # A file is changed by naming the exact text to replace, not by writing
+  # a unified diff: models miscount hunk headers, and `patch --fuzz=0`
+  # rejects any miscount. Current.Edit does the replacing.
 
   @example_before """
   defmodule Greeter do
@@ -398,19 +396,18 @@ defmodule Current.LLMProposalBuilder do
   end
   """
 
-  @example_diff """
-  --- a/lib/greeter.ex
-  +++ b/lib/greeter.ex
-  @@ -1,5 +1,9 @@
-   defmodule Greeter do
-     def hello(name) do
-       "Hello, " <> name
-     end
-  +
-  +  def goodbye(name) do
-  +    "Goodbye, " <> name
-  +  end
-   end
+  @example_old """
+      "Hello, " <> name
+    end
+  """
+
+  @example_new """
+      "Hello, " <> name
+    end
+
+    def goodbye(name) do
+      "Goodbye, " <> name
+    end
   """
 
   @example_after """
@@ -426,36 +423,35 @@ defmodule Current.LLMProposalBuilder do
   """
 
   @doc false
-  # The example in the prompt, with the file before and after, so a test
-  # can check the example itself applies with patch.
-  def file_patch_example, do: {@example_before, @example_diff, @example_after}
+  # The example in the prompt: a file before, the edit's two strings, and
+  # the file after, so a test can check the example itself applies.
+  def edit_file_example, do: {@example_before, @example_old, @example_new, @example_after}
 
-  defp file_patch_rules do
+  defp edit_file_rules do
     """
-    Rules for file_patch intents:
+    Rules for edit_file intents:
 
-    - "diff" must be a standard unified diff of that one file -- the format
-      `diff -u` produces. It is applied with exactly:
-        patch --batch --forward --fuzz=0 <path> <diff>
-      Any other patch format is rejected. In particular do NOT use the
-      "*** Begin Patch" / "*** Update File" format, and do not write "@@"
-      lines without line numbers.
-    - Start with "--- a/<path>" and "+++ b/<path>", then one or more hunks.
-    - Each hunk starts with "@@ -<old_start>,<old_count> +<new_start>,<new_count> @@".
-      old_start and new_start are the 1-based line numbers where the hunk
-      begins in the file before and after the change. old_count is the
-      number of context and removed lines in the hunk; new_count is the
-      number of context and added lines. All four must be correct.
-    - Every line inside a hunk starts with exactly one character: " " for
-      context, "-" for a removed line, "+" for an added line. A blank
-      context line is a single space.
-    - Context and removed lines must match the file as it was shown to
-      you, character for character, whitespace included. Give up to 3
-      lines of context around each change.
+    - edit_file changes an existing file by replacing the text "old_string"
+      with "new_string".
+    - "old_string" must occur in the file EXACTLY ONCE, character for
+      character, whitespace and indentation included. Copy it from the
+      file contents you were shown; do not retype it from memory and do
+      not include line numbers.
+    - If the text you want to change occurs more than once, add enough
+      surrounding lines to "old_string" to make it unique. Set
+      "replace_all": true only to replace every occurrence on purpose, for
+      example to rename an identifier.
+    - Keep "old_string" as small as still unique -- the lines being changed
+      and a line or two around them -- not the whole file. Make a separate
+      edit_file for each separate change.
+    - Several edit_file intents on one file are applied in order, so each
+      one must match the file as the earlier ones leave it.
+    - "new_string" may be empty, which deletes "old_string". "old_string"
+      must not be empty and must differ from "new_string".
     - The file must already exist. To create a new file, use write_file.
       write_file only ever creates files -- it fails if the file already
       exists -- so never use it to rewrite an existing file; change an
-      existing file with file_patch (several hunks are fine).
+      existing file with edit_file.
 
     Example. For lib/greeter.ex containing
 
@@ -463,12 +459,11 @@ defmodule Current.LLMProposalBuilder do
     #{String.trim_trailing(@example_before)}
     </file>
 
-    a file_patch adding a goodbye/1 function has this "diff" (the tags are
-    not part of it):
+    this intent adds a goodbye/1 function:
 
-    <diff>
-    #{String.trim_trailing(@example_diff)}
-    </diff>
+    {"type": "edit_file", "path": "lib/greeter.ex",
+     "old_string": #{JSON.encode!(@example_old)},
+     "new_string": #{JSON.encode!(@example_new)}}
     """
   end
 

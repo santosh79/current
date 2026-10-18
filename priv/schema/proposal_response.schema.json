@@ -115,7 +115,7 @@
             "read_file",
             "write_file",
             "delete_file",
-            "file_patch",
+            "edit_file",
             "run_command",
             "grep",
             "glob",
@@ -167,12 +167,12 @@
             "if": {
               "properties": {
                 "type": {
-                  "const": "file_patch"
+                  "const": "edit_file"
                 }
               }
             },
             "then": {
-              "$ref": "#/definitions/file_patch"
+              "$ref": "#/definitions/edit_file"
             },
             "else": {
               "if": {
@@ -250,7 +250,7 @@
       }
     },
     "write_file": {
-      "description": "Creates a new file. Fails when applied if the file already exists -- change an existing file with file_patch.",
+      "description": "Creates a new file. Fails when applied if the file already exists -- change an existing file with edit_file.",
       "required": [
         "path",
         "contents"
@@ -277,20 +277,29 @@
         }
       }
     },
-    "file_patch": {
-      "description": "Changes an existing file.",
+    "edit_file": {
+      "description": "Changes an existing file by replacing old_string with new_string. old_string must occur in the file exactly once (unless replace_all is true), character for character, whitespace and indentation included.",
       "required": [
         "path",
-        "diff"
+        "old_string",
+        "new_string"
       ],
       "properties": {
         "path": {
           "description": "Relative to the project root, e.g. \"lib/signup.ex\". Must not contain \"..\" and must stay inside the project.",
           "type": "string"
         },
-        "diff": {
-          "description": "A unified diff of this one file -- the format `diff -u` produces -- applied with exactly `patch --batch --forward --fuzz=0 <path> <diff>`. Hunk headers (\"@@ -old_start,old_count +new_start,new_count @@\") need exact line counts, and context and removed lines must match the current file exactly. The ---/+++ file names are ignored; the target is `path`. Other patch formats (e.g. \"*** Begin Patch\") are rejected.",
+        "old_string": {
+          "description": "The exact text to replace, copied from the file as you were shown it. Not empty, and different from new_string. Include enough surrounding lines to make it unique in the file.",
           "type": "string"
+        },
+        "new_string": {
+          "description": "The text that replaces old_string. May be empty, which deletes old_string.",
+          "type": "string"
+        },
+        "replace_all": {
+          "description": "Replace every occurrence of old_string instead of requiring exactly one, for example to rename an identifier. Defaults to false.",
+          "type": "boolean"
         }
       }
     },

@@ -104,29 +104,58 @@ defmodule Current.IntentValidator do
     end
   end
 
-  ## --- FilePatch ----------------------------------------------------
+  ## --- EditFile -----------------------------------------------------------
+  # More than "the path and blobs exist": the edit is checked against the
+  # file as it is now (Current.Edit), so a human is never asked to approve
+  # an edit that cannot apply. EffectApplicator checks again at apply time,
+  # because the file can change in between. Two edits to one file in a
+  # proposal are each checked against the file on disk, not against the
+  # result of the earlier one.
 
   defp validate_intent(
-         %Intent.FilePatch{id: id, path: path, diff_artifact_id: blob_id},
+         %Intent.EditFile{
+           id: id,
+           path: path,
+           old_artifact_id: old_id,
+           new_artifact_id: new_id,
+           replace_all: replace_all
+         },
          _seen_intents
        ) do
-    cond do
-      not File.regular?(path) ->
+    with {:file, {:ok, contents}} <- {:file, File.read(path)},
+         {:old, {:ok, old}} <- {:old, BlobStore.read(old_id)},
+         {:new, {:ok, new}} <- {:new, BlobStore.read(new_id)},
+         {:edit, {:ok, _edited, _count}} <-
+           {:edit, Current.Edit.replace(contents, old, new, replace_all)} do
+      nil
+    else
+      {:file, _} ->
         %ValidationError{
           intent_id: id,
-          reason: "file_patch path does not exist",
+          reason: "edit_file path does not exist",
           details: %{path: path}
         }
 
-      match?({:error, :not_found}, BlobStore.path_for(blob_id)) ->
+      {:old, _} ->
         %ValidationError{
           intent_id: id,
-          reason: "file_patch diff blob does not exist",
-          details: %{diff_artifact_id: blob_id}
+          reason: "edit_file old_string blob does not exist",
+          details: %{old_artifact_id: old_id}
         }
 
-      true ->
-        nil
+      {:new, _} ->
+        %ValidationError{
+          intent_id: id,
+          reason: "edit_file new_string blob does not exist",
+          details: %{new_artifact_id: new_id}
+        }
+
+      {:edit, {:error, message}} ->
+        %ValidationError{
+          intent_id: id,
+          reason: "edit_file #{message}",
+          details: %{path: path}
+        }
     end
   end
 

@@ -24,7 +24,7 @@ defmodule Current.IntentPaths do
 
   alias Current.{Intent, Proposal}
 
-  @single_path_intents [Intent.ReadFile, Intent.WriteFile, Intent.DeleteFile, Intent.FilePatch]
+  @single_path_intents [Intent.ReadFile, Intent.WriteFile, Intent.DeleteFile, Intent.EditFile]
 
   @spec absolutize(Proposal.t(), Path.t()) :: Proposal.t()
   def absolutize(%Proposal{intents: intents} = proposal, project_dir) do

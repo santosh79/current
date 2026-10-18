@@ -27,7 +27,7 @@ defmodule Current.ProposalDecoderTest do
     ~s({
       "intents": [
         {"type": "write_file", "path": "lib/x.ex", "contents": "defmodule X do\\nend\\n"},
-        {"type": "file_patch", "path": "lib/y.ex", "diff": "--- a\\n+++ b\\n"}
+        {"type": "edit_file", "path": "lib/y.ex", "old_string": "a", "new_string": "b"}
       ]
     }),
     ~s({"intents": [{"type": "run_command", "cmd": "echo"}]}),
@@ -35,7 +35,7 @@ defmodule Current.ProposalDecoderTest do
     ~s({"intents": []}),
     ~s({
       "intents": [
-        {"ref": "patch_1", "type": "file_patch", "path": "lib/signup.ex", "diff": "--- a\\n+++ b\\n"},
+        {"ref": "patch_1", "type": "edit_file", "path": "lib/y.ex", "old_string": "a", "new_string": "b"},
         {"ref": "cmd_1", "type": "run_command", "cmd": "mix", "args": ["test"]},
         {"type": "claim", "statement": "tests pass",
          "evidence": {"source_intent_ref": "cmd_1", "condition": "exit_code_equals", "value": 0}}
@@ -76,19 +76,21 @@ defmodule Current.ProposalDecoderTest do
       assert claim.proposal_id == proposal.id
     end
 
-    test "write_file and file_patch persist inline content to BlobStore" do
+    test "write_file and edit_file persist inline content to BlobStore" do
       json = ~s({
         "intents": [
           {"type": "write_file", "path": "lib/x.ex", "contents": "defmodule X do\\nend\\n"},
-          {"type": "file_patch", "path": "lib/y.ex", "diff": "--- a\\n+++ b\\n"}
+          {"type": "edit_file", "path": "lib/y.ex", "old_string": "old", "new_string": "new"}
         ]
       })
 
-      assert {:ok, %Proposal{intents: [write, patch]}} =
+      assert {:ok, %Proposal{intents: [write, edit]}} =
                ProposalDecoder.decode(json, workflow_id())
 
       assert {:ok, "defmodule X do\nend\n"} = BlobStore.read(write.contents_artifact_id)
-      assert {:ok, "--- a\n+++ b\n"} = BlobStore.read(patch.diff_artifact_id)
+      assert {:ok, "old"} = BlobStore.read(edit.old_artifact_id)
+      assert {:ok, "new"} = BlobStore.read(edit.new_artifact_id)
+      assert edit.replace_all == false
     end
 
     test "run_command defaults args to [] when omitted" do
@@ -267,7 +269,7 @@ defmodule Current.ProposalDecoderTest do
     end
 
     test "an observation may only wrap a read" do
-      for type <- ["write_file", "delete_file", "file_patch", "run_command", "claim", "report"] do
+      for type <- ["write_file", "delete_file", "edit_file", "run_command", "claim", "report"] do
         json = ~s({"observe": [
           {"intent": {"type": "read_file", "path": "a"}},
           {"intent": {"type": "#{type}"}}
@@ -317,6 +319,19 @@ defmodule Current.ProposalDecoderTest do
                )
 
       assert reason =~ "reason"
+    end
+
+    test "edit_file rejects an empty or unchanged old_string" do
+      empty =
+        ~s({"intents": [{"type": "edit_file", "path": "a", "old_string": "", "new_string": "x"}]})
+
+      same =
+        ~s({"intents": [{"type": "edit_file", "path": "a", "old_string": "x", "new_string": "x"}]})
+
+      assert {:error, r1} = ProposalDecoder.decode(empty, workflow_id())
+      assert r1 =~ "must not be empty"
+      assert {:error, r2} = ProposalDecoder.decode(same, workflow_id())
+      assert r2 =~ "identical"
     end
 
     test "the wire schema describes exactly this shape" do

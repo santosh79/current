@@ -7,7 +7,7 @@ defmodule Current.EffectApplicatorTest do
   # trivially satisfied and only the intent's own behaviour is under test.
   # The boundary itself is covered in "apply/3 - project_dir boundary".
 
-  describe "apply/3 - file_patch" do
+  describe "apply/3 - edit_file" do
     setup do
       dir = System.tmp_dir!() |> Path.join("effect_applicator_test_#{:rand.uniform(1_000_000)}")
       File.mkdir_p!(dir)
@@ -15,69 +15,74 @@ defmodule Current.EffectApplicatorTest do
       {:ok, dir: dir}
     end
 
-    test "applies a unified diff to an existing file", %{dir: dir} do
+    defp edit(path, old, new, opts \\ []) do
+      {:ok, old_id} = Current.BlobStore.put(old)
+      {:ok, new_id} = Current.BlobStore.put(new)
+
+      %Intent.EditFile{
+        id: Id.generate(),
+        proposal_id: Id.generate(),
+        path: path,
+        old_artifact_id: old_id,
+        new_artifact_id: new_id,
+        replace_all: Keyword.get(opts, :replace_all, false)
+      }
+    end
+
+    test "replaces the text, and records before and after", %{dir: dir} do
       path = Path.join(dir, "signup.ex")
       File.write!(path, "defmodule Signup do\nend\n")
 
-      diff =
-        [
-          "--- signup.ex",
-          "+++ signup.ex",
-          "@@ -1,2 +1,3 @@",
-          " defmodule Signup do",
-          "+  def validate_email(email), do: String.contains?(email, \"@\")",
-          " end",
-          ""
-        ]
-        |> Enum.join("\n")
+      intent =
+        edit(path, "defmodule Signup do\n", "defmodule Signup do\n  def ok, do: true\n")
 
-      {:ok, diff_artifact_id} = Current.BlobStore.put(diff)
-
-      intent = %Intent.FilePatch{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        path: path,
-        diff_artifact_id: diff_artifact_id
-      }
-
-      assert !String.contains?(File.read!(path), "def validate_email")
-
-      assert {:ok, %Current.EffectResult.FilePatch{} = result} =
+      assert {:ok, %Current.EffectResult.EditFile{} = result} =
                EffectApplicator.apply(intent, [], "/")
 
       assert result.path == path
-      assert File.read!(path) =~ "def validate_email"
+      assert result.replacements == 1
+      assert File.read!(path) == "defmodule Signup do\n  def ok, do: true\nend\n"
+
+      assert {:ok, "defmodule Signup do\nend\n"} =
+               Current.BlobStore.read(result.before_artifact_id)
+
+      assert {:ok, after_contents} = Current.BlobStore.read(result.after_artifact_id)
+      assert after_contents == File.read!(path)
+    end
+
+    test "replace_all replaces every occurrence", %{dir: dir} do
+      path = Path.join(dir, "a.ex")
+      File.write!(path, "foo foo foo")
+
+      assert {:ok, %{replacements: 3}} =
+               EffectApplicator.apply(edit(path, "foo", "bar", replace_all: true), [], "/")
+
+      assert File.read!(path) == "bar bar bar"
     end
 
     test "returns error if the file does not exist", %{dir: dir} do
-      non_existent_path = Path.join(dir, "nonexistent.ex")
-      diff_contents = "--- a\n+++ b\n"
-      {:ok, diff_artifact_id} = Current.BlobStore.put(diff_contents)
+      path = Path.join(dir, "nonexistent.ex")
 
-      intent = %Intent.FilePatch{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        path: non_existent_path,
-        diff_artifact_id: diff_artifact_id
-      }
-
-      assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
-      assert reason =~ "not found" or reason =~ "no such file"
+      assert {:error, reason} = EffectApplicator.apply(edit(path, "a", "b"), [], "/")
+      assert reason =~ "file not found"
     end
 
-    test "returns error if the diff does not apply cleanly", %{dir: dir} do
+    test "returns error, and leaves the file alone, if old_string is not found", %{dir: dir} do
       path = Path.join(dir, "app.ex")
       File.write!(path, "defmodule App do\nend\n")
-      {:ok, diff_artifact_id} = Current.BlobStore.put(bad_diff())
 
-      intent = %Intent.FilePatch{
-        id: Id.generate(),
-        proposal_id: Id.generate(),
-        path: path,
-        diff_artifact_id: diff_artifact_id
-      }
+      assert {:error, reason} = EffectApplicator.apply(edit(path, "Nope", "x"), [], "/")
+      assert reason =~ "not found in the file"
+      assert File.read!(path) == "defmodule App do\nend\n"
+    end
 
-      assert {:error, _reason} = EffectApplicator.apply(intent, [], "/")
+    test "returns error if old_string matches more than once", %{dir: dir} do
+      path = Path.join(dir, "app.ex")
+      File.write!(path, "foo foo")
+
+      assert {:error, reason} = EffectApplicator.apply(edit(path, "foo", "bar"), [], "/")
+      assert reason =~ "matches 2 places"
+      assert File.read!(path) == "foo foo"
     end
   end
 
@@ -508,18 +513,6 @@ defmodule Current.EffectApplicatorTest do
       assert {:error, reason} = EffectApplicator.apply(intent, [], "/")
       assert reason =~ "relative"
     end
-  end
-
-  defp bad_diff do
-    [
-      "--- app.ex",
-      "+++ app.ex",
-      "@@ -1,2 +1,3 @@",
-      " defmodule WrongModule do",
-      "+  def bad, do: true",
-      " end"
-    ]
-    |> Enum.join("\n")
   end
 
   defp fetch_matches(artifact_id) do

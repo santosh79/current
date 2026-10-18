@@ -151,7 +151,7 @@ defmodule Current.CLITest do
       assert output =~ ~r/model\s+#{Regex.escape(model())}/
       assert output =~ "Ctrl-C detaches"
       assert output =~ "PROPOSED"
-      assert output =~ "FilePatch"
+      assert output =~ "EditFile"
       assert output =~ "✓ Proposal validated"
       assert output =~ "✓ Workflow completed"
       assert output =~ "MODE: PLAN\n0 effects executed."
@@ -199,8 +199,8 @@ defmodule Current.CLITest do
       proposal_id = id_after(ran, "current approve")
 
       review = cli!(["review", proposal_id])
-      assert review =~ "# Proposal review"
-      assert review =~ "+  def validate_email(email)"
+      assert review =~ "**Replace**"
+      assert review =~ "  def validate_email(email)"
 
       # Not approved yet, so it can't be applied.
       assert cli_error(["apply", proposal_id]) =~
@@ -243,7 +243,7 @@ defmodule Current.CLITest do
       doc = cli!(["review", proposal_id, "--json"]) |> JSON.decode!()
 
       assert doc["schema"] == "current.review/v1"
-      assert [%{"type" => "FilePatch", "artifact" => %{"truncated" => false}}] = doc["intents"]
+      assert [%{"type" => "EditFile", "old_string" => %{"truncated" => false}}] = doc["intents"]
     end
   end
 
@@ -273,13 +273,13 @@ defmodule Current.CLITest do
 
       output = cli!(["proposal", proposal_id])
       assert output =~ "Status    planned (plan mode)"
-      assert output =~ "1. FilePatch"
+      assert output =~ "1. EditFile"
 
-      diff_id = id_after(output, "diff")
-      diff = cli!(["artifact", Current.CLI.Render.short(diff_id)])
+      new_id = id_after(output, "new")
+      new_text = cli!(["artifact", Current.CLI.Render.short(new_id)])
 
-      assert {:ok, ^diff} = Current.BlobStore.read(diff_id)
-      assert diff =~ "+  def validate_email(email)"
+      assert {:ok, ^new_text} = Current.BlobStore.read(new_id)
+      assert new_text =~ "def validate_email(email)"
     end
 
     test "artifact bytes pass through unchanged" do
