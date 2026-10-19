@@ -1,8 +1,8 @@
-defmodule Current.RPC do
+defmodule Current.API do
   @moduledoc """
-  The Current runtime's public control-plane API: the only module a
-  client (the `current` CLI today; an IDE plugin, TUI or web gateway
-  later) calls on a running node.
+  The Current runtime's public control-plane API: the only module the
+  HTTP layer (`Current.HTTP.Router`) calls. Every client -- the `current`
+  CLI, an IDE plugin, a TUI, a script -- reaches the runtime over HTTP.
 
   Everything is request/response and returns plain data. No function
   takes a client pid or pushes messages to a client, so a client holds
@@ -10,8 +10,8 @@ defmodule Current.RPC do
   up again later by id. Canonical state stays in the runtime's committed
   history.
 
-  Keeping this surface explicit is the point: clients depend on these
-  functions, not on EventStore, WorkflowStore or BlobStore, which
+  Keeping this surface explicit is the point: the HTTP routes depend on
+  these functions, not on EventStore, WorkflowStore or BlobStore, which
   stay free to change behind it.
   """
 
@@ -33,18 +33,19 @@ defmodule Current.RPC do
   @spec submit_task(Request.t(), Path.t()) ::
           {:ok, Current.Id.t()} | {:error, {:unknown_model, String.t()}} | {:error, term()}
   def submit_task(%Request{} = request, project_dir) when is_binary(project_dir) do
-    ActivityHub.rpc(:submit_task, [
+    ActivityHub.api(:submit_task, [
       "#{request.mode} #{inspect(request.input)}",
       project_dir,
       "model #{request.model}"
     ])
 
     # submit_task/3 wants a listener pid. This call's process exits as
-    # soon as it returns, so notifications sent to it are dropped --
-    # clients learn about progress by polling, never by messages.
+    # soon as it returns (the router calls from a short-lived task), so
+    # notifications sent to it are dropped -- clients learn about progress
+    # by polling, never by messages.
     result = Current.submit_task(request, self(), project_dir)
 
-    ActivityHub.rpc_result(
+    ActivityHub.api_result(
       :submit_task,
       case result do
         {:ok, "sha256:" <> hex} -> "accepted as task " <> binary_part(hex, 0, 12)
@@ -131,7 +132,7 @@ defmodule Current.RPC do
   # Resolves the proposal, requires an :apply workflow, runs `fun`, and
   # records the request and its outcome in the activity log.
   defp logged(function, proposal_id, ok_text, fun) do
-    ActivityHub.rpc(function, [proposal_id])
+    ActivityHub.api(function, [proposal_id])
 
     result =
       with {:ok, ref} <- Inspector.resolve_proposal(proposal_id),
@@ -140,7 +141,7 @@ defmodule Current.RPC do
         {:ok, ref.workflow_id}
       end
 
-    ActivityHub.rpc_result(
+    ActivityHub.api_result(
       function,
       case result do
         {:ok, _workflow_id} -> ok_text
@@ -159,7 +160,7 @@ defmodule Current.RPC do
   @spec workflow(String.t()) ::
           {:ok, Inspector.workflow_view()} | {:error, Inspector.lookup_error()}
   def workflow(id) do
-    ActivityHub.rpc(:workflow, [id])
+    ActivityHub.api(:workflow, [id])
     Inspector.workflow(id)
   end
 
@@ -167,7 +168,7 @@ defmodule Current.RPC do
   @spec proposal(String.t()) ::
           {:ok, Inspector.proposal_view()} | {:error, Inspector.lookup_error()}
   def proposal(id) do
-    ActivityHub.rpc(:proposal, [id])
+    ActivityHub.api(:proposal, [id])
     Inspector.proposal(id)
   end
 
@@ -178,14 +179,14 @@ defmodule Current.RPC do
   @spec review(String.t(), Inspector.review_opts()) ::
           {:ok, Inspector.review_view()} | {:error, Inspector.lookup_error()}
   def review(id, opts) when is_binary(id) and is_map(opts) do
-    ActivityHub.rpc(:review, [id])
+    ActivityHub.api(:review, [id])
     Inspector.review(id, opts)
   end
 
   @doc "An artifact's full id and exact bytes."
   @spec artifact(String.t()) :: {:ok, Current.Id.t(), binary()} | {:error, term()}
   def artifact(id) do
-    ActivityHub.rpc(:artifact, [id])
+    ActivityHub.api(:artifact, [id])
     Inspector.artifact(id)
   end
 
@@ -216,7 +217,7 @@ defmodule Current.RPC do
   @doc "Whether the runtime is up, and what it is configured to use."
   @spec health() :: map()
   def health do
-    ActivityHub.rpc(:health)
+    ActivityHub.api(:health)
     status()
   end
 
@@ -226,7 +227,7 @@ defmodule Current.RPC do
   """
   @spec models() :: [String.t()]
   def models do
-    ActivityHub.rpc(:models)
+    ActivityHub.api(:models)
 
     {:ok, pid} = Current.ModelCatalog.find_supervisor_pid()
 

@@ -1,160 +1,264 @@
 defmodule Current.CLI.Client do
   @moduledoc """
-  Client-side transport: how the CLI reaches `Current.RPC` on a running
-  node. It only ever calls Current.RPC, and turns every transport
-  failure into an `{:error, reason}` value instead of an exception.
+  Client-side transport: how the CLI reaches a running Current runtime,
+  which is over its HTTP API (`Current.HTTP.Router`). It speaks plain
+  HTTP/JSON through OTP's `:httpc`, so the escript needs no dependencies,
+  and turns every failure into an `{:error, reason}` value instead of an
+  exception.
 
-  The node is `current@localhost` unless `CURRENT_NODE` says otherwise
-  (a bare name gets `@localhost`). `bin/current-server` starts the node
-  under the same name. Both sides authenticate with the Erlang cookie:
-  `~/.erlang.cookie` by default, or `CURRENT_COOKIE`. The CLI joins as a
-  hidden node, so it never becomes part of a cluster.
+  The runtime is at `http://127.0.0.1:4000` unless `CURRENT_URL` says
+  otherwise (a bare `host:port` gets `http://`). `bin/current-server`
+  starts the runtime listening there; see `Current.HTTP.Server` for how it
+  is configured.
 
-  `local/0` calls Current.RPC in this VM instead, which is what tests use.
+  Answers come back as decoded JSON: maps with string keys, exactly the
+  documents the API serves. Nothing is turned back into runtime structs,
+  so a client written in any language sees the same data the CLI does.
+
+  `local/0` sends requests to `Current.HTTP.Router` in this VM, through
+  `Plug.Test`, instead of over a socket. It is the real router, minus the
+  network, which is what tests use.
+
+  ## Errors
+
+    * `:runtime_unavailable` -- nothing is listening at the URL;
+    * `{:http_failed, reason}` -- the request failed on the way (`:timeout`,
+      a TLS error, ...);
+    * `{:api_error, %{status:, code:, message:, details:}}` -- the runtime
+      answered with an error; `code` is the API's stable code (for example
+      `"not_found"` or `"ambiguous_id"`) and `details` is a map with string
+      keys or nil;
+    * `{:bad_response, status}` -- the answer wasn't something this client
+      understands (a proxy's error page, say).
   """
 
-  alias Current.Request
+  @default_url "http://127.0.0.1:4000"
+  @request_timeout_ms 30_000
+  @connect_timeout_ms 3_000
 
-  @rpc_timeout_ms 30_000
-  @default_host "localhost"
+  @enforce_keys [:url, :send]
+  defstruct [:url, :send]
 
-  @enforce_keys [:node, :call]
-  defstruct [:node, :call]
+  @type t :: %__MODULE__{
+          url: String.t(),
+          send: (:get | :post, String.t(), binary() | nil -> raw())
+        }
 
-  @type t :: %__MODULE__{node: node(), call: (atom(), [term()] -> term())}
+  @typep raw :: {:ok, pos_integer(), [{String.t(), String.t()}], binary()} | {:error, term()}
+
+  @type api_error :: %{
+          status: pos_integer(),
+          code: String.t() | nil,
+          message: String.t(),
+          details: map() | nil
+        }
 
   @type error ::
           :runtime_unavailable
-          | {:rpc_failed, term()}
-          | {:runtime_raised, String.t()}
+          | {:http_failed, term()}
+          | {:api_error, api_error()}
+          | {:bad_response, pos_integer()}
 
   ## Connecting
 
-  @doc "Connects to the runtime node."
-  @spec connect() :: {:ok, t()} | {:error, :runtime_unavailable}
+  @doc """
+  A client for the runtime at `base_url/0`. Nothing is sent yet, so a
+  runtime that isn't running shows up as `:runtime_unavailable` on the
+  first request.
+  """
+  @spec connect() :: {:ok, t()}
   def connect do
-    target = target_node()
-
-    with :ok <- registered(target),
-         :ok <- start_distribution(target),
-         :ok <- set_cookie(target),
-         true <- Node.connect(target) do
-      {:ok,
-       %__MODULE__{
-         node: target,
-         call: fn fun, args -> :erpc.call(target, Current.RPC, fun, args, @rpc_timeout_ms) end
-       }}
-    else
-      {:error, reason} -> {:error, reason}
-      _not_connected -> {:error, :runtime_unavailable}
-    end
+    url = base_url()
+    {:ok, %__MODULE__{url: url, send: fn method, path, body -> http(url, method, path, body) end}}
   end
 
-  @doc "A client for Current.RPC in this VM."
+  @doc "A client for `Current.HTTP.Router` in this VM, without a socket."
   @spec local() :: {:ok, t()}
-  def local do
-    {:ok, %__MODULE__{node: node(), call: fn fun, args -> apply(Current.RPC, fun, args) end}}
-  end
+  def local, do: {:ok, %__MODULE__{url: "(in-process)", send: &plug/3}}
 
-  @spec target_node() :: node()
-  def target_node do
-    case System.get_env("CURRENT_NODE") do
+  @doc "The runtime's base URL: `CURRENT_URL`, or #{@default_url}."
+  @spec base_url() :: String.t()
+  def base_url do
+    case System.get_env("CURRENT_URL") do
       value when value in [nil, ""] ->
-        :"current@#{@default_host}"
+        @default_url
 
       value ->
-        if String.contains?(value, "@"),
-          do: String.to_atom(value),
-          else: :"#{value}@#{@default_host}"
+        value = String.trim_trailing(value, "/")
+        if String.contains?(value, "://"), do: value, else: "http://" <> value
     end
   end
 
-  ## Current.RPC
+  ## The API
 
-  def submit_task(client, %Request{} = request, project_dir),
-    do: call(client, :submit_task, [request, project_dir])
+  @doc """
+  Submits a task. `params` has `:prompt`, `:model`, `:dir` and `:mode`
+  (`"plan"` or `"apply"`), and optionally `:timeout_ms`. Returns its id.
+  """
+  @spec submit_task(t(), map()) :: {:ok, String.t()} | {:error, error()}
+  def submit_task(client, params) do
+    params = Map.reject(params, fn {_key, value} -> is_nil(value) end)
 
-  def workflow(client, id), do: call(client, :workflow, [id])
-  def proposal(client, id), do: call(client, :proposal, [id])
+    with {:ok, %{"task_id" => task_id}} <- json(client, :post, "/v1/tasks", params) do
+      {:ok, task_id}
+    end
+  end
 
-  @doc "Live activity of a workflow after `after_seq`; see Current.RPC.activity/3."
-  def activity(client, workflow_id, epoch, after_seq),
-    do: call(client, :activity, [workflow_id, epoch, after_seq])
+  def workflow(client, id), do: json(client, :get, "/v1/workflows/" <> segment(id))
+  def proposal(client, id), do: json(client, :get, "/v1/proposals/" <> segment(id))
 
-  def artifact(client, id), do: call(client, :artifact, [id])
-  def review(client, id, opts), do: call(client, :review, [id, opts])
-  def approve(client, id, metadata), do: call(client, :approve, [id, metadata])
-  def reject(client, id, metadata), do: call(client, :reject, [id, metadata])
-  def apply_proposal(client, id), do: call(client, :apply_proposal, [id])
+  @doc """
+  Live activity of a workflow after `after_seq`; see
+  `Current.API.activity/3`. `workflow_id` is a full id.
+  """
+  def activity(client, workflow_id, epoch, after_seq) do
+    params = [epoch: epoch, after_seq: after_seq]
+    json(client, :get, "/v1/workflows/" <> segment(workflow_id) <> "/activity" <> query(params))
+  end
 
-  @spec models(t()) :: [String.t()] | {:error, term()}
+  @doc "The `current.review/v1` document for a proposal (`opts` has `:max_lines` and `:raw`)."
+  def review(client, id, opts) do
+    params = [max_lines: opts[:max_lines], raw: if(opts[:raw], do: true)]
+    json(client, :get, "/v1/proposals/" <> segment(id) <> "/review" <> query(params))
+  end
+
+  @doc "Approves a proposal. `metadata` has `:message` and `:reviewed_by`."
+  def approve(client, id, metadata), do: decide(client, id, "approve", metadata)
+  def reject(client, id, metadata), do: decide(client, id, "reject", metadata)
+
+  @spec apply_proposal(t(), String.t()) :: {:ok, String.t()} | {:error, error()}
+  def apply_proposal(client, id) do
+    with {:ok, %{"workflow_id" => workflow_id}} <-
+           json(client, :post, "/v1/proposals/" <> segment(id) <> "/apply", %{}) do
+      {:ok, workflow_id}
+    end
+  end
+
+  @doc "An artifact's full id and exact bytes."
+  @spec artifact(t(), String.t()) :: {:ok, String.t(), binary()} | {:error, error()}
+  def artifact(client, id) do
+    with {:ok, headers, body} <- request(client, :get, "/v1/artifacts/" <> segment(id), nil) do
+      {:ok, header(headers, "x-current-artifact-id") || id, body}
+    end
+  end
+
+  @spec models(t()) :: {:ok, [String.t()]} | {:error, error()}
   def models(client) do
-    call(client, :models, [])
+    with {:ok, %{"models" => models}} <- json(client, :get, "/v1/models"), do: {:ok, models}
   end
 
+  @spec health(t()) :: {:ok, map()} | {:error, error()}
   def health(client) do
-    case call(client, :health, []) do
-      %{status: _} = health -> {:ok, health}
-      {:error, _} = error -> error
+    with {:ok, %{"status" => _} = health} <- json(client, :get, "/v1/health"), do: {:ok, health}
+  end
+
+  defp decide(client, id, verb, metadata) do
+    body = Map.take(metadata, [:message, :reviewed_by])
+
+    with {:ok, %{"workflow_id" => workflow_id}} <-
+           json(client, :post, "/v1/proposals/" <> segment(id) <> "/" <> verb, body) do
+      {:ok, workflow_id}
     end
   end
 
-  defp call(%__MODULE__{call: call}, fun, args) do
-    call.(fun, args)
-  catch
-    :error, {:erpc, :noconnection} ->
-      {:error, :runtime_unavailable}
+  ## Requests
 
-    :error, {:erpc, reason} ->
-      {:error, {:rpc_failed, reason}}
+  # An id is a path segment. Colons ("sha256:...") are left alone.
+  defp segment(id), do: URI.encode(id, &(URI.char_unreserved?(&1) or &1 == ?:))
 
-    # erpc re-raises a remote exception as {:exception, reason, stack}.
-    :error, {:exception, reason, _stack} ->
-      {:error, {:runtime_raised, Exception.format_banner(:error, reason)}}
-  end
-
-  ## Distribution
-
-  # Asks epmd on the node's host whether the node is registered before
-  # starting distribution, so "not running" is a quick, quiet answer
-  # rather than net_kernel crash reports.
-  defp registered(target) do
-    [name, host] = target |> Atom.to_string() |> String.split("@", parts: 2)
-
-    case :erl_epmd.names(String.to_charlist(host)) do
-      {:ok, names} ->
-        if Enum.any?(names, fn {n, _port} -> to_string(n) == name end),
-          do: :ok,
-          else: {:error, :runtime_unavailable}
-
-      {:error, _no_epmd} ->
-        {:error, :runtime_unavailable}
+  defp query(pairs) do
+    case for({key, value} <- pairs, value != nil, do: {key, value}) do
+      [] -> ""
+      pairs -> "?" <> URI.encode_query(pairs)
     end
   end
 
-  defp start_distribution(target) do
-    if Node.alive?() do
-      :ok
-    else
-      # Same name domain as the node: a dotted host means --name.
-      domain =
-        if target |> Atom.to_string() |> String.contains?("."), do: :longnames, else: :shortnames
-
-      host = target |> Atom.to_string() |> String.split("@") |> List.last()
-      name = :"current_cli_#{System.pid()}@#{host}"
-
-      case :net_kernel.start(name, %{name_domain: domain, hidden: true}) do
-        {:ok, _pid} -> :ok
-        # No epmd means no named node is running on this host.
-        {:error, _reason} -> {:error, :runtime_unavailable}
+  defp json(client, method, path, body \\ nil) do
+    with {:ok, _headers, raw} <- request(client, method, path, body && JSON.encode!(body)) do
+      case JSON.decode(raw) do
+        {:ok, document} -> {:ok, document}
+        {:error, _reason} -> {:error, {:bad_response, 200}}
       end
     end
   end
 
-  defp set_cookie(target) do
-    case System.get_env("CURRENT_COOKIE") do
-      value when value in [nil, ""] -> :ok
-      cookie -> if Node.set_cookie(target, String.to_atom(cookie)), do: :ok
+  defp request(%__MODULE__{send: send}, method, path, body) do
+    case send.(method, path, body) do
+      {:ok, status, headers, raw} when status in 200..299 -> {:ok, headers, raw}
+      {:ok, status, _headers, raw} -> {:error, api_error(status, raw)}
+      {:error, reason} -> {:error, transport_error(reason)}
     end
+  end
+
+  defp api_error(status, raw) do
+    with {:ok, %{"error" => %{"message" => message} = error}} <- JSON.decode(raw) do
+      {:api_error,
+       %{
+         status: status,
+         code: error["code"],
+         message: message,
+         details: error["details"]
+       }}
+    else
+      _ -> {:bad_response, status}
+    end
+  end
+
+  # Nothing listening, or no way to reach the host: the runtime isn't up.
+  defp transport_error({:failed_connect, [_to_address, {_, _, :timeout}]}),
+    do: {:http_failed, :timeout}
+
+  defp transport_error({:failed_connect, _details}), do: :runtime_unavailable
+  defp transport_error(:timeout), do: {:http_failed, :timeout}
+  defp transport_error(reason), do: {:http_failed, reason}
+
+  defp header(headers, name) do
+    Enum.find_value(headers, fn {key, value} -> if key == name, do: value end)
+  end
+
+  ## Transports
+
+  defp http(base_url, method, path, body) do
+    {:ok, _} = Application.ensure_all_started(:inets)
+    url = String.to_charlist(base_url <> path)
+    headers = [{~c"accept", ~c"application/json"}]
+
+    request =
+      case body do
+        nil -> {url, headers}
+        body -> {url, headers, ~c"application/json", body}
+      end
+
+    http_options =
+      [timeout: @request_timeout_ms, connect_timeout: @connect_timeout_ms, autoredirect: false] ++
+        tls_options(base_url)
+
+    case :httpc.request(method, request, http_options, body_format: :binary) do
+      {:ok, {{_version, status, _reason}, headers, body}} ->
+        {:ok, status, Enum.map(headers, fn {k, v} -> {to_string(k), to_string(v)} end), body}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # An https URL (a gateway in front of the runtime) is verified against
+  # the system's CA certificates.
+  defp tls_options("https://" <> _) do
+    {:ok, _} = Application.ensure_all_started(:ssl)
+    [ssl: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]]
+  end
+
+  defp tls_options(_url), do: []
+
+  defp plug(method, path, body) do
+    conn = Plug.Test.conn(method, path, body)
+
+    conn =
+      if body, do: Plug.Conn.put_req_header(conn, "content-type", "application/json"), else: conn
+
+    conn = Current.HTTP.Router.call(conn, Current.HTTP.Router.init([]))
+
+    {:ok, conn.status, conn.resp_headers, IO.iodata_to_binary(conn.resp_body)}
   end
 end

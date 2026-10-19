@@ -1,14 +1,16 @@
 defmodule Current.CLI.Render do
   @moduledoc """
-  Turns the data returned by Current.Inspector into terminal text.
+  Turns what the runtime's HTTP API returns into terminal text.
+
+  The input is the API's JSON, decoded: maps with string keys, atoms as
+  strings, and every struct a map whose `"type"` is the last part of its
+  module name (`"EffectApplied"`, `"EditFile"`; see `Current.HTTP.Encode`).
+  Nothing here knows the runtime's own types, so the CLI is a client like
+  any other.
 
   Pure functions from data to strings, so the output can be tested
-  without a running node. Nothing here reads from Current.
+  without a running runtime. Nothing here talks to Current.
   """
-
-  alias Current.{EffectResult, Event, Intent}
-  alias Current.Error.{ProposalProductionError, ValidationError}
-  alias Current.EventStore.Entry
 
   @short_hex 12
 
@@ -26,10 +28,10 @@ defmodule Current.CLI.Render do
     """
   end
 
-  def outcome(%{entries: entries, workflow_id: workflow_id} = view) do
-    events = Enum.map(entries, & &1.event)
+  def outcome(%{"entries" => entries, "workflow_id" => workflow_id} = view) do
+    events = Enum.map(entries, & &1["event"])
     root = project_dir(view)
-    produced = find(events, Event.ProposalProduced)
+    produced = find(events, "ProposalProduced")
 
     [
       if(root, do: ["", "Project  #{root}"]),
@@ -38,97 +40,109 @@ defmodule Current.CLI.Render do
       steps(events, produced, root),
       claim_checks(entries, root),
       "",
-      "MODE: #{view.mode |> to_string() |> String.upcase()}",
+      "MODE: #{view["mode"] |> to_string() |> String.upcase()}",
       effects_line(events),
-      if(view.status == :waiting_for_approval and produced != nil,
+      if(view["status"] == "waiting_for_approval" and produced != nil,
         do: [
           "",
           "Waiting for approval. Nothing has been applied.",
-          "  current review #{short(produced.proposal.id)}",
-          "  current approve #{short(produced.proposal.id)} [-m <message>]"
+          "  current review #{short(produced["proposal"]["id"])}",
+          "  current approve #{short(produced["proposal"]["id"])} [-m <message>]"
         ]
       ),
       "",
       "Inspect",
       "  current events   #{short(workflow_id)}",
-      if(produced, do: "  current proposal #{short(produced.proposal.id)}"),
-      if(produced && produced.raw_output_blob_id,
-        do: "  current artifact #{short(produced.raw_output_blob_id)}   (raw model output)"
+      if(produced, do: "  current proposal #{short(produced["proposal"]["id"])}"),
+      if(produced && produced["raw_output_blob_id"],
+        do: "  current artifact #{short(produced["raw_output_blob_id"])}   (raw model output)"
       )
     ]
     |> lines()
   end
 
-  defp proposal_summary(%Event.ProposalProduced{proposal: proposal} = produced, root) do
+  defp proposal_summary(%{"proposal" => proposal} = produced, root) do
     [
       "",
       "Agent produced proposal",
-      "  proposal #{proposal.id}",
-      if(produced.raw_output_blob_id, do: "  raw      #{produced.raw_output_blob_id}"),
-      if(present?(proposal.justification), do: ["", indent(proposal.justification, 2)]),
+      "  proposal #{proposal["id"]}",
+      if(produced["raw_output_blob_id"], do: "  raw      #{produced["raw_output_blob_id"]}"),
+      if(present?(proposal["justification"]),
+        do: ["", indent(proposal["justification"], 2)]
+      ),
       "",
       "PROPOSED",
       "",
-      proposal.intents
+      proposal["intents"]
       |> Enum.with_index(1)
       |> Enum.map(fn {intent, n} ->
         {kind, detail} = describe(intent, root)
 
         "  #{String.pad_leading(Integer.to_string(n), 2)}  #{String.pad_trailing(kind, 12)} #{detail}"
       end),
-      if(list_present?(proposal.claims),
-        do: ["", "  Claims", Enum.map(proposal.claims, &"    - #{&1}")]
+      if(list_present?(proposal["claims"]),
+        do: ["", "  Claims", Enum.map(proposal["claims"], &"    - #{&1}")]
       )
     ]
   end
 
   defp steps(events, produced, root) do
-    already_explained? =
-      find(events, Event.ProposalProductionFailed) || find(events, Event.ProposalValidationFailed)
+    production_failed = find(events, "ProposalProductionFailed")
+    validation_failed = find(events, "ProposalValidationFailed")
+    already_explained? = production_failed || validation_failed
 
     [
       if(produced, do: "✓ Proposal decoded"),
-      case find(events, Event.ProposalProductionFailed) do
-        %{error: error} ->
+      case production_failed do
+        %{"error" => error} ->
           [
             "✗ Proposal production failed",
-            "    #{ProposalProductionError.message(error)}",
+            "    #{production_message(error)}",
             case error do
-              %ProposalProductionError{raw_output_blob_id: id} when is_binary(id) ->
-                "    raw  #{id}"
-
-              _ ->
-                nil
+              %{"raw_output_blob_id" => id} when is_binary(id) -> "    raw  #{id}"
+              _ -> nil
             end
           ]
 
         nil ->
           nil
       end,
-      if(find(events, Event.ProposalValidated), do: "✓ Proposal validated"),
-      case find(events, Event.ProposalValidationFailed) do
-        %{proposal: proposal, error: %ValidationError{} = error} ->
+      if(find(events, "ProposalValidated"), do: "✓ Proposal validated"),
+      case validation_failed do
+        %{"proposal" => proposal, "error" => %{"type" => "ValidationError"} = error} ->
           ["✗ Proposal validation failed", validation_error(proposal, error, root, 4)]
+
+        _ ->
+          nil
+      end,
+      if(find(events, "ProposalApproved"), do: "✓ Proposal approved"),
+      if(find(events, "ProposalRejected"), do: "✗ Proposal rejected"),
+      case terminal_event(events) do
+        %{"type" => "WorkflowCompleted"} ->
+          "✓ Workflow completed"
+
+        %{"type" => "WorkflowFailed"} when already_explained? != nil ->
+          "✗ Workflow failed"
+
+        %{"type" => "WorkflowFailed", "reason" => reason} ->
+          "✗ Workflow failed: #{to_text(reason)}"
+
+        %{"type" => "WorkflowAbandoned", "reason" => reason} ->
+          "✗ Workflow abandoned: #{to_text(reason)}"
 
         nil ->
           nil
-      end,
-      if(find(events, Event.ProposalApproved), do: "✓ Proposal approved"),
-      if(find(events, Event.ProposalRejected), do: "✗ Proposal rejected"),
-      case terminal_event(events) do
-        %Event.WorkflowCompleted{} -> "✓ Workflow completed"
-        %Event.WorkflowFailed{} when already_explained? != nil -> "✗ Workflow failed"
-        %Event.WorkflowFailed{reason: reason} -> "✗ Workflow failed: #{reason}"
-        %Event.WorkflowAbandoned{reason: reason} -> "✗ Workflow abandoned: #{reason}"
-        nil -> nil
       end
     ]
   end
 
+  defp production_message(%{"message" => message}) when is_binary(message), do: message
+  defp production_message(_error), do: "proposal production failed"
+
   defp effects_line(events) do
-    results = for %Event.EffectApplied{result: result} <- events, do: result
-    verified = Enum.count(results, &match?(%EffectResult.Claim{verified: true}, &1))
-    unverified = Enum.count(results, &match?(%EffectResult.Claim{verified: false}, &1))
+    results = for %{"type" => "EffectApplied", "result" => result} <- events, do: result
+    verified = Enum.count(results, &match?(%{"type" => "Claim", "verified" => true}, &1))
+    unverified = Enum.count(results, &match?(%{"type" => "Claim", "verified" => false}, &1))
 
     [
       plural(length(results), "effect") <> " executed",
@@ -147,9 +161,10 @@ defmodule Current.CLI.Render do
     applied = applied_effects(entries)
 
     checks =
-      for %Entry{event: %Event.EffectApplied{result: %EffectResult.Claim{} = claim}} <- entries do
+      for %{"event" => %{"type" => "EffectApplied", "result" => %{"type" => "Claim"} = claim}} <-
+            entries do
         [
-          "  #{mark(claim)} #{inspect(claim.statement)}",
+          "  #{mark(claim)} #{inspect(claim["statement"])}",
           "      " <>
             evidence_text(claim, applied, fn {_pos, intent, _result} ->
               describe_inline(intent, root) <> " ·"
@@ -166,7 +181,7 @@ defmodule Current.CLI.Render do
 
   @doc """
   The lines `current plan` / `current run` print for one item of live
-  activity (see Current.RPC.activity/2): when the model asks to see
+  activity (see Current.API.activity/3): when the model asks to see
   something, then how each request turned out.
 
       … round 1: the model asked to see 3 things
@@ -176,7 +191,7 @@ defmodule Current.CLI.Render do
   @spec activity([map()] | map()) :: [String.t()]
   def activity(items) when is_list(items), do: Enum.flat_map(items, &activity/1)
 
-  def activity(%{type: :requested, round: round, entries: entries}) do
+  def activity(%{"type" => "requested", "round" => round, "entries" => entries}) do
     count = length(entries)
 
     [
@@ -184,12 +199,12 @@ defmodule Current.CLI.Render do
     ]
   end
 
-  def activity(%{type: :settled, entries: entries}) do
+  def activity(%{"type" => "settled", "entries" => entries}) do
     Enum.map(entries, fn
-      %{status: :shown, label: label, bytes: bytes} ->
+      %{"status" => "shown", "label" => label, "bytes" => bytes} ->
         "      ✓ #{String.pad_trailing(label, @activity_label_width)} #{activity_size(bytes)}"
 
-      %{status: :refused, label: label, error: error} ->
+      %{"status" => "refused", "label" => label, "error" => error} ->
         "      ✗ #{String.pad_trailing(label, @activity_label_width)} refused: #{error}"
     end)
   end
@@ -197,99 +212,114 @@ defmodule Current.CLI.Render do
   defp activity_size(bytes) when bytes < 1024, do: "#{bytes} B"
   defp activity_size(bytes), do: "#{:erlang.float_to_binary(bytes / 1024, decimals: 1)} KB"
 
-  def status(health) do
+  @doc "The lines `current status` prints; `url` is where the runtime was reached."
+  def status(health, url) do
     [
-      "Current #{health.version} · #{health.node}",
-      "runtime #{health.status}",
-      "  WAL head  #{health.wal_head}",
-      "  builder   #{module_name(health.proposal_builder)}",
-      if(health.llm_proposal_timeout_ms,
-        do: "  timeout   #{div(health.llm_proposal_timeout_ms, 1000)}s per model call"
+      "Current #{health["version"]} · #{url}",
+      "runtime #{health["status"]}",
+      "  WAL head  #{health["wal_head"]}",
+      "  builder   #{module_name(health["proposal_builder"])}",
+      if(health["llm_proposal_timeout_ms"],
+        do: "  timeout   #{div(health["llm_proposal_timeout_ms"], 1000)}s per model call"
       ),
-      if(health[:llm_task_timeout_ms],
-        do: "            #{div(health.llm_task_timeout_ms, 1000)}s per task"
+      if(health["llm_task_timeout_ms"],
+        do: "            #{div(health["llm_task_timeout_ms"], 1000)}s per task"
       )
     ]
     |> lines()
   end
 
+  # The API gives a module as its atom's name: "Elixir.Current.Foo".
   defp module_name(nil), do: "(not configured)"
-  defp module_name(mod) when is_atom(mod), do: inspect(mod)
+  defp module_name(name) when is_binary(name), do: String.replace_prefix(name, "Elixir.", "")
   defp module_name(other), do: to_string(other)
 
   ## current events
 
-  def events(%{entries: entries} = view) do
+  def events(%{"entries" => entries} = view) do
     root = project_dir(view)
     applied = applied_effects(entries)
     header = "#{pad("POS", 6)}#{pad("EVENT", 28)}#{pad("TIME (UTC)", 14)}DETAIL"
 
     [
-      "Workflow  #{view.workflow_id}",
-      if(view.task, do: "Task      #{view.task.id}"),
+      "Workflow  #{view["workflow_id"]}",
+      if(view["task"], do: "Task      #{view["task"]["id"]}"),
       if(root, do: "Project   #{root}"),
-      "Status    #{view.status} (#{view.mode} mode)",
-      if(entries != [], do: "Date      #{entries |> hd() |> timestamp() |> DateTime.to_date()}"),
+      "Status    #{view["status"]} (#{view["mode"]} mode)",
+      case entries do
+        [first | _] -> date_line(timestamp(first))
+        [] -> nil
+      end,
       "",
       header,
       String.duplicate("─", 72),
-      Enum.map(entries, fn %Entry{position: position, event: event} = entry ->
+      Enum.map(entries, fn %{"position" => position, "event" => event} = entry ->
         String.trim_trailing(
           "#{pad(Integer.to_string(position), 6)}#{pad(event_name(event), 28)}" <>
             "#{pad(time(timestamp(entry)), 14)}#{truncate(table_detail(event, applied, root), 60)}"
         )
       end),
-      case find(Enum.map(entries, & &1.event), Event.ProposalProduced) do
-        %{proposal: proposal} -> ["", "Inspect", "  current proposal #{short(proposal.id)}"]
-        nil -> nil
+      case find(Enum.map(entries, & &1["event"]), "ProposalProduced") do
+        %{"proposal" => proposal} ->
+          ["", "Inspect", "  current proposal #{short(proposal["id"])}"]
+
+        nil ->
+          nil
       end
     ]
     |> lines()
   end
 
+  defp date_line(%DateTime{} = dt), do: "Date      #{DateTime.to_date(dt)}"
+  defp date_line(_), do: nil
+
   # Effects show what they returned, not just what they were asked to
   # do. A claim's evidence points at the effect it was checked against
   # by that effect's position in the table.
-  defp table_detail(%Event.EffectApplied{intent: intent, result: result}, applied, root),
-    do: effect_detail(intent, result, applied, root, fn {pos, _intent, _result} -> "##{pos}" end)
+  defp table_detail(
+         %{"type" => "EffectApplied", "intent" => intent, "result" => result},
+         applied,
+         root
+       ),
+       do:
+         effect_detail(intent, result, applied, root, fn {pos, _intent, _result} -> "##{pos}" end)
 
   defp table_detail(event, _applied, root), do: event_detail(event, root)
 
-  defp effect_detail(_intent, %EffectResult.Claim{} = claim, applied, _root, source_label),
+  defp effect_detail(_intent, %{"type" => "Claim"} = claim, applied, _root, source_label),
     do:
-      "Claim #{mark(claim)} #{evidence_text(claim, applied, source_label)} · #{inspect(claim.statement)}"
+      "Claim #{mark(claim)} #{evidence_text(claim, applied, source_label)} · #{inspect(claim["statement"])}"
 
-  defp effect_detail(intent, %EffectResult.Command{exit_code: code}, _applied, root, _),
+  defp effect_detail(intent, %{"type" => "Command", "exit_code" => code}, _applied, root, _),
     do: "#{describe_inline(intent, root)} · exit #{code}"
 
-  defp effect_detail(intent, %EffectResult.Grep{match_count: n}, _applied, root, _),
+  defp effect_detail(intent, %{"type" => "Grep", "match_count" => n}, _applied, root, _),
     do: "#{describe_inline(intent, root)} · #{plural(n, "match", "matches")}"
 
-  defp effect_detail(intent, %EffectResult.Glob{match_count: n}, _applied, root, _),
+  defp effect_detail(intent, %{"type" => "Glob", "match_count" => n}, _applied, root, _),
     do: "#{describe_inline(intent, root)} · #{plural(n, "match", "matches")}"
 
   defp effect_detail(intent, _result, _applied, root, _), do: describe_inline(intent, root)
 
   # intent id => {position, intent, result} for every applied effect.
   defp applied_effects(entries) do
-    for %Entry{position: pos, event: %Event.EffectApplied{intent: intent, result: result}} <-
-          entries,
+    for %{
+          "position" => pos,
+          "event" => %{"type" => "EffectApplied", "intent" => intent, "result" => result}
+        } <- entries,
         into: %{},
-        do: {intent.id, {pos, intent, result}}
+        do: {intent["id"], {pos, intent, result}}
   end
 
-  defp mark(%EffectResult.Claim{verified: true}), do: "✓"
-  defp mark(%EffectResult.Claim{}), do: "✗"
+  defp mark(%{"verified" => true}), do: "✓"
+  defp mark(_claim), do: "✗"
 
   # What the claim was checked against, built from the source effect's
   # own recorded result. Falls back to the applicator's reason if the
   # source isn't in this history.
-  defp evidence_text(
-         %EffectResult.Claim{evidence: evidence, reason: reason},
-         applied,
-         source_label
-       ) do
-    with %{source_intent_id: source_id, condition: condition, value: expected} <- evidence,
+  defp evidence_text(%{"evidence" => evidence, "reason" => reason}, applied, source_label) do
+    with %{"source_intent_id" => source_id, "condition" => condition, "value" => expected} <-
+           evidence,
          {_pos, _intent, result} = source <- Map.get(applied, source_id),
          observed when is_binary(observed) <- observed(condition, expected, result) do
       "#{source_label.(source)} #{observed}"
@@ -298,13 +328,13 @@ defmodule Current.CLI.Render do
     end
   end
 
-  defp observed(:exit_code_equals, expected, %EffectResult.Command{exit_code: code}),
+  defp observed("exit_code_equals", expected, %{"type" => "Command", "exit_code" => code}),
     do: "exit #{code} (expected #{expected})"
 
-  defp observed(:match_count_equals, expected, %{match_count: n}),
+  defp observed("match_count_equals", expected, %{"match_count" => n}),
     do: "#{plural(n, "match", "matches")} (expected #{expected})"
 
-  defp observed(:match_count_greater_than, expected, %{match_count: n}),
+  defp observed("match_count_greater_than", expected, %{"match_count" => n}),
     do: "#{plural(n, "match", "matches")} (expected > #{expected})"
 
   defp observed(_condition, _expected, _result), do: nil
@@ -312,75 +342,95 @@ defmodule Current.CLI.Render do
   defp plural(n, singular, plural \\ nil),
     do: "#{n} #{if n == 1, do: singular, else: plural || singular <> "s"}"
 
-  defp event_detail(%Event.TaskCreated{mode: mode, input: input}, _root),
+  defp event_detail(%{"type" => "TaskCreated", "mode" => mode, "input" => input}, _root),
     do: "#{mode} · #{inspect(input)}"
 
-  defp event_detail(%Event.ProposalProduced{proposal: proposal}, _root) do
-    count = length(proposal.intents)
-    "proposal #{short(proposal.id)} · #{count} #{if count == 1, do: "intent", else: "intents"}"
+  defp event_detail(%{"type" => "ProposalProduced", "proposal" => proposal}, _root) do
+    count = length(proposal["intents"])
+    "proposal #{short(proposal["id"])} · #{count} #{if count == 1, do: "intent", else: "intents"}"
   end
 
   defp event_detail(
-         %Event.ProposalValidationFailed{error: %ValidationError{reason: reason}},
+         %{
+           "type" => "ProposalValidationFailed",
+           "error" => %{"type" => "ValidationError"} = error
+         },
          _root
        ),
-       do: reason
+       do: error["reason"]
 
-  defp event_detail(%Event.ProposalProductionFailed{error: error}, _root),
-    do: ProposalProductionError.message(error)
+  defp event_detail(%{"type" => "ProposalProductionFailed", "error" => error}, _root),
+    do: production_message(error)
 
-  defp event_detail(%Event.EffectApplied{intent: intent}, root), do: describe_inline(intent, root)
+  defp event_detail(%{"type" => "EffectApplied", "intent" => intent}, root),
+    do: describe_inline(intent, root)
 
   # The claim itself is on the EffectApplied line just above.
-  defp event_detail(%Event.EffectFailed{intent: %Intent.Claim{}, reason: reason}, _root),
-    do: to_text(reason)
+  defp event_detail(
+         %{"type" => "EffectFailed", "intent" => %{"type" => "Claim"}, "reason" => reason},
+         _root
+       ),
+       do: to_text(reason)
 
-  defp event_detail(%Event.EffectFailed{intent: intent, reason: reason}, root),
+  defp event_detail(%{"type" => "EffectFailed", "intent" => intent, "reason" => reason}, root),
     do: "#{describe_inline(intent, root)}: #{to_text(reason)}"
 
-  defp event_detail(%Event.WorkflowFailed{reason: reason}, _root), do: to_text(reason)
-  defp event_detail(%Event.WorkflowAbandoned{reason: reason}, _root), do: to_text(reason)
-  defp event_detail(%Event.ModeInvalid{mode: mode}, _root), do: inspect(mode)
+  defp event_detail(%{"type" => "WorkflowFailed", "reason" => reason}, _root),
+    do: to_text(reason)
 
-  defp event_detail(%Event.ProposalApproved{metadata: %{message: message}}, _root),
-    do: inspect(message)
+  defp event_detail(%{"type" => "WorkflowAbandoned", "reason" => reason}, _root),
+    do: to_text(reason)
 
-  defp event_detail(%Event.ProposalRejected{metadata: %{message: message}}, _root),
-    do: inspect(message)
+  defp event_detail(%{"type" => "ModeInvalid", "mode" => mode}, _root), do: to_text(mode)
+
+  defp event_detail(
+         %{"type" => "ProposalApproved", "metadata" => %{"message" => message}},
+         _root
+       ),
+       do: inspect(message)
+
+  defp event_detail(
+         %{"type" => "ProposalRejected", "metadata" => %{"message" => message}},
+         _root
+       ),
+       do: inspect(message)
 
   defp event_detail(_event, _root), do: ""
 
   ## current proposal
 
-  def proposal(%{proposal: proposal} = view) do
-    root = view.project_dir
+  def proposal(%{"proposal" => proposal} = view) do
+    root = view["project_dir"]
+    intents = proposal["intents"]
 
     [
-      "Proposal  #{proposal.id}",
-      "Workflow  #{view.workflow_id}",
+      "Proposal  #{proposal["id"]}",
+      "Workflow  #{view["workflow_id"]}",
       if(root, do: "Project   #{root}"),
-      "Status    #{view.status} (#{view.mode} mode)",
-      if(view.raw_output_blob_id, do: "Raw       #{view.raw_output_blob_id}   (model output)"),
-      if(present?(proposal.justification),
-        do: ["", "Justification", indent(proposal.justification, 2)]
+      "Status    #{view["status"]} (#{view["mode"]} mode)",
+      if(view["raw_output_blob_id"],
+        do: "Raw       #{view["raw_output_blob_id"]}   (model output)"
       ),
-      observed(Map.get(proposal, :observations) || []),
+      if(present?(proposal["justification"]),
+        do: ["", "Justification", indent(proposal["justification"], 2)]
+      ),
+      observed(proposal["observations"] || []),
       "",
       "Intents",
-      proposal.intents
+      intents
       |> Enum.with_index(1)
-      |> Enum.map(fn {intent, n} -> intent_block(intent, n, proposal.intents, root) end),
-      if(list_present?(proposal.claims),
-        do: ["", "Claims", Enum.map(proposal.claims, &"  - #{&1}")]
+      |> Enum.map(fn {intent, n} -> intent_block(intent, n, intents, root) end),
+      if(list_present?(proposal["claims"]),
+        do: ["", "Claims", Enum.map(proposal["claims"], &"  - #{&1}")]
       ),
-      if(list_present?(proposal.dependencies),
-        do: ["", "Dependencies", Enum.map(proposal.dependencies, &"  - #{&1}")]
+      if(list_present?(proposal["dependencies"]),
+        do: ["", "Dependencies", Enum.map(proposal["dependencies"], &"  - #{&1}")]
       ),
-      if(view.validation_error,
+      if(view["validation_error"],
         do: [
           "",
           "✗ Validation failed",
-          validation_error(proposal, view.validation_error, root, 2)
+          validation_error(proposal, view["validation_error"], root, 2)
         ]
       ),
       case artifact_ids(proposal) do
@@ -391,7 +441,7 @@ defmodule Current.CLI.Render do
           [
             "",
             "View an artifact:  current artifact #{short(id)}",
-            "See them all:      current review #{short(proposal.id)}"
+            "See them all:      current review #{short(proposal["id"])}"
           ]
       end
     ]
@@ -410,87 +460,98 @@ defmodule Current.CLI.Render do
     ]
   end
 
-  defp fields(%Intent.ReadFile{path: p}, _, root), do: [{"path", rel(p, root)}]
-  defp fields(%Intent.DeleteFile{path: p}, _, root), do: [{"path", rel(p, root)}]
+  defp fields(%{"type" => "ReadFile", "path" => p}, _, root), do: [{"path", rel(p, root)}]
+  defp fields(%{"type" => "DeleteFile", "path" => p}, _, root), do: [{"path", rel(p, root)}]
 
-  defp fields(%Intent.EditFile{path: p} = edit, _, root),
+  defp fields(%{"type" => "EditFile", "path" => p} = edit, _, root),
     do:
       [
         {"path", rel(p, root)},
-        {"old", edit.old_artifact_id},
-        {"new", edit.new_artifact_id},
-        if(edit.replace_all, do: {"replace_all", "yes"})
+        {"old", edit["old_artifact_id"]},
+        {"new", edit["new_artifact_id"]},
+        if(edit["replace_all"], do: {"replace_all", "yes"})
       ]
       |> Enum.reject(&is_nil/1)
 
-  defp fields(%Intent.WriteFile{path: p, contents_artifact_id: id}, _, root),
+  defp fields(%{"type" => "WriteFile", "path" => p, "contents_artifact_id" => id}, _, root),
     do: [{"path", rel(p, root)}, {"contents", id}]
 
-  defp fields(%Intent.RunCommand{cmd: cmd, args: args}, _, _root),
-    do: [{"command", Enum.join([cmd | args || []], " ")}]
+  defp fields(%{"type" => "RunCommand", "cmd" => cmd} = intent, _, _root),
+    do: [{"command", Enum.join([cmd | intent["args"] || []], " ")}]
 
-  defp fields(%Intent.Grep{pattern: pattern, paths: paths}, _, root),
+  defp fields(%{"type" => "Grep", "pattern" => pattern} = intent, _, root),
     do: [
       {"pattern", inspect(pattern)},
-      {"paths", Enum.map_join(paths || [], ", ", &rel(&1, root))}
+      {"paths", Enum.map_join(intent["paths"] || [], ", ", &rel(&1, root))}
     ]
 
-  defp fields(%Intent.Glob{pattern: pattern, base_dir: base_dir}, _, root),
-    do: [{"pattern", inspect(pattern)}, {"base_dir", rel(base_dir, root)}]
+  defp fields(%{"type" => "Glob", "pattern" => pattern} = intent, _, root),
+    do: [{"pattern", inspect(pattern)}, {"base_dir", rel(intent["base_dir"], root)}]
 
-  defp fields(%Intent.Claim{} = claim, intents, _root) do
+  defp fields(%{"type" => "Claim"} = claim, intents, _root) do
     [
-      {"statement", inspect(claim.statement)},
-      if(claim.expected != nil, do: {"expected", inspect(claim.expected)}),
-      if(claim.evidence, do: {"evidence", evidence(claim.evidence, intents)})
+      {"statement", inspect(claim["statement"])},
+      if(claim["expected"] != nil, do: {"expected", inspect(claim["expected"])}),
+      if(claim["evidence"], do: {"evidence", evidence(claim["evidence"], intents)})
     ]
     |> Enum.reject(&is_nil/1)
   end
 
-  defp fields(%Intent.Report{summary: summary}, _, _root), do: [{"summary", summary || ""}]
+  defp fields(%{"type" => "Report"} = intent, _, _root),
+    do: [{"summary", intent["summary"] || ""}]
+
   defp fields(_intent, _, _root), do: []
 
   defp evidence(evidence, intents) do
     source =
-      case Enum.find_index(intents, &(&1.id == Map.get(evidence, :source_intent_id))) do
-        nil -> "intent #{inspect(Map.get(evidence, :source_intent_id))}"
+      case Enum.find_index(intents, &(&1["id"] == evidence["source_intent_id"])) do
+        nil -> "intent #{inspect(evidence["source_intent_id"])}"
         index -> "intent #{index + 1}"
       end
 
-    "#{source} · #{Map.get(evidence, :condition)} #{inspect(Map.get(evidence, :value))}"
+    "#{source} · #{evidence["condition"]} #{inspect(evidence["value"])}"
   end
 
   defp artifact_ids(proposal) do
-    Enum.flat_map(proposal.intents, fn
-      %Intent.EditFile{old_artifact_id: old, new_artifact_id: new} -> [old, new]
-      %Intent.WriteFile{contents_artifact_id: id} -> [id]
+    Enum.flat_map(proposal["intents"], fn
+      %{"type" => "EditFile", "old_artifact_id" => old, "new_artifact_id" => new} -> [old, new]
+      %{"type" => "WriteFile", "contents_artifact_id" => id} -> [id]
       _ -> []
     end)
   end
 
   ## Errors
 
-  def lookup_error(kind, id, :not_found), do: "no #{kind} matches #{id}"
+  @doc """
+  What to say when looking up a `kind` ("proposal", "workflow", ...) by
+  `id` failed with `reason`, an error from `Current.CLI.Client`.
+  """
+  def lookup_error(kind, id, {:api_error, %{code: "not_found"}}), do: "no #{kind} matches #{id}"
 
-  def lookup_error(_kind, id, :prefix_too_short),
+  def lookup_error(_kind, id, {:api_error, %{code: "prefix_too_short"}}),
     do: "#{id} is too short to look up; give at least 4 hex digits"
 
-  def lookup_error(kind, id, {:ambiguous, ids}) do
+  def lookup_error(kind, id, {:api_error, %{code: "ambiguous_id", details: %{"ids" => ids}}}) do
     lines(["#{id} matches #{length(ids)} #{kind}s:", Enum.map(ids, &"  #{&1}")])
   end
+
+  def lookup_error(kind, id, {:api_error, %{message: message}}),
+    do: "could not read #{kind} #{id}: #{message}"
 
   def lookup_error(kind, id, reason), do: "could not read #{kind} #{id}: #{inspect(reason)}"
 
   ## Shared
 
-  defp validation_error(proposal, %ValidationError{} = error, root, indent_by) do
+  defp validation_error(proposal, error, root, indent_by) do
+    intents = proposal["intents"]
+
     at =
-      case Enum.find_index(proposal.intents, &(&1.id == error.intent_id)) do
+      case Enum.find_index(intents, &(&1["id"] == error["intent_id"])) do
         nil ->
-          "intent #{error.intent_id}"
+          "intent #{error["intent_id"]}"
 
         index ->
-          {kind, detail} = describe(Enum.at(proposal.intents, index), root)
+          {kind, detail} = describe(Enum.at(intents, index), root)
           "at intent #{index + 1}: #{kind} #{detail}"
       end
 
@@ -498,39 +559,56 @@ defmodule Current.CLI.Render do
 
     [
       pad <> at,
-      "#{pad}reason: #{error.reason}",
-      if(error.details not in [nil, %{}], do: "#{pad}details: #{inspect(error.details)}")
+      "#{pad}reason: #{error["reason"]}",
+      if(error["details"] not in [nil, %{}],
+        do: "#{pad}details: #{JSON.encode!(error["details"])}"
+      )
     ]
   end
 
-  defp describe(%Intent.ReadFile{path: path}, root), do: {"ReadFile", rel(path, root)}
-  defp describe(%Intent.DeleteFile{path: path}, root), do: {"DeleteFile", rel(path, root)}
+  defp describe(%{"type" => "ReadFile", "path" => path}, root), do: {"ReadFile", rel(path, root)}
 
-  defp describe(%Intent.WriteFile{path: path, contents_artifact_id: id}, root),
+  defp describe(%{"type" => "DeleteFile", "path" => path}, root),
+    do: {"DeleteFile", rel(path, root)}
+
+  defp describe(%{"type" => "WriteFile", "path" => path, "contents_artifact_id" => id}, root),
     do: {"WriteFile", "#{rel(path, root)}  (contents #{short(id)})"}
 
-  defp describe(%Intent.EditFile{path: path, old_artifact_id: old, new_artifact_id: new}, root),
-    do: {"EditFile", "#{rel(path, root)}  (#{short(old)} → #{short(new)})"}
+  defp describe(
+         %{
+           "type" => "EditFile",
+           "path" => path,
+           "old_artifact_id" => old,
+           "new_artifact_id" => new
+         },
+         root
+       ),
+       do: {"EditFile", "#{rel(path, root)}  (#{short(old)} → #{short(new)})"}
 
-  defp describe(%Intent.RunCommand{cmd: cmd, args: args}, _root),
-    do: {"RunCommand", Enum.join([cmd | args || []], " ")}
+  defp describe(%{"type" => "RunCommand", "cmd" => cmd} = intent, _root),
+    do: {"RunCommand", Enum.join([cmd | intent["args"] || []], " ")}
 
-  defp describe(%Intent.Grep{pattern: pattern, paths: paths}, root),
-    do: {"Grep", "#{inspect(pattern)} in #{Enum.map_join(paths || [], ", ", &rel(&1, root))}"}
+  defp describe(%{"type" => "Grep", "pattern" => pattern} = intent, root),
+    do:
+      {"Grep",
+       "#{inspect(pattern)} in #{Enum.map_join(intent["paths"] || [], ", ", &rel(&1, root))}"}
 
-  defp describe(%Intent.Glob{pattern: pattern, base_dir: base_dir}, root),
-    do: {"Glob", "#{inspect(pattern)} under #{rel(base_dir, root)}"}
+  defp describe(%{"type" => "Glob", "pattern" => pattern} = intent, root),
+    do: {"Glob", "#{inspect(pattern)} under #{rel(intent["base_dir"], root)}"}
 
-  defp describe(%Intent.Claim{statement: statement}, _root), do: {"Claim", inspect(statement)}
-  defp describe(%Intent.Report{summary: summary}, _root), do: {"Report", summary || ""}
-  defp describe(%{__struct__: mod}, _root), do: {mod |> Module.split() |> List.last(), ""}
+  defp describe(%{"type" => "Claim", "statement" => statement}, _root),
+    do: {"Claim", inspect(statement)}
+
+  defp describe(%{"type" => "Report"} = intent, _root), do: {"Report", intent["summary"] || ""}
+  defp describe(%{"type" => type}, _root), do: {type, ""}
+  defp describe(_intent, _root), do: {"?", ""}
 
   defp describe_inline(intent, root) do
     {kind, detail} = describe(intent, root)
     String.trim("#{kind} #{detail}")
   end
 
-  defp project_dir(%{task: %{project_dir: dir}}) when is_binary(dir), do: dir
+  defp project_dir(%{"task" => %{"project_dir" => dir}}) when is_binary(dir), do: dir
   defp project_dir(_view), do: nil
 
   # Paths in a durable proposal are absolute (IntentPaths.absolutize/2);
@@ -539,27 +617,39 @@ defmodule Current.CLI.Render do
   defp rel(path, _root) when is_binary(path), do: path
   defp rel(path, _root), do: inspect(path)
 
-  @doc "An id shortened to a prefix that the inspectors accept back."
+  @doc "An id shortened to a prefix that the API accepts back."
   def short("sha256:" <> hex), do: "sha256:" <> String.slice(hex, 0, @short_hex)
   def short(id), do: to_string(id)
 
-  defp event_name(%{__struct__: mod}), do: mod |> Module.split() |> List.last()
+  defp event_name(%{"type" => type}), do: type
+  defp event_name(_event), do: "?"
 
-  defp timestamp(%Entry{event: event, inserted_at: inserted_at}),
-    do: Map.get(event, :timestamp) || inserted_at
+  defp timestamp(entry) do
+    parse_time(get_in(entry, ["event", "timestamp"])) ||
+      parse_time(entry["inserted_at"])
+  end
+
+  defp parse_time(iso) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _offset} -> dt
+      _ -> nil
+    end
+  end
+
+  defp parse_time(_), do: nil
 
   defp time(%DateTime{} = dt),
     do: dt |> DateTime.truncate(:millisecond) |> DateTime.to_time() |> Time.to_string()
 
   defp time(_), do: ""
 
-  defp find(events, module), do: Enum.find(events, &(&1.__struct__ == module))
+  defp find(events, type), do: Enum.find(events, &(&1["type"] == type))
 
   defp terminal_event(events) do
-    Enum.find(events, fn event ->
-      match?(%Event.WorkflowCompleted{}, event) or match?(%Event.WorkflowFailed{}, event) or
-        match?(%Event.WorkflowAbandoned{}, event)
-    end)
+    Enum.find(
+      events,
+      &(&1["type"] in ["WorkflowCompleted", "WorkflowFailed", "WorkflowAbandoned"])
+    )
   end
 
   defp to_text(value) when is_binary(value), do: value
@@ -591,10 +681,10 @@ defmodule Current.CLI.Render do
     ]
   end
 
-  defp observation(%Current.Observation{} = observation) do
+  defp observation(%{"type" => "Observation"} = observation) do
     [
-      "  #{observation.round || "?"}. #{asked(observation.intent)}",
-      if(present?(observation.reason), do: "       why      #{observation.reason}"),
+      "  #{observation["round"] || "?"}. #{asked(observation["intent"])}",
+      if(present?(observation["reason"]), do: "       why      #{observation["reason"]}"),
       "       #{settled(observation)}"
     ]
   end
@@ -606,17 +696,21 @@ defmodule Current.CLI.Render do
 
   defp observation(_other), do: "  ?. unreadable observation"
 
-  defp asked(%Intent.ReadFile{path: path}), do: "read_file #{path}"
+  defp asked(%{"type" => "ReadFile", "path" => path}), do: "read_file #{path}"
 
-  defp asked(%Intent.Glob{pattern: pattern, base_dir: base_dir}),
+  defp asked(%{"type" => "Glob", "pattern" => pattern, "base_dir" => base_dir}),
     do: "glob #{pattern} in #{base_dir}"
 
-  defp asked(%Intent.Grep{pattern: pattern, paths: paths}),
+  defp asked(%{"type" => "Grep", "pattern" => pattern, "paths" => paths}),
     do: "grep #{inspect(pattern)} in #{Enum.join(paths, ", ")}"
 
-  defp settled(%{status: :shown, artifact_id: artifact_id}), do: "shown    #{artifact_id}"
-  defp settled(%{status: :refused, error: error}), do: "refused  #{error}"
-  defp settled(%{status: status}), do: to_string(status)
+  defp asked(_intent), do: "?"
+
+  defp settled(%{"status" => "shown", "artifact_id" => artifact_id}),
+    do: "shown    #{artifact_id}"
+
+  defp settled(%{"status" => "refused", "error" => error}), do: "refused  #{error}"
+  defp settled(%{"status" => status}), do: to_string(status)
 
   defp present?(value), do: is_binary(value) and String.trim(value) != ""
   defp list_present?(value), do: is_list(value) and value != []

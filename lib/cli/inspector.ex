@@ -2,9 +2,10 @@ defmodule Current.Inspector do
   @moduledoc """
   Read-only views over Current's projections, for the `current` CLI.
 
-  The CLI calls these over Erlang distribution, so each function returns
-  plain data (structs from this code base) and does no formatting;
-  rendering is entirely the CLI's job. Nothing here writes.
+  Reached through `Current.API` (and so over HTTP, where
+  `Current.HTTP.Encode` turns the structs into JSON), so each function
+  returns plain data (structs from this code base) and does no formatting;
+  rendering is entirely the client's job. Nothing here writes.
 
   Every lookup takes a full id or a unique prefix of one, as git does:
   `sha256:4081ab`, or just `4081ab`. A workflow can also be named by its

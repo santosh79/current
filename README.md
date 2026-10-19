@@ -62,9 +62,10 @@ can:
 - `patch` and `bash` on your `PATH` (used when applying)
 - An API key for OpenAI (`OPENAI_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), or both
 
-**1. Start the runtime.** Current is a long-running node; `current` is a
-client of it. The server prints every request and every commit to the log as
-it happens. Ctrl-C stops it.
+**1. Start the runtime.** Current is a long-running server with an HTTP API
+(on `127.0.0.1:4000` by default); `current` is a client of it. The server
+prints every request and every commit to the log as it happens. Ctrl-C stops
+it.
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-... bin/current-server
@@ -271,6 +272,29 @@ in the runtime, and `current events <id>` picks it up again. Exit codes are
 
 ---
 
+## HTTP API
+
+The CLI does nothing a script can't: it calls these routes.
+
+| Route | Does |
+|---|---|
+| `POST /v1/tasks` | Submit a task: `{"prompt", "model", "dir", "mode", "timeout_ms"}` → `202 {"task_id"}` |
+| `GET /v1/workflows/:id` | A workflow's status and events (a task id or unique prefix works) |
+| `GET /v1/workflows/:id/activity` | What the model has asked to see so far (`?epoch=&after_seq=`) |
+| `GET /v1/proposals/:id` | A proposal in full |
+| `GET /v1/proposals/:id/review` | The `current.review/v1` document (`?max_lines=&raw=true`) |
+| `POST /v1/proposals/:id/approve` | Record approval: `{"message", "reviewed_by"}` |
+| `POST /v1/proposals/:id/reject` | Turn the proposal down |
+| `POST /v1/proposals/:id/apply` | Start applying an approved proposal |
+| `GET /v1/artifacts/:id` | An artifact's exact bytes |
+| `GET /v1/models`, `GET /v1/health` | The model catalog; whether the runtime is up |
+
+Errors are `{"error": {"code", "message"}}` with a matching status. The API
+does no authentication (see [Security](#security)); the routes and their
+details are documented in `lib/http/router.ex`.
+
+---
+
 ## Configuration
 
 ### Environment
@@ -280,8 +304,9 @@ in the runtime, and `current events <id>` picks it up again. Exit codes are
 | `OPENAI_API_KEY` | runtime | Enables `openai:*` models |
 | `ANTHROPIC_API_KEY` | runtime | Enables `anthropic:*` models |
 | `CURRENT_DATA_DIR` | runtime (prod) | Where the log and artifacts live (default `./_data`) |
-| `CURRENT_NODE` | CLI | Runtime node name (default `current@localhost`) |
-| `CURRENT_COOKIE` | CLI | Erlang cookie (default: `~/.erlang.cookie`) |
+| `CURRENT_HTTP_PORT` | runtime | Port of the HTTP API (default `4000`) |
+| `CURRENT_HTTP_IP` | runtime | Address the HTTP API binds (default `127.0.0.1`) |
+| `CURRENT_URL` | CLI | Where the CLI finds the runtime (default `http://127.0.0.1:4000`) |
 
 Models are discovered once, when the runtime starts. A provider without a
 key, or one that doesn't answer, contributes no models, and a task naming
@@ -320,9 +345,13 @@ approved proposal can do. In short:
   (including your API keys), network access and no time limit. Approving a
   command is approving arbitrary code: `mix test` runs whatever the tests
   contain.
-- **The control plane is Erlang distribution.** Anyone who can reach the node
-  and has the cookie has full control of the runtime, not just the CLI's
-  commands.
+- **The control plane is a trusted, unauthenticated HTTP API.** Current does
+  not authenticate callers or implement identity-based access control. It
+  listens on 127.0.0.1 by default. Deployments are responsible for restricting
+  access through network isolation, reverse proxies, API gateways, or other
+  external controls. Any caller able to reach the API should be considered
+  capable of exercising its workflow operations, including approving and
+  applying proposals.
 - **The log is tamper-evident to the runtime, not to an attacker.** The hash
   chain catches corruption; it is not signed.
 
@@ -349,7 +378,8 @@ Please report vulnerabilities privately rather than in a public issue.
 | `simulate`: apply in a throwaway copy first | planned |
 | Sandboxed command execution, and a timeout on commands | planned |
 | Atomic apply (all intents or none) | planned |
-| An API other than Erlang distribution (HTTP, MCP) | planned |
+| HTTP/JSON API; the CLI is a client of it | ✅ |
+| MCP server | planned |
 | Listing and searching workflows | planned |
 | Log snapshots (today every commit is replayed on start) | planned |
 
@@ -391,7 +421,7 @@ explicit, and tested.
 - command policy (allowlist), and a timeout and output cap on commands
 - `simulate`: apply to a temporary copy, show the result, discard it
 - atomic apply: apply to a copy, promote only if every intent succeeds
-- an HTTP/JSON API and an MCP server, so other agents and tools can drive Current
+- an MCP server, so other agents and tools can drive Current
 - `current list`: workflows by status
 
 **Later**

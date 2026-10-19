@@ -1,49 +1,52 @@
 defmodule Current.CLI.ReviewMarkdown do
   @moduledoc """
-  Renders Current.Inspector.review/2 as Markdown, laid out like a pull
-  request: what the proposal is and why, then each intent in order with
-  its artifact inline -- the old and new text for an EditFile, the new
-  contents for a WriteFile.
+  Renders a review as Markdown, laid out like a pull request: what the
+  proposal is and why, then each intent in order with its artifact
+  inline -- the old and new text for an EditFile, the new contents for a
+  WriteFile.
+
+  The input is the `current.review/v1` document the API serves
+  (`GET /v1/proposals/:id/review`, decoded: maps with string keys; see
+  `Current.CLI.ReviewJSON` for its shape), so the Markdown is rendered
+  from exactly what `current review --json` prints.
 
   Pure, like Current.CLI.Render: data in, string out.
   """
 
-  alias Current.{Excerpt, Intent}
   alias Current.CLI.Render
-  alias Current.Error.ValidationError
 
-  @spec render(Current.Inspector.review_view()) :: String.t()
-  def render(%{proposal: proposal} = review) do
-    root = review.project_dir
-    intents = proposal.intents
+  @spec render(map()) :: String.t()
+  def render(%{"proposal" => proposal, "workflow" => workflow} = review) do
+    root = review["project_dir"]
+    intents = review["intents"]
 
     [
       "# Proposal review",
       "",
-      "- **Proposal:** `#{proposal.id}`",
-      "- **Workflow:** `#{review.workflow_id}`",
+      "- **Proposal:** `#{proposal["id"]}`",
+      "- **Workflow:** `#{workflow["id"]}`",
       if(root, do: "- **Project:** `#{root}`"),
-      "- **Status:** #{review.status} (#{review.mode} mode)",
+      "- **Status:** #{workflow["status"]} (#{workflow["mode"]} mode)",
       "- **Intents:** #{length(intents)}",
-      if(present?(proposal.justification),
-        do: ["", "## Justification", "", proposal.justification]
+      if(present?(proposal["justification"]),
+        do: ["", "## Justification", "", proposal["justification"]]
       ),
-      if(list_present?(proposal.claims),
-        do: ["", "## Claims", "", Enum.map(proposal.claims, &"- #{&1}")]
+      if(list_present?(proposal["claims"]),
+        do: ["", "## Claims", "", Enum.map(proposal["claims"], &"- #{&1}")]
       ),
-      if(review.validation_error, do: validation_failed(review.validation_error, intents, root)),
+      if(review["validation_error"],
+        do: validation_failed(review["validation_error"], intents, root)
+      ),
       "",
       "## Intents",
-      intents
-      |> Enum.with_index(1)
-      |> Enum.map(fn {intent, n} -> intent_section(intent, n, review, root) end),
-      if(list_present?(proposal.dependencies),
-        do: ["", "## Dependencies", "", Enum.map(proposal.dependencies, &"- #{&1}")]
+      Enum.map(intents, &intent_section(&1, root)),
+      if(list_present?(proposal["dependencies"]),
+        do: ["", "## Dependencies", "", Enum.map(proposal["dependencies"], &"- #{&1}")]
       ),
-      if(review.raw_output,
-        do: ["", "## Raw model output", "", artifact(review.raw_output, "")]
+      if(review["raw_output"],
+        do: ["", "## Raw model output", "", artifact(review["raw_output"], "")]
       ),
-      next_step(review)
+      next_step(workflow, proposal)
     ]
     |> List.flatten()
     |> Enum.reject(&is_nil/1)
@@ -52,123 +55,122 @@ defmodule Current.CLI.ReviewMarkdown do
 
   ## Intents
 
-  defp intent_section(intent, n, review, root) do
-    ["", "### #{n}. #{heading(intent, root)}", "", body(intent, review, root)]
+  defp intent_section(intent, root) do
+    ["", "### #{intent["index"]}. #{heading(intent, root)}", "", body(intent, root)]
   end
 
-  defp heading(%Intent.EditFile{path: path}, root), do: "EditFile #{code(rel(path, root))}"
-  defp heading(%Intent.WriteFile{path: path}, root), do: "WriteFile #{code(rel(path, root))}"
-  defp heading(%Intent.ReadFile{path: path}, root), do: "ReadFile #{code(rel(path, root))}"
-  defp heading(%Intent.DeleteFile{path: path}, root), do: "DeleteFile #{code(rel(path, root))}"
-  defp heading(%{__struct__: mod}, _root), do: mod |> Module.split() |> List.last()
+  defp heading(%{"type" => type} = intent, _root) when type in ["EditFile", "WriteFile", "ReadFile", "DeleteFile"],
+    do: "#{type} #{code(path(intent))}"
 
-  defp body(%Intent.EditFile{} = edit, review, _root) do
-    language = language(edit.path)
-    old = Map.get(review.artifacts, edit.old_artifact_id, missing(edit.old_artifact_id))
-    new = Map.get(review.artifacts, edit.new_artifact_id, missing(edit.new_artifact_id))
+  defp heading(%{"type" => type}, _root), do: type
+
+  # Inside the project the document gives a relative path; elsewhere, the
+  # path as recorded.
+  defp path(intent), do: intent["relative_path"] || intent["path"]
+
+  defp body(%{"type" => "EditFile"} = edit, _root) do
+    language = language(edit["path"])
 
     [
-      if(edit.replace_all, do: ["_Replaces every occurrence._", ""]),
+      if(edit["replace_all"], do: ["_Replaces every occurrence._", ""]),
       "**Replace**",
       "",
-      artifact(old, language),
+      artifact(edit["old_string"], language),
       "",
       "**With**",
       "",
-      artifact(new, language)
+      artifact(edit["new_string"], language)
     ]
   end
 
-  defp body(%Intent.WriteFile{path: path, contents_artifact_id: id}, review, _root),
-    do: artifact(Map.get(review.artifacts, id, missing(id)), language(path))
+  defp body(%{"type" => "WriteFile", "path" => path, "artifact" => contents}, _root),
+    do: artifact(contents, language(path))
 
-  defp body(%Intent.ReadFile{}, _review, _root), do: "Reads the file."
-  defp body(%Intent.DeleteFile{}, _review, _root), do: "Deletes the file."
+  defp body(%{"type" => "ReadFile"}, _root), do: "Reads the file."
+  defp body(%{"type" => "DeleteFile"}, _root), do: "Deletes the file."
 
-  defp body(%Intent.RunCommand{cmd: cmd, args: args}, _review, _root),
-    do: fenced(Enum.join([cmd | args || []], " "), "sh")
+  defp body(%{"type" => "RunCommand", "cmd" => cmd} = intent, _root),
+    do: fenced(Enum.join([cmd | intent["args"] || []], " "), "sh")
 
-  defp body(%Intent.Grep{pattern: pattern, paths: paths}, _review, root),
+  defp body(%{"type" => "Grep", "pattern" => pattern} = intent, root),
     do:
       "Searches for #{code(pattern)} in " <>
-        Enum.map_join(paths || [], ", ", &code(rel(&1, root)))
+        Enum.map_join(intent["paths"] || [], ", ", &code(rel(&1, root)))
 
-  defp body(%Intent.Glob{pattern: pattern, base_dir: base_dir}, _review, root),
-    do: "Lists files matching #{code(pattern)} under #{code(rel(base_dir, root))}"
+  defp body(%{"type" => "Glob", "pattern" => pattern} = intent, root),
+    do: "Lists files matching #{code(pattern)} under #{code(rel(intent["base_dir"], root))}"
 
-  defp body(%Intent.Claim{} = claim, review, _root) do
+  defp body(%{"type" => "Claim"} = claim, _root) do
     [
-      quote_block(claim.statement),
+      quote_block(claim["statement"]),
       "",
-      if(claim.evidence,
-        do: "**Evidence:** #{evidence(claim.evidence, review.proposal.intents)}",
+      if(claim["evidence"],
+        do: "**Evidence:** #{evidence(claim["evidence"])}",
         else: "**Evidence:** none"
       ),
-      if(claim.expected != nil, do: ["", "**Expected:** #{inspect(claim.expected)}"])
+      if(claim["expected"] != nil, do: ["", "**Expected:** #{inspect(claim["expected"])}"])
     ]
   end
 
-  defp body(%Intent.Report{summary: summary}, _review, _root),
-    do: if(present?(summary), do: quote_block(summary), else: "_No summary._")
+  defp body(%{"type" => "Report"} = intent, _root),
+    do: if(present?(intent["summary"]), do: quote_block(intent["summary"]), else: "_No summary._")
 
-  defp body(_intent, _review, _root), do: []
+  defp body(_intent, _root), do: []
 
-  defp evidence(%{} = evidence, intents) do
+  defp evidence(%{} = evidence) do
     source =
-      case Enum.find_index(intents, &(&1.id == Map.get(evidence, :source_intent_id))) do
-        nil -> "intent #{code(to_string(Map.get(evidence, :source_intent_id)))}"
-        index -> "intent #{index + 1}"
+      case evidence["source_intent_index"] do
+        nil -> "intent #{code(to_string(evidence["source_intent_id"]))}"
+        index -> "intent #{index}"
       end
 
-    value = inspect(Map.get(evidence, :value))
+    value = inspect(evidence["value"])
 
-    case Map.get(evidence, :condition) do
-      :exit_code_equals -> "the exit code of #{source} equals #{value}"
-      :match_count_equals -> "the match count of #{source} equals #{value}"
-      :match_count_greater_than -> "the match count of #{source} is greater than #{value}"
+    case evidence["condition"] do
+      "exit_code_equals" -> "the exit code of #{source} equals #{value}"
+      "match_count_equals" -> "the match count of #{source} equals #{value}"
+      "match_count_greater_than" -> "the match count of #{source} is greater than #{value}"
       other -> "#{code(inspect(other))} #{value} on #{source}"
     end
   end
 
   ## Artifacts
 
-  defp missing(id), do: %Excerpt{id: id, status: :missing}
+  defp artifact(%{"status" => "ok", "total_lines" => 0} = excerpt, _language),
+    do: "_Empty (#{code(Render.short(excerpt["id"]))})._"
 
-  defp artifact(%Excerpt{status: :ok, total_lines: 0} = excerpt, _language),
-    do: "_Empty (#{code(Render.short(excerpt.id))})._"
-
-  defp artifact(%Excerpt{status: :ok} = excerpt, language) do
+  defp artifact(%{"status" => "ok"} = excerpt, language) do
     [
-      fenced(excerpt.text, language),
-      if(excerpt.truncated,
+      fenced(excerpt["text"], language),
+      if(excerpt["truncated"],
         do: [
           "",
-          "_… showing #{excerpt.shown_lines} of #{excerpt.total_lines} lines" <>
-            if(excerpt.lines_shortened, do: ", long lines shortened", else: "") <>
+          "_… showing #{excerpt["shown_lines"]} of #{excerpt["total_lines"]} lines" <>
+            if(excerpt["lines_shortened"], do: ", long lines shortened", else: "") <>
             " · full: #{full(excerpt)}_"
         ]
       )
     ]
   end
 
-  defp artifact(%Excerpt{status: :binary} = excerpt, _language),
-    do: "_Binary content (#{excerpt.total_bytes} bytes) · #{full(excerpt)}_"
+  defp artifact(%{"status" => "binary"} = excerpt, _language),
+    do: "_Binary content (#{excerpt["total_bytes"]} bytes) · #{full(excerpt)}_"
 
-  defp artifact(%Excerpt{status: :missing, id: id}, _language),
+  defp artifact(%{"status" => "missing", "id" => id}, _language),
     do: "_Artifact not found: #{code(id)}_"
 
-  defp artifact(%Excerpt{status: :omitted} = excerpt, _language),
+  defp artifact(%{"status" => "omitted"} = excerpt, _language),
     do: "_Not shown: this review's line limit was reached · #{full(excerpt)}_"
 
-  defp full(%Excerpt{id: id}), do: code("current artifact #{Render.short(id)}")
+  defp full(%{"id" => id}), do: code("current artifact #{Render.short(id)}")
 
   ## Validation and next step
 
-  defp validation_failed(%ValidationError{} = error, intents, root) do
+  defp validation_failed(error, intents, root) do
     at =
-      case Enum.find_index(intents, &(&1.id == error.intent_id)) do
-        nil -> "intent #{code(to_string(error.intent_id))}"
-        index -> "intent #{index + 1} (#{heading(Enum.at(intents, index), root)})"
+      case error["intent_index"] do
+        nil -> "intent #{code(to_string(error["intent_id"]))}"
+        index -> "intent #{index} (#{heading(Enum.at(intents, index - 1), root)})"
       end
 
     [
@@ -176,38 +178,38 @@ defmodule Current.CLI.ReviewMarkdown do
       "## ✗ Validation failed",
       "",
       "- **At:** #{at}",
-      "- **Reason:** #{error.reason}",
-      if(error.details not in [nil, %{}],
-        do: "- **Details:** #{code(inspect(error.details))}"
+      "- **Reason:** #{error["reason"]}",
+      if(error["details"] not in [nil, %{}],
+        do: "- **Details:** #{code(JSON.encode!(error["details"]))}"
       )
     ]
   end
 
-  defp next_step(%{status: :waiting_for_approval, mode: :apply, proposal: proposal}) do
+  defp next_step(%{"status" => "waiting_for_approval", "mode" => "apply"}, proposal) do
     [
       "",
       "---",
       "",
       "Waiting for approval. Nothing has been applied.",
       "",
-      "Approve with: #{code("current approve #{Render.short(proposal.id)} -m \"<message>\"")}",
+      "Approve with: #{code("current approve #{Render.short(proposal["id"])} -m \"<message>\"")}",
       "",
       "Approving doesn't apply it; `current apply` does that afterwards."
     ]
   end
 
-  defp next_step(%{status: :approved, proposal: proposal}) do
+  defp next_step(%{"status" => "approved"}, proposal) do
     [
       "",
       "---",
       "",
       "Approved. Nothing has been applied yet.",
       "",
-      "Apply with: #{code("current apply #{Render.short(proposal.id)}")}"
+      "Apply with: #{code("current apply #{Render.short(proposal["id"])}")}"
     ]
   end
 
-  defp next_step(_review), do: []
+  defp next_step(_workflow, _proposal), do: []
 
   ## Markdown helpers
 

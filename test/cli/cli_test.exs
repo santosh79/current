@@ -2,8 +2,8 @@ defmodule Current.CLITest do
   @moduledoc """
   The CLI's own job: turning arguments into commands, and runtime
   answers into output and exit codes. How workflows behave is tested
-  through Current.submit_task/3 (test/e2e) and Current.RPC
-  (test/rpc_test.exs), not again here.
+  through Current.submit_task/3 (test/e2e) and Current.API
+  (test/api_test.exs), not again here.
 
   Commands run in-process against the test application (CLI.run/1
   defaults to a local client).
@@ -311,7 +311,7 @@ defmodule Current.CLITest do
     end
 
     test "models lists the catalog, one per line" do
-      assert cli!(["models"]) |> String.split("\n", trim: true) == Current.RPC.models()
+      assert cli!(["models"]) |> String.split("\n", trim: true) == Current.API.models()
     end
   end
 
@@ -326,16 +326,31 @@ defmodule Current.CLITest do
     end
 
     test "a connection lost mid-command is an error, not a crash" do
+      refused = {:failed_connect, [{:to_address, {~c"localhost", 4000}}, {:inet, [:inet], :econnrefused}]}
+
       failing = fn ->
         {:ok,
          %Current.CLI.Client{
-           node: :current@localhost,
-           call: fn _, _ -> :erlang.error({:erpc, :noconnection}) end
+           url: "http://localhost:4000",
+           send: fn _method, _path, _body -> {:error, refused} end
          }}
       end
 
       stderr = capture_io(:stderr, fn -> assert CLI.run(["events", "abcd1234"], failing) == 1 end)
-      assert stderr =~ "runtime is not running at current@localhost"
+      assert stderr =~ "runtime is not running at http://localhost:4000"
+    end
+
+    test "a request that times out is an error, not a crash" do
+      slow = fn ->
+        {:ok,
+         %Current.CLI.Client{
+           url: "http://localhost:4000",
+           send: fn _method, _path, _body -> {:error, :timeout} end
+         }}
+      end
+
+      stderr = capture_io(:stderr, fn -> assert CLI.run(["events", "abcd1234"], slow) == 1 end)
+      assert stderr =~ "http://localhost:4000 did not answer in time"
     end
   end
 end

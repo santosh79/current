@@ -29,8 +29,8 @@ What Current does **not** promise:
 - **It does not make approval safe.** It makes it informed. A malicious or
   mistaken proposal that a person approves will be carried out.
 - **It does not authenticate users.** Anyone who can reach the runtime's
-  Erlang node with its cookie has full control of the runtime, not just the
-  CLI's commands.
+  HTTP API has full control of it: they can submit tasks, approve proposals
+  and apply them.
 - **It does not keep secrets out of a prompt in general.** It keeps out
   files whose *names* look like dependencies, build output, VCS state or
   `.env*`. A key in `config/prod.secret.exs` or `id_rsa` can be shown to the
@@ -45,31 +45,41 @@ ol. Everything below follows from that.
 ## System and trust boundaries
 
 ```text
-   ┌────────── you ──────────┐
-   │  current (CLI escript)  │
-   └───────────┬─────────────┘
-               │ ① Erlang distribution (cookie)
-   ┌───────────▼──────────────────────────────────────────────┐
-   │  runtime node (bin/current-server), runs as one OS user  │
-   │                                                          │
-   │  RPC ─▶ submit / review / apply                          │
-   │  LLMProposalBuilder ─② HTTPS─▶ OpenAI / Anthropic        │
-   │     └─ Observer ─③ read-only─▶ project dir               │
-   │  Decoder ─▶ Validator ─▶ log                             │
-   │  EffectApplicator ─④ writes, patch, commands─▶ project   │
-   │  Log + artifacts ─⑤─▶ data dir (_data/)                  │
-   └──────────────────────────────────────────────────────────┘
-               ④ commands also reach: the OS, the network,
-                 everything the user can read
+           ┌────────────────────────────────────────┐
+           │ HTTP clients: current CLI, scripts, …  │
+           └───────────────────┬────────────────────┘
+                               │ ① HTTP/JSON, no authentication
+  ┌────────────────────────────▼─────────────────────────────┐
+  │ runtime · bin/current-server · runs as one OS user       │
+  │                                                          │
+  │   HTTP API ─▶ Current.API ─▶ orchestrator                │
+  │                                                          │
+  │   LLMProposalBuilder ─▶ Decoder ─▶ Validator ─┐          │
+  │     │   └─ Observer                           │          │
+  │     │        │            EffectApplicator ───┤          │
+  │     │        │              │                 ▼          │
+  │     │        │              │          log + artifacts   │
+  │     │        │              │                 │          │
+  └─────┼────────┼──────────────┼─────────────────┼──────────┘
+        ②        ③              ④                 ⑤
+      HTTPS   read-only   write, patch,        append
+        │        │        run commands            │
+        ▼        ▼              ▼                 ▼
+    OpenAI /  project     project dir;        data dir
+    Anthropic dir         via commands,       (_data/)
+                          the OS, the
+                          network, all
+                          the user can read
+                          
 ```
 
 | # | Boundary | What crosses it | Trusted side |
 |---|---|---|---|
-| ① | CLI ↔ runtime | Tasks, approvals, applies, queries | Neither: the cookie is the only check |
+| ① | HTTP client ↔ runtime | Tasks (including which directory to work in), approvals, applies, queries, artifact contents | Neither. The API does not authenticate; whoever can reach the port is treated as the operator (see T6) |
 | ② | Runtime ↔ model provider | Prompts (project layout, files the model asked for), replies | Runtime. The reply is untrusted input |
 | ③ | Runtime ↔ project, while observing | Reads chosen by the model | Runtime, which decides what may be read |
-| ④ | Runtime ↔ project and OS, while applying | Writes, patches, deletes, commands | Runtime, after a person approves |
-| ⑤ | Runtime ↔ data dir | Log segments, artifacts | Whoever can write the directory |
+| ④ | Runtime ↔ project and OS, while applying | Writes, patches, deletes, commands | Runtime, once an approval and an apply request have arrived over ①. Who sent them isn’t verified |
+| ⑤ | Runtime ↔ data dir | Log segments, artifacts | Whoever can write the directory. The hash chain shows corruption, not tampering |
 
 ---
 
@@ -80,7 +90,7 @@ ol. Everything below follows from that.
 | The project directory | The thing being changed. Its integrity is the point |
 | Everything else the runtime's user can reach | Home directory, SSH keys, other repos, cloud credentials. Reachable by commands |
 | API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) | Spend money; in the runtime's environment |
-| The Erlang cookie | Full control of the runtime |
+| Access to the HTTP API port | Whoever can reach it controls the runtime (T6) |
 | Secrets inside the project | Can reach the provider (via observe) or the data dir (via read results and command output) |
 | The data dir (`_data/`) | The record. Also holds copies of everything read, deleted, patched or printed |
 | The reviewer's attention | The last line of defence. Can be exhausted or misled |
@@ -99,10 +109,10 @@ effect, *anyone who can put text into the project, or into the prompt, can
 write the proposal.*
 
 **A3. Another user or process on the same host.** May be able to read the
-data dir, the cookie, or reach the Erlang node.
+data dir, or reach the HTTP API on 127.0.0.1 (every local user can).
 
-**A4. Someone on the network.** May be able to reach the Erlang
-distribution port if it listens beyond localhost.
+**A4. Someone on the network.** May be able to reach the HTTP API if it
+is bound beyond localhost, or exposed by a proxy or tunnel.
 
 **A5. The model provider.** Sees every prompt. Out of scope as an attacker,
 but in scope for what you send it.
@@ -113,10 +123,12 @@ but in scope for what you send it.
 
 - The machine, the OS user running the runtime, and the Elixir/Erlang
   installation are not compromised.
-- Only you can write the data dir and read the cookie.
-- The Erlang node is reachable only from this machine (see
-  [Running Current more safely](#running-current-more-safely); this is not
-  enforced by Current).
+- Only you can write the data dir.
+- Only you can reach the HTTP API. It listens on 127.0.0.1 by default, which
+  still includes every other user and process on this machine; beyond that,
+  restricting access is up to you (see
+  [Running Current more safely](#running-current-more-safely); Current does
+  not enforce it).
 - The person approving a proposal reads it first, with `current review`.
 
 ---
@@ -188,8 +200,8 @@ This is the largest risk, and approval is the only control.
   test and compiles every dependency.
 - Commands inherit the runtime's environment, so they can read
   `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and anything else exported to the
-  server. They run with full network access, and can read the Erlang cookie
-  in `~/.erlang.cookie` and anything else the user can.
+  server. They run with full network access, and can read anything else the
+  user can.
 
 Today: every intent, with its full diff, file contents, command and
 arguments, is recorded and shown by `current review` before approval.
@@ -253,28 +265,35 @@ document it as sensitive; apply the read policy to `read_file` and `grep`
 intents in proposals too; add a retention or purge command (events would
 keep the artifact id, with the content gone).
 
-### T6. Someone else controls the runtime
+### T6. An unauthorized caller controls the runtime
 
-The CLI talks to the runtime over Erlang distribution, authenticated only
-by the cookie.
+Current's control plane is an HTTP API. It does not authenticate callers or
+implement identity-based access control, and it does not try to defend
+against web pages or other clients: whoever can send it a request is treated
+as its operator. It listens on 127.0.0.1 by default.
 
-- **The cookie is total authority.** Erlang distribution allows any
-  connected node to run any code on the runtime: read keys from its
-  environment, approve and apply proposals, rewrite memory. `Current.RPC`
-  is a convention for clients, not a security boundary.
-- **The listener may be reachable from the network.** Unless configured
-  otherwise, Erlang distribution listens on all interfaces, and `epmd`
-  (port 4369) advertises it. Current does not restrict either.
-- **Traffic is not encrypted** unless Erlang distribution over TLS is
-  configured.
-- **The reviewer's name is not authenticated.** `reviewed_by` on an
-  approval is the client's `$USER`, recorded as given.
+What a caller with access to the port can do:
 
-**Status: open (by design for single-user local use).** Recommended: bind
-distribution and `epmd` to localhost (below); a strong random cookie
-readable only by you; and, before Current is used by more than one person
-or remotely, a real API (HTTP or gRPC) with authentication and per-user
-authorization, with Erlang distribution kept internal.
+- submit tasks, **for any directory the runtime's user can read**. The model
+  is shown that directory's layout and the files it asks to read, and that
+  content is sent to the model provider (T4);
+- read proposals and artifacts, which include file contents;
+- approve or reject proposals, and request that an approved proposal be
+  applied. Applying can run arbitrary commands as the runtime's user (T3).
+
+On a shared machine, other OS users can reach 127.0.0.1 too.
+
+Current enforces workflow invariants independently of caller identity: a
+proposal that hasn't reached the required state can't be applied. It does
+not check that the caller approving a proposal is an authorized person, and
+`reviewed_by` is supplied by the client and is not an authenticated identity.
+
+**Status: open by design.** Restricting who can reach the API is the
+deployment's job: loopback binding, network policy, a reverse proxy or
+gateway, a tailnet. Remote or multi-user use needs that layer to
+authenticate callers and limit which routes each may use, notably
+`POST /v1/tasks`, `POST /v1/proposals/:id/approve` and
+`POST /v1/proposals/:id/apply`.
 
 ### T7. The record is altered
 
@@ -409,16 +428,17 @@ failed workflow.
 
 **Lock down the control plane**
 
-- Keep Erlang distribution on localhost:
-
-  ```sh
-  export ERL_EPMD_ADDRESS=127.0.0.1
-  export ERL_AFLAGS="-kernel inet_dist_use_interface {127,0,0,1}"
-  ```
-
-- Use a long random cookie in a file readable only by you (`chmod 400
-  ~/.erlang.cookie`), or set `CURRENT_COOKIE` and the server's cookie
-  explicitly.
+- Keep the HTTP API bound to 127.0.0.1 (the default), and don't expose it
+  directly to an untrusted network. On a machine with other users, remember
+  that they can reach 127.0.0.1 as well.
+- For remote access, put Current behind a reverse proxy or gateway that
+  authenticates callers and controls which routes each may use, and keep the
+  runtime reachable only from that gateway.
+- Restrict `POST /v1/tasks`, `POST /v1/proposals/:id/approve` and
+  `POST /v1/proposals/:id/apply` to authorized callers. Together they can
+  cause arbitrary code to run with the runtime's privileges.
+- Treat anyone who can reach the API as trusted unless a layer outside
+  Current enforces otherwise.
 
 **Protect the record**
 
@@ -440,7 +460,7 @@ failed workflow.
 
 - Point Current at a directory that contains secrets you wouldn't paste
   into a prompt, unless they are in `.env*` files.
-- Expose the runtime node to a network.
+- Expose the HTTP API directly to an untrusted network.
 
 ---
 
@@ -455,7 +475,7 @@ failed workflow.
 | 5 | Data dir created `0700`; configurable read deny list; read policy on proposed reads | T4, T5 |
 | 6 | Review: commands and sensitive paths first; claims shown with what is checked; control characters stripped | T8 |
 | 7 | Atomic apply, and refuse apply if touched files changed | T2, T9, T10 |
-| 8 | Authenticated API (HTTP/gRPC) in front of the runtime; distribution kept internal | T6 |
+| 8 | Deployment-level authentication and authorization guidance for remote or multi-user operation | T6 |
 | 9 | Artifact hash verification on read; exported or signed log heads | T7 |
 | 10 | Sandboxed command execution | T3 |
 
@@ -472,7 +492,7 @@ cheapest way to keep the claim true.
 | Claim | Where | How to check |
 |---|---|---|
 | Model output never performs effects; it is only decoded | `Current.ProposalDecoder` (pure apart from `BlobStore.put/1`) | Grep the decoder and `LLMProposalBuilder` for filesystem or `System.cmd` calls |
-| Only `:apply` workflows accept approval, from `waiting_for_approval` only | `WorkflowReducer.apply_event_helper/2` (`ProposalApproved` matches `mode: :apply`); `Current.RPC.require_apply_mode/1` | Commit `ProposalApproved` for a plan-mode workflow directly; it must be rejected |
+| Only `:apply` workflows accept approval, from `waiting_for_approval` only | `WorkflowReducer.apply_event_helper/2` (`ProposalApproved` matches `mode: :apply`); `Current.API.require_apply_mode/1` | Commit `ProposalApproved` for a plan-mode workflow directly; it must be rejected |
 | Apply needs `approved`, and is a separate event | `WorkflowReducer` (`EffectApplicationStarted` only from `:approved`); `Current.apply_proposal/1` | `current apply` before `current approve` fails |
 | Project directory resolved once, `..` refused | `Current.submit_task/3` → `validate_project_dir/1`, `canonical_project_dir/1` | Submit with `--dir a/../b` and through a symlink |
 | Paths made absolute before the proposal is recorded | `WorkflowOrchestrator` → `IntentPaths.absolutize/2` | `current proposal` shows absolute paths |

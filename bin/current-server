@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
-# Starts the long-running Current runtime as a named Erlang node, which
-# the `current` CLI connects to. CURRENT_NODE overrides the node name
-# (the CLI reads the same variable).
+# Starts the long-running Current runtime. The `current` CLI talks to its
+# HTTP API (127.0.0.1:4000 by default; see CURRENT_HTTP_PORT and
+# CURRENT_HTTP_IP, and CURRENT_URL for the CLI).
 #
-# Activity (RPC requests and WAL commits) is printed to this console;
+# Activity (API requests and WAL commits) is printed to this console;
 # CURRENT_ACTIVITY_LOG=false turns it off.
 #
 # Ctrl-C stops the runtime gracefully (the WAL is closed cleanly),
@@ -15,16 +15,14 @@ cd "$(dirname "$0")/.."
 # which the VM handles as a graceful shutdown.
 # -current activity_log: set before the application starts, so commits
 # made while resuming in-flight workflows at boot are printed too.
-elixir --sname "${CURRENT_NODE:-current@localhost}" \
-  --erl "+Bi -current activity_log ${CURRENT_ACTIVITY_LOG:-true}" \
+elixir --erl "+Bi -current activity_log ${CURRENT_ACTIVITY_LOG:-true}" \
   -S mix run --no-halt -e '
-h = Current.RPC.status()
+h = Current.API.status()
 
 IO.puts("""
 
 Current #{h.version}
 runtime ready
-node      #{h.node}
 WAL       #{h.wal_path}
 WAL head  ##{h.wal_head}
 builder   #{inspect(h.proposal_builder)}
@@ -43,3 +41,4 @@ while kill -0 "$pid" 2>/dev/null; do
   wait "$pid" || true
 done
 echo "stopped"
+

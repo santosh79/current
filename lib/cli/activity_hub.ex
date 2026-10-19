@@ -20,14 +20,14 @@ defmodule Current.ActivityHub do
 
       {:activity, workflow_id, %{type: :commit, ...}}
       {:activity, workflow_id, %{type: :requested | :settled, round: 1, ...}}
-      {:activity, nil,         %{type: :rpc | :rpc_result, ...}}
+      {:activity, nil,         %{type: :api | :api_result, ...}}
 
   `workflow_id` is nil for something that belongs to no workflow yet (a
-  TaskCreated commit, an RPC request). Subscribers are monitored and
+  TaskCreated commit, an API request). Subscribers are monitored and
   dropped when they exit, and nothing here ever waits for one.
 
-  Clients on other nodes don't subscribe. They poll `activity/3` -- see
-  `Current.RPC.activity/3` -- with the epoch and sequence number of the
+  HTTP clients don't subscribe. They poll `activity/3` -- see
+  `Current.API.activity/3` -- with the epoch and sequence number of the
   last item they saw, and get what came after it. The epoch is picked when
   the hub starts, so a client that last spoke to an earlier hub is given
   everything the new one has, instead of a sequence number that now means
@@ -140,16 +140,16 @@ defmodule Current.ActivityHub do
     GenServer.cast(__MODULE__, {:observe, workflow_id, :settled, round, entries})
   end
 
-  @doc "Records an RPC request. `detail` is a list of already-formatted lines."
-  @spec rpc(atom(), [String.t()]) :: :ok
-  def rpc(function, detail \\ []) do
-    GenServer.cast(__MODULE__, {:rpc, :rpc, function, detail, stamp()})
+  @doc "Records an API request. `detail` is a list of already-formatted lines."
+  @spec api(atom(), [String.t()]) :: :ok
+  def api(function, detail \\ []) do
+    GenServer.cast(__MODULE__, {:api, :api, function, detail, stamp()})
   end
 
-  @doc "Records how an RPC request that changes something turned out."
-  @spec rpc_result(atom(), String.t()) :: :ok
-  def rpc_result(function, outcome) do
-    GenServer.cast(__MODULE__, {:rpc, :rpc_result, function, outcome, stamp()})
+  @doc "Records how an API request that changes something turned out."
+  @spec api_result(atom(), String.t()) :: :ok
+  def api_result(function, outcome) do
+    GenServer.cast(__MODULE__, {:api, :api_result, function, outcome, stamp()})
   end
 
   @doc "What an observation asked for, as the model wrote it."
@@ -256,7 +256,7 @@ defmodule Current.ActivityHub do
     {:noreply, state}
   end
 
-  def handle_cast({:rpc, type, function, detail, {wall_us, mono}}, state) do
+  def handle_cast({:api, type, function, detail, {wall_us, mono}}, state) do
     notify(state, nil, %{
       type: type,
       function: function,

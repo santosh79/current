@@ -8,22 +8,19 @@ defmodule Current.HTTP.Server do
   `approve` and `apply` write to the project, treat access to the port as
   access to the project.
 
-  Defaults are chosen so that skipping all of that is still reasonable on
-  a personal machine:
-
-    * it listens on 127.0.0.1 only;
-    * requests carrying an `Origin` header (i.e. from a browser) are
-      refused, so a web page can't drive a local runtime.
-
-  Any other process or user on the machine can still call it. If you bind
-  to a non-loopback address, a warning is logged.
+  Defaults are chosen so that skipping all of that is still reasonable on a
+  personal machine: it listens on 127.0.0.1 only. Any other process or user
+  on the machine can still call it. If you bind to a non-loopback address,
+  a warning is logged.
 
   Configuration (`config :current, :http, ...` or environment):
 
       CURRENT_HTTP_PORT   port (default 4000)
       CURRENT_HTTP_IP     address to bind (default 127.0.0.1)
 
-  Set `config :current, http: [enabled: false]` to turn the API off.
+  Set `config :current, http: [enabled: false]` to turn the API off. It is
+  the runtime's only control plane (the `current` CLI is a client of it), so
+  with it off nothing can submit, review or apply anything.
   """
 
   require Logger

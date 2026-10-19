@@ -16,8 +16,8 @@ defmodule Current.CLI do
 
   Current is the runtime; `current` is merely a client of it. The CLI
   boots nothing and knows nothing about which models exist: every
-  command is a request/response call to `Current.RPC` on a running node
-  (see `Current.CLI.Client` and `bin/current-server`).
+  command is a request to the runtime's HTTP API (see
+  `Current.CLI.Client`, `Current.HTTP.Router` and `bin/current-server`).
 
   `--model` is required on plan and run. It names the model for that one
   task, as `current models` prints it (e.g. `openai:gpt-5.6`). The CLI
@@ -42,10 +42,10 @@ defmodule Current.CLI do
   without the `sha256:` part.
 
   `run/2` takes the connection as an argument and returns an exit code,
-  so tests drive it against the test application in-process.
+  so tests drive it against the test application in-process (the client
+  then calls the router directly, without a socket).
   """
 
-  alias Current.Request
   alias Current.CLI.{Client, Render, ReviewJSON, ReviewMarkdown}
 
   @exit_ok 0
@@ -94,7 +94,7 @@ defmodule Current.CLI do
       command ->
         case connect.() do
           {:ok, client} -> dispatch(command, client)
-          {:error, reason} -> fail(transport_error(reason, Client.target_node()))
+          {:error, reason} -> fail(transport_error(reason, Client.base_url()))
         end
     end
   end
@@ -309,8 +309,7 @@ defmodule Current.CLI do
 
     The runtime must be running (bin/current-server).
     Environment:
-      CURRENT_NODE    Runtime node (default: current@localhost)
-      CURRENT_COOKIE  Erlang cookie (default: ~/.erlang.cookie)
+      CURRENT_URL     The runtime's HTTP API (default: http://127.0.0.1:4000)
     """
     |> String.trim_trailing()
   end
@@ -319,8 +318,8 @@ defmodule Current.CLI do
 
   defp dispatch(:status, client) do
     case Client.health(client) do
-      {:ok, health} -> print(Render.status(health))
-      {:error, reason} -> fail(transport_error(reason, client.node))
+      {:ok, health} -> print(Render.status(health, client.url))
+      {:error, reason} -> fail(transport_error(reason, client.url))
     end
   end
 
@@ -360,8 +359,8 @@ defmodule Current.CLI do
 
       # ProposalProductionStarted is long past: don't announce the model.
       follow(client, workflow_id, health,
-        done?: & &1.terminal,
-        expect: :completed,
+        done?: & &1["terminal"],
+        expect: "completed",
         started?: true
       )
     else
@@ -385,7 +384,7 @@ defmodule Current.CLI do
 
   defp dispatch({:review, id, opts}, client) do
     case Client.review(client, id, Map.take(opts, [:max_lines, :raw])) do
-      {:ok, review} when opts.format == :json -> print(ReviewJSON.encode(review))
+      {:ok, review} when opts.format == :json -> print(ReviewJSON.pretty(review))
       {:ok, review} -> print(ReviewMarkdown.render(review))
       {:error, reason} -> fail(error_message("proposal", id, reason, client))
     end
@@ -406,11 +405,8 @@ defmodule Current.CLI do
 
   defp dispatch(:models, client) do
     case Client.models(client) do
-      models when is_list(models) ->
-        print_models(models)
-
-      {:error, reason} ->
-        fail(transport_error(reason, client.node))
+      {:ok, models} -> print_models(models)
+      {:error, reason} -> fail(transport_error(reason, client.url))
     end
   end
 
@@ -420,77 +416,84 @@ defmodule Current.CLI do
   # the proposal is waiting for approval -- the runtime itself goes no
   # further until `current approve` and then `current apply`.
   defp submit(mode, prompt, dir, model, timeout_ms, client) do
+    params = %{
+      prompt: prompt,
+      model: model,
+      mode: Atom.to_string(mode),
+      timeout_ms: timeout_ms,
+      # Relative to where the CLI runs, not the runtime's working
+      # directory. absname/1 (unlike expand/1) keeps any "..", so the
+      # runtime still applies its own rules to the path as given.
+      dir: Path.absname(dir)
+    }
+
     with {:ok, health} <- Client.health(client),
-         request = %Request{
-           input: prompt,
-           context: %{},
-           model: model,
-           mode: mode,
-           timeout_ms: timeout_ms
-         },
-         # Relative to where the CLI runs, not the runtime's working
-         # directory. absname/1 (unlike expand/1) keeps any "..", so
-         # submit_task/3 still applies its own rules to the path as given.
-         {:ok, task_id} <- Client.submit_task(client, request, Path.absname(dir)) do
-      IO.puts("Current #{health.version} · #{health.node}\n")
+         {:ok, task_id} <- Client.submit_task(client, params) do
+      IO.puts("Current #{health["version"]} · #{client.url}\n")
       IO.puts(Render.task_submitted(task_id, mode, model))
 
       case mode do
         :plan ->
           follow(client, task_id, health,
-            done?: & &1.terminal,
-            expect: :planned,
+            done?: & &1["terminal"],
+            expect: "planned",
             timeout_ms: timeout_ms
           )
 
         :apply ->
           follow(client, task_id, health,
             done?: &halted?/1,
-            expect: :waiting_for_approval,
+            expect: "waiting_for_approval",
             timeout_ms: timeout_ms
           )
       end
     else
-      {:error, {:invalid_project_dir, path, reason}} ->
-        fail("invalid project directory #{path} (#{reason})")
+      {:error, {:api_error, %{code: "invalid_project_dir", message: message}}} ->
+        fail("invalid project directory " <> message)
 
-      {:error, {:unknown_model, unknown}} ->
-        fail("unknown model #{unknown}\nList the available models with:  current models")
+      {:error, {:api_error, %{code: "unknown_model"}}} ->
+        fail("unknown model #{model}\nList the available models with:  current models")
 
-      {:error, {:invalid_timeout, value}} ->
-        fail("invalid timeout #{inspect(value)}")
+      {:error, {:api_error, %{code: code, message: message}}}
+      when code in ["invalid_timeout", "model_required", "bad_request"] ->
+        fail(message)
 
       {:error, reason} ->
-        fail(transport_error(reason, client.node))
+        fail(transport_error(reason, client.url))
     end
   end
 
-  defp halted?(view), do: view.terminal or view.status == :waiting_for_approval
+  defp halted?(view), do: view["terminal"] or view["status"] == "waiting_for_approval"
 
   ## approve, reject, apply
 
-  defp review_metadata(message), do: %{message: message, reviewed_by: reviewer(), via: :cli}
+  defp review_metadata(message), do: %{message: message, reviewed_by: reviewer()}
 
-  defp review_error(command, id, {:not_apply_mode, mode}, _client),
-    do: not_apply_mode(command, id, mode)
+  defp review_error(command, id, {:api_error, %{code: "not_apply_mode"} = error}, _client),
+    do: not_apply_mode(command, id, error.details["mode"])
 
-  defp review_error(command, id, {:invalid_transition, status, _event}, _client),
+  defp review_error(command, id, {:api_error, %{code: "invalid_transition"} = error}, _client),
     do:
       "proposal #{id} can't be #{past(command)}: " <>
-        "its workflow is #{status}, not waiting for approval"
+        "its workflow is #{error.details["status"]}, not waiting for approval"
 
   defp review_error(_command, id, reason, client),
     do: error_message("proposal", id, reason, client)
 
-  defp apply_error(id, {:not_apply_mode, mode}, _client), do: not_apply_mode(:apply, id, mode)
+  defp apply_error(id, {:api_error, %{code: "not_apply_mode"} = error}, _client),
+    do: not_apply_mode(:apply, id, error.details["mode"])
 
-  defp apply_error(id, {:invalid_transition, :waiting_for_approval, _event}, _client) do
+  defp apply_error(
+         id,
+         {:api_error, %{code: "invalid_transition", details: %{"status" => "waiting_for_approval"}}},
+         _client
+       ) do
     "proposal #{id} hasn't been approved yet. Approve it first:\n" <>
       "  current approve #{id}"
   end
 
-  defp apply_error(id, {:invalid_transition, status, _event}, _client),
-    do: "proposal #{id} can't be applied: its workflow is #{status}, not approved"
+  defp apply_error(id, {:api_error, %{code: "invalid_transition"} = error}, _client),
+    do: "proposal #{id} can't be applied: its workflow is #{error.details["status"]}, not approved"
 
   defp apply_error(id, reason, client), do: error_message("proposal", id, reason, client)
 
@@ -526,7 +529,7 @@ defmodule Current.CLI do
          }) do
       {:ok, view} ->
         IO.puts(Render.outcome(view))
-        if view.status == Keyword.fetch!(opts, :expect), do: @exit_ok, else: @exit_failed
+        if view["status"] == Keyword.fetch!(opts, :expect), do: @exit_ok, else: @exit_failed
 
       {:timeout, _state} ->
         IO.puts("""
@@ -541,7 +544,7 @@ defmodule Current.CLI do
       {:error, reason} ->
         IO.puts("")
 
-        fail(transport_error(reason, client.node) <> "\n  current events #{Render.short(id)}")
+        fail(transport_error(reason, client.url) <> "\n  current events #{Render.short(id)}")
     end
   end
 
@@ -553,16 +556,16 @@ defmodule Current.CLI do
         if state.done?.(view) do
           # What happened since the last poll still gets shown, before
           # the outcome.
-          show_activity(state, client, view.workflow_id)
+          show_activity(state, client, view["workflow_id"])
           {:ok, view}
         else
           view
           |> observe(state)
-          |> show_activity(client, view.workflow_id)
+          |> show_activity(client, view["workflow_id"])
           |> retry(client, id)
         end
 
-      {:error, :not_found} ->
+      {:error, {:api_error, %{code: "not_found"}}} ->
         retry(state, client, id)
 
       {:error, reason} ->
@@ -573,11 +576,11 @@ defmodule Current.CLI do
   defp observe(view, state) do
     started? =
       state.started? or
-        Enum.any?(view.entries, &match?(%{event: %Current.Event.ProposalProductionStarted{}}, &1))
+        Enum.any?(view["entries"], &match?(%{"event" => %{"type" => "ProposalProductionStarted"}}, &1))
 
     if started? and not state.started?, do: IO.puts("  … waiting for the model")
 
-    case length(view.entries) do
+    case length(view["entries"]) do
       count when count > state.seen ->
         %{state | seen: count, started?: started?, last_progress: now()}
 
@@ -593,11 +596,11 @@ defmodule Current.CLI do
   # an older one -- just shows nothing.
   defp show_activity(state, client, workflow_id) do
     case Client.activity(client, workflow_id, state.activity_epoch, state.activity_seq) do
-      %{items: [_ | _] = items, epoch: epoch, last_seq: last_seq} ->
+      {:ok, %{"items" => [_ | _] = items, "epoch" => epoch, "last_seq" => last_seq}} ->
         items |> Render.activity() |> Enum.each(&IO.puts/1)
         %{state | activity_epoch: epoch, activity_seq: last_seq, last_progress: now()}
 
-      %{epoch: epoch, last_seq: last_seq} ->
+      {:ok, %{"epoch" => epoch, "last_seq" => last_seq}} ->
         %{state | activity_epoch: epoch, activity_seq: last_seq}
 
       _unavailable ->
@@ -610,7 +613,7 @@ defmodule Current.CLI do
   # calls. A runtime that doesn't report the per-task bound (an older
   # one) is assumed to make a single call.
   defp model_wait_ms(health) do
-    Map.get(health, :llm_task_timeout_ms) || health.llm_proposal_timeout_ms ||
+    health["llm_task_timeout_ms"] || health["llm_proposal_timeout_ms"] ||
       @default_model_timeout_ms
   end
 
@@ -652,25 +655,35 @@ defmodule Current.CLI do
 
   defp error_message(kind, id, reason, client) do
     if transport_error?(reason),
-      do: transport_error(reason, client.node),
+      do: transport_error(reason, client.url),
       else: Render.lookup_error(kind, id, reason)
   end
 
-  defp transport_error?(reason) do
-    reason == :runtime_unavailable or match?({:rpc_failed, _}, reason) or
-      match?({:runtime_raised, _}, reason)
-  end
+  # Failures of the request itself, or of the runtime, as opposed to an
+  # answer about the thing asked for ("no such proposal").
+  defp transport_error?(:runtime_unavailable), do: true
+  defp transport_error?({:http_failed, _}), do: true
+  defp transport_error?({:bad_response, _}), do: true
+  defp transport_error?({:api_error, %{code: code}}), do: code in ["runtime_error", "internal_error"]
+  defp transport_error?(_reason), do: false
 
-  defp transport_error(:runtime_unavailable, node),
-    do: "runtime is not running at #{node}\nStart it with:  bin/current-server"
+  defp transport_error(:runtime_unavailable, url),
+    do: "runtime is not running at #{url}\nStart it with:  bin/current-server"
 
-  defp transport_error({:rpc_failed, :timeout}, node), do: "#{node} did not answer in time"
+  defp transport_error({:http_failed, :timeout}, url), do: "#{url} did not answer in time"
 
-  defp transport_error({:rpc_failed, reason}, node),
-    do: "call to #{node} failed: #{inspect(reason)}"
+  defp transport_error({:http_failed, reason}, url),
+    do: "request to #{url} failed: #{inspect(reason)}"
 
-  defp transport_error({:runtime_raised, message}, node), do: "#{node} raised: #{message}"
-  defp transport_error(reason, _node), do: inspect(reason)
+  defp transport_error({:bad_response, status}, url),
+    do: "#{url} answered with HTTP #{status}, which is not the Current API"
+
+  defp transport_error({:api_error, %{code: code, message: message}}, url)
+       when code in ["runtime_error", "internal_error"],
+       do: "#{url} reported an error: #{message}"
+
+  defp transport_error({:api_error, %{message: message}}, _url), do: message
+  defp transport_error(reason, _url), do: inspect(reason)
 
   defp print_models([]) do
     IO.puts("No models are currently available.")

@@ -1,9 +1,8 @@
 defmodule Current.HTTP.Router do
   @moduledoc """
-  The HTTP/JSON face of `Current.RPC`: one route per RPC function, no
-  logic of its own. Like the CLI, it is a client of the runtime that
-  happens to live in the same VM -- everything it does goes through
-  `Current.RPC`, so the two cannot drift apart.
+  The runtime's control plane: HTTP/JSON, one route per `Current.API`
+  function, no logic of its own. The `current` CLI is a client of these
+  routes like any other (see `Current.CLI.Client`).
 
       POST /v1/tasks                       submit_task
       GET  /v1/workflows/:id               workflow
@@ -23,8 +22,10 @@ defmodule Current.HTTP.Router do
   Responses are JSON, encoded by `Current.HTTP.Encode`, except `review`
   (the versioned `current.review/v1` document, exactly what
   `current review --json` prints) and `artifact` (the exact bytes, as
-  `application/octet-stream`). Errors are `{"error": {"code": ..., "message": ...}}`
-  with a matching status: 400 bad request, 404 not found, 409 conflict (ambiguous prefix, wrong workflow state),
+  `application/octet-stream`). Errors are
+  `{"error": {"code": ..., "message": ..., "details": ...}}` (`details` only
+  where a client needs a value rather than a sentence: the ids an ambiguous
+  prefix matches, a workflow's status or mode) with a matching status: 400 bad request, 404 not found, 409 conflict (ambiguous prefix, wrong workflow state),
   422 unprocessable (unknown model, bad directory), 502 for anything else.
 
   ### POST /v1/tasks
@@ -50,12 +51,11 @@ defmodule Current.HTTP.Router do
 
   alias Current.CLI.ReviewJSON
   alias Current.HTTP.Encode
-  alias Current.{Request, RPC}
+  alias Current.{API, Request}
 
   @default_review_max_lines 200
 
   plug(:match)
-  plug(:reject_browsers)
 
   plug(Plug.Parsers,
     parsers: [:json],
@@ -65,23 +65,6 @@ defmodule Current.HTTP.Router do
   )
 
   plug(:dispatch)
-
-  ## Browser guard
-
-  # Browsers attach an Origin header to every cross-origin POST, and
-  # nothing that is a client of this API does. Refusing them stops a web
-  # page you happen to have open from driving a local runtime.
-  defp reject_browsers(conn, _opts) do
-    case get_req_header(conn, "origin") do
-      [] ->
-        conn
-
-      _ ->
-        conn
-        |> error(403, "forbidden", "browser requests are not accepted")
-        |> halt()
-    end
-  end
 
   ## Tasks
 
@@ -101,12 +84,12 @@ defmodule Current.HTTP.Router do
         timeout_ms: timeout_ms
       }
 
-      # RPC.submit_task/2 registers the calling process as the task's
+      # API.submit_task/2 registers the calling process as the task's
       # listener. A connection process outlives the request and would
       # collect every notification for the task in its mailbox, so the
       # call is made from a process that exits straight away; its
-      # notifications are dropped, as they are for the CLI's RPC calls.
-      case Task.async(fn -> RPC.submit_task(request, dir) end) |> Task.await(30_000) do
+      # notifications are dropped. Clients follow progress by polling.
+      case Task.async(fn -> API.submit_task(request, dir) end) |> Task.await(30_000) do
         {:ok, task_id} -> json(conn, 202, %{task_id: task_id})
         {:error, reason} -> respond_error(conn, reason)
       end
@@ -118,19 +101,19 @@ defmodule Current.HTTP.Router do
   ## Workflows
 
   get "/v1/workflows/:id" do
-    case RPC.workflow(id) do
+    case API.workflow(id) do
       {:ok, view} -> json(conn, 200, view)
       {:error, reason} -> respond_error(conn, reason)
     end
   end
 
-  # RPC.activity/3 wants a full workflow id; workflow/1 resolves prefixes
+  # API.activity/3 wants a full workflow id; workflow/1 resolves prefixes
   # and task ids, so go through it.
   get "/v1/workflows/:id/activity" do
     with {:ok, epoch} <- optional_query_integer(conn, "epoch"),
          {:ok, after_seq} <- optional_query_integer(conn, "after_seq"),
-         {:ok, %{workflow_id: workflow_id}} <- RPC.workflow(id) do
-      json(conn, 200, RPC.activity(workflow_id, epoch, after_seq || 0))
+         {:ok, %{workflow_id: workflow_id}} <- API.workflow(id) do
+      json(conn, 200, API.activity(workflow_id, epoch, after_seq || 0))
     else
       {:error, reason} -> respond_error(conn, reason)
     end
@@ -139,7 +122,7 @@ defmodule Current.HTTP.Router do
   ## Proposals
 
   get "/v1/proposals/:id" do
-    case RPC.proposal(id) do
+    case API.proposal(id) do
       {:ok, view} -> json(conn, 200, view)
       {:error, reason} -> respond_error(conn, reason)
     end
@@ -153,7 +136,7 @@ defmodule Current.HTTP.Router do
         raw: conn.query_params["raw"] in ["true", "1"]
       }
 
-      case RPC.review(id, opts) do
+      case API.review(id, opts) do
         # Already a JSON-ready, versioned document; not run through Encode.
         {:ok, review} -> send_json(conn, 200, ReviewJSON.to_map(review))
         {:error, reason} -> respond_error(conn, reason)
@@ -164,15 +147,15 @@ defmodule Current.HTTP.Router do
   end
 
   post "/v1/proposals/:id/approve" do
-    decide(conn, id, &RPC.approve/2)
+    decide(conn, id, &API.approve/2)
   end
 
   post "/v1/proposals/:id/reject" do
-    decide(conn, id, &RPC.reject/2)
+    decide(conn, id, &API.reject/2)
   end
 
   post "/v1/proposals/:id/apply" do
-    case RPC.apply_proposal(id) do
+    case API.apply_proposal(id) do
       {:ok, workflow_id} -> json(conn, 202, %{workflow_id: workflow_id})
       {:error, reason} -> respond_error(conn, reason)
     end
@@ -181,7 +164,7 @@ defmodule Current.HTTP.Router do
   ## Artifacts
 
   get "/v1/artifacts/:id" do
-    case RPC.artifact(id) do
+    case API.artifact(id) do
       {:ok, full_id, contents} ->
         conn
         |> put_resp_header("x-current-artifact-id", full_id)
@@ -196,14 +179,14 @@ defmodule Current.HTTP.Router do
   ## Runtime
 
   get "/v1/models" do
-    case RPC.models() do
+    case API.models() do
       models when is_list(models) -> json(conn, 200, %{models: models})
       {:error, reason} -> respond_error(conn, reason)
     end
   end
 
   get "/v1/health" do
-    json(conn, 200, RPC.health())
+    json(conn, 200, API.health())
   end
 
   match _ do
@@ -225,14 +208,14 @@ defmodule Current.HTTP.Router do
 
   ## approve / reject
 
-  defp decide(conn, id, rpc) do
+  defp decide(conn, id, api_call) do
     params = conn.body_params
 
     with {:ok, message} <- optional_string(params, "message"),
          {:ok, reviewed_by} <- optional_string(params, "reviewed_by") do
       metadata = %{message: message, reviewed_by: reviewed_by, via: :http}
 
-      case rpc.(id, metadata) do
+      case api_call.(id, metadata) do
         {:ok, workflow_id} -> json(conn, 200, %{workflow_id: workflow_id})
         {:error, reason} -> respond_error(conn, reason)
       end
@@ -302,43 +285,49 @@ defmodule Current.HTTP.Router do
     |> send_resp(status, JSON.encode!(document))
   end
 
-  defp error(conn, status, code, message) do
-    send_json(conn, status, %{error: %{code: code, message: message}})
+  defp error(conn, status, code, message, details \\ nil) do
+    body = %{code: code, message: message}
+    body = if details, do: Map.put(body, :details, Encode.to_json(details)), else: body
+    send_json(conn, status, %{error: body})
   end
 
-  # Maps what Current.RPC returns to a status and a stable code.
+  # Maps what Current.API returns to a status and a stable code.
   defp respond_error(conn, reason) do
-    {status, code, message} = describe_error(reason)
-    error(conn, status, code, message)
+    {status, code, message, details} = describe_error(reason)
+    error(conn, status, code, message, details)
   end
 
-  defp describe_error(:not_found), do: {404, "not_found", "no match for that id"}
+  defp describe_error(:not_found), do: {404, "not_found", "no match for that id", nil}
 
   defp describe_error(:prefix_too_short),
-    do: {400, "prefix_too_short", "an id prefix needs at least 4 hex digits"}
+    do: {400, "prefix_too_short", "an id prefix needs at least 4 hex digits", nil}
 
-  defp describe_error({:ambiguous, ids}),
-    do: {409, "ambiguous_id", "the prefix matches #{length(ids)} ids: " <> Enum.join(ids, ", ")}
+  defp describe_error({:ambiguous, ids}) do
+    {409, "ambiguous_id", "the prefix matches #{length(ids)} ids: " <> Enum.join(ids, ", "),
+     %{ids: ids}}
+  end
 
-  defp describe_error({:bad_request, message}), do: {400, "bad_request", message}
+  defp describe_error({:bad_request, message}), do: {400, "bad_request", message, nil}
 
-  defp describe_error(:model_required), do: {422, "model_required", "a model is required"}
+  defp describe_error(:model_required), do: {422, "model_required", "a model is required", nil}
 
   defp describe_error({:unknown_model, model}),
-    do: {422, "unknown_model", "#{model} is not in the model catalog"}
+    do: {422, "unknown_model", "#{model} is not in the model catalog", nil}
 
   defp describe_error({:invalid_timeout, value}),
-    do: {422, "invalid_timeout", "invalid timeout: #{inspect(value)}"}
+    do: {422, "invalid_timeout", "invalid timeout: #{inspect(value)}", nil}
 
   defp describe_error({:invalid_project_dir, path, reason}),
-    do: {422, "invalid_project_dir", "#{path}: #{reason}"}
+    do: {422, "invalid_project_dir", "#{path}: #{reason}", nil}
 
   defp describe_error({:not_apply_mode, mode}),
-    do: {409, "not_apply_mode", "the proposal is from a #{mode}-mode workflow"}
+    do: {409, "not_apply_mode", "the proposal is from a #{mode}-mode workflow", %{mode: mode}}
 
-  defp describe_error({:invalid_transition, status, _event}),
-    do: {409, "invalid_transition", "the workflow is #{status}, which doesn't allow that"}
+  defp describe_error({:invalid_transition, status, _event}) do
+    {409, "invalid_transition", "the workflow is #{status}, which doesn't allow that",
+     %{status: status}}
+  end
 
   defp describe_error(other),
-    do: {502, "runtime_error", inspect(other)}
+    do: {502, "runtime_error", inspect(other), nil}
 end
