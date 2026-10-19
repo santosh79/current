@@ -1,7 +1,8 @@
 defmodule Current.CLI.RenderTest do
   @moduledoc """
   How `current events` words a claim and the evidence it was checked
-  against. Pure rendering: events are built by hand, no runtime.
+  against. Pure rendering: events are built by hand, no runtime, and
+  handed over as the API would serve them (Current.HTTP.Encode).
   """
 
   use ExUnit.Case, async: true
@@ -18,13 +19,13 @@ defmodule Current.CLI.RenderTest do
       |> Enum.with_index(1)
       |> Enum.map(fn {event, pos} -> %Entry{position: pos, event: event, inserted_at: now} end)
 
-    %{
+    Current.HTTP.Encode.to_json(%{
       entries: entries,
       workflow_id: "sha256:" <> String.duplicate("a", 64),
       task: nil,
       status: :applying,
       mode: :apply
-    }
+    })
   end
 
   defp applied(intent, result) do

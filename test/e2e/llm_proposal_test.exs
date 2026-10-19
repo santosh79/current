@@ -210,10 +210,10 @@ defmodule Current.E2E.LLMProposalTest do
 
       # The stored proposal carries them too, and `current proposal` shows them.
       await(:workflow_completed, workflow_id)
-      assert {:ok, view} = Current.RPC.proposal(proposal.id)
+      assert {:ok, view} = Current.API.proposal(proposal.id)
       assert view.proposal.observations == proposal.observations
 
-      assert Current.CLI.Render.proposal(view) =~
+      assert view |> Current.HTTP.Encode.to_json() |> Current.CLI.Render.proposal() =~
                "Observed before proposing\n  1. glob lib/*.ex in .\n" <>
                  "       why      find the modules\n       shown    sha256:"
     end

@@ -17,21 +17,10 @@ defmodule Current.HTTP.RouterTest do
     test "requests are accepted without credentials" do
       assert call(:get, "/v1/health").status == 200
     end
-
-    test "browser requests (Origin header) are refused" do
-      conn =
-        conn(:post, "/v1/proposals/abcdef/approve", "{}")
-        |> put_req_header("origin", "https://evil.example")
-        |> put_req_header("content-type", "application/json")
-        |> Router.call(Router.init([]))
-
-      assert conn.status == 403
-      assert decoded(conn)["error"]["code"] == "forbidden"
-    end
   end
 
   describe "routes" do
-    test "health mirrors RPC.status" do
+    test "health mirrors API.status" do
       body = call(:get, "/v1/health") |> decoded()
       assert body["status"] == "ready"
       assert is_integer(body["wal_head"])

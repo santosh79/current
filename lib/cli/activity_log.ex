@@ -1,7 +1,7 @@
 defmodule Current.ActivityLog do
   @moduledoc """
   Prints what the runtime is doing to the node's console, one line each:
-  RPC requests as they arrive, every commit as it is written to the WAL
+  API requests as they arrive, every commit as it is written to the WAL
   (consensus log), and what a model asks to see while it works out a
   proposal, all tagged with the task they belong to.
 
@@ -20,7 +20,7 @@ defmodule Current.ActivityLog do
   next commit records as its previous_hash.
 
   It is a subscriber of Current.ActivityHub, which does the listening
-  (to the WAL, to the proposal builder, to the RPC layer) and the
+  (to the WAL, to the proposal builder, to the API layer) and the
   per-workflow bookkeeping; this module only decides how each change
   reads on a console. Its child position in Consensus.Supervisor
   (`:rest_for_one`, after the hub) makes it re-subscribe whenever the hub
@@ -34,7 +34,7 @@ defmodule Current.ActivityLog do
   `bin/current-server` turns it on. Otherwise the process just keeps
   its bookkeeping, so tests stay quiet.
 
-  Repeated identical RPC requests (a client polling `workflow/1`) are
+  Repeated identical API requests (a client polling `workflow/1`) are
   printed once, and again only after a pause of 2 seconds.
   """
 
@@ -61,7 +61,7 @@ defmodule Current.ActivityLog do
     :ok = ActivityHub.subscribe(hub, :all, self())
 
     # {function, detail} => monotonic ms of the last such request
-    {:ok, %{recent_rpcs: %{}}}
+    {:ok, %{recent_requests: %{}}}
   end
 
   @impl true
@@ -76,17 +76,17 @@ defmodule Current.ActivityLog do
     {:noreply, state}
   end
 
-  def handle_info({:activity, _workflow_id, %{type: :rpc} = rpc}, state) do
-    %{function: function, detail: detail, mono: mono} = rpc
+  def handle_info({:activity, _workflow_id, %{type: :api} = request}, state) do
+    %{function: function, detail: detail, mono: mono} = request
     key = {function, detail}
-    last = Map.get(state.recent_rpcs, key)
+    last = Map.get(state.recent_requests, key)
 
     if last == nil or mono - last > @repeat_window_ms do
       [first | rest] = if detail == [], do: [""], else: detail
 
       print(
         String.trim_trailing(
-          "#{wall(rpc.wall_us)}  ← #{String.pad_trailing(Atom.to_string(function), 15)}  #{first}"
+          "#{wall(request.wall_us)}  ← #{String.pad_trailing(Atom.to_string(function), 15)}  #{first}"
         )
       )
 
@@ -94,16 +94,16 @@ defmodule Current.ActivityLog do
     end
 
     recent =
-      state.recent_rpcs
+      state.recent_requests
       |> Map.reject(fn {_key, at} -> mono - at > @repeat_window_ms end)
       |> Map.put(key, mono)
 
-    {:noreply, %{state | recent_rpcs: recent}}
+    {:noreply, %{state | recent_requests: recent}}
   end
 
-  def handle_info({:activity, _workflow_id, %{type: :rpc_result} = rpc}, state) do
+  def handle_info({:activity, _workflow_id, %{type: :api_result} = result}, state) do
     print(
-      "#{wall(rpc.wall_us)}  → #{String.pad_trailing(Atom.to_string(rpc.function), 15)}  #{rpc.detail}"
+      "#{wall(result.wall_us)}  → #{String.pad_trailing(Atom.to_string(result.function), 15)}  #{result.detail}"
     )
 
     {:noreply, state}

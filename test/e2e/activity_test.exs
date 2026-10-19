@@ -1,7 +1,7 @@
 defmodule Current.E2E.ActivityTest do
   @moduledoc """
   What a model asks to see while it works reaches a client polling
-  Current.RPC.activity/3: builder -> hub -> RPC.
+  Current.API.activity/3: builder -> hub -> API.
   """
 
   use ExUnit.Case, async: false
@@ -43,9 +43,9 @@ defmodule Current.E2E.ActivityTest do
                %{type: :requested, round: 1, entries: [%{label: "read_file lib/a.ex"}]},
                %{type: :settled, round: 1, entries: [%{status: :shown, bytes: bytes}]}
              ]
-           } = Current.RPC.activity(workflow_id)
+           } = Current.API.activity(workflow_id)
 
     assert bytes > 0
-    assert %{items: [], last_seq: 2} = Current.RPC.activity(workflow_id, epoch, 2)
+    assert %{items: [], last_seq: 2} = Current.API.activity(workflow_id, epoch, 2)
   end
 end

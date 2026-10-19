@@ -108,6 +108,9 @@ defmodule Current.CLI.ReviewRenderTest do
     }
   end
 
+  # ReviewMarkdown renders the current.review/v1 document the API serves.
+  defp render(review), do: review |> ReviewJSON.to_map() |> ReviewMarkdown.render()
+
   describe "ReviewMarkdown.render/1" do
     test "an EditFile shows old and new text, and a waiting proposal says how to approve it" do
       edit = %Intent.EditFile{
@@ -119,7 +122,7 @@ defmodule Current.CLI.ReviewRenderTest do
       }
 
       md =
-        ReviewMarkdown.render(
+        render(
           review([edit], %{artifacts: %{"o" => excerpt("o", "old"), "n" => excerpt("n", "new")}})
         )
 
@@ -141,7 +144,7 @@ defmodule Current.CLI.ReviewRenderTest do
 
       text = "Example:\n```sh\nmix test\n```"
 
-      md = ReviewMarkdown.render(review([write], %{artifacts: %{"c" => excerpt("c", text)}}))
+      md = render(review([write], %{artifacts: %{"c" => excerpt("c", text)}}))
       assert md =~ "````markdown\n#{text}\n````"
     end
 
@@ -162,7 +165,7 @@ defmodule Current.CLI.ReviewRenderTest do
         "o" => %Excerpt{id: "o", status: :omitted}
       }
 
-      md = ReviewMarkdown.render(review(intents, %{artifacts: artifacts}))
+      md = render(review(intents, %{artifacts: artifacts}))
 
       assert md =~ "_… showing 2 of 50 lines"
       assert md =~ "full: `current artifact t`_"
@@ -181,7 +184,7 @@ defmodule Current.CLI.ReviewRenderTest do
         evidence: %{source_intent_id: "c1", condition: :exit_code_equals, value: 0}
       }
 
-      md = ReviewMarkdown.render(review([cmd, claim]))
+      md = render(review([cmd, claim]))
 
       assert md =~ "### 1. RunCommand\n\n```sh\nnpm test\n```"
 
@@ -193,10 +196,7 @@ defmodule Current.CLI.ReviewRenderTest do
       read = %Intent.ReadFile{id: "r1", proposal_id: "p", path: "/etc/passwd"}
       error = %ValidationError{intent_id: "r1", reason: "path outside project"}
 
-      md =
-        ReviewMarkdown.render(
-          review([read], %{status: :validation_failed, validation_error: error})
-        )
+      md = render(review([read], %{status: :validation_failed, validation_error: error}))
 
       assert md =~ "## ✗ Validation failed\n\n- **At:** intent 1 (ReadFile `/etc/passwd`)"
       assert md =~ "- **Reason:** path outside project"
@@ -204,7 +204,7 @@ defmodule Current.CLI.ReviewRenderTest do
     end
 
     test "an approved proposal says how to apply it" do
-      md = ReviewMarkdown.render(review([], %{status: :approved}))
+      md = render(review([], %{status: :approved}))
 
       assert md =~ "Approved. Nothing has been applied yet."
       assert md =~ "Apply with: `current apply sha256:aaaaaaaaaaaa`"

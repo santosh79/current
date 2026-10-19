@@ -1,8 +1,11 @@
 defmodule Current.CLI.ReviewJSON do
   @moduledoc """
-  The machine-readable form of `current review`: a versioned document,
-  built field by field from Current.Inspector.review/2 rather than by
-  serializing the runtime's structs, so it only changes on purpose.
+  The machine-readable form of a review: a versioned document, built
+  field by field from Current.Inspector.review/2 rather than by
+  serializing the runtime's structs, so it only changes on purpose. The
+  runtime serves it at `GET /v1/proposals/:id/review`; `current review
+  --json` prints it (`pretty/1`) and `current review` renders it as
+  Markdown (Current.CLI.ReviewMarkdown).
 
   Schema `current.review/v1`:
 
@@ -38,9 +41,12 @@ defmodule Current.CLI.ReviewJSON do
   @schema "current.review/v1"
 
   @spec encode(Current.Inspector.review_view()) :: String.t()
-  def encode(review) do
-    review
-    |> to_map()
+  def encode(review), do: review |> to_map() |> pretty()
+
+  @doc "A review document (`to_map/1`'s result, or the API's, decoded) as indented JSON."
+  @spec pretty(map()) :: String.t()
+  def pretty(document) do
+    document
     |> JSON.encode!()
     # Pretty-printed for people; tools don't mind.
     |> :json.decode()
