@@ -36,6 +36,24 @@ defmodule Current.ProposalStore do
     lookup_proposal(proposal_id)
   end
 
+  @doc """
+  Every proposal, most recently produced first.
+  """
+  @spec all() :: [Proposal.t()]
+  def all do
+    :ok = sync()
+
+    @table
+    |> :ets.select([{{{:produced_at, :"$1"}, :"$2"}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.sort_by(fn {_id, produced_at} -> produced_at end, {:desc, DateTime})
+    |> Enum.flat_map(fn {id, _produced_at} ->
+      case lookup_proposal(id) do
+        {:ok, proposal} -> [proposal]
+        {:error, :not_found} -> []
+      end
+    end)
+  end
+
   @spec sync() :: :ok
   def sync do
     GenServer.call(
@@ -242,15 +260,27 @@ defmodule Current.ProposalStore do
     }
   end
 
-  defp project_event(%Event.ProposalProduced{
-         proposal: %Proposal{} = proposal
-       }) do
+  defp project_event(
+         %Event.ProposalProduced{
+           proposal: %Proposal{} = proposal
+         } = event
+       ) do
     true =
       :ets.insert(
         @table,
         {
           proposal.id,
           proposal
+        }
+      )
+
+    # Ordering row, so all/0 can list newest first.
+    true =
+      :ets.insert(
+        @table,
+        {
+          {:produced_at, proposal.id},
+          event.timestamp
         }
       )
 

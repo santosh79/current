@@ -36,6 +36,18 @@ defmodule Current.TaskStore do
     lookup_task(task_id)
   end
 
+  @doc """
+  Every task, newest submission first.
+  """
+  @spec all() :: [Task.t()]
+  def all do
+    :ok = sync()
+
+    @table
+    |> :ets.select([{{:_, :"$1"}, [], [:"$1"]}])
+    |> Enum.sort_by(& &1.submitted_at, {:desc, DateTime})
+  end
+
   @spec sync() :: :ok
   def sync do
     GenServer.call(

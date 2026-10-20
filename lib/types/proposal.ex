@@ -27,6 +27,28 @@ defmodule Current.Proposal do
         }
 
   @doc """
+  Every proposal, most recently produced first, each as a map holding the
+  `:proposal` together with its `:workflow_id` and the `:input` (the
+  user's prompt), `:model`, `:timeout_ms`, `:project_dir` and `:task_id`
+  of the task it answers.
+  """
+  @spec all() :: [map()]
+  def all do
+    Current.ProposalStore.all()
+    |> Enum.map(fn proposal ->
+      task_id =
+        case Current.WorkflowStore.get(proposal.workflow_id) do
+          {:ok, workflow} -> workflow.task_id
+          {:error, :not_found} -> nil
+        end
+
+      Current.Task.request_details(task_id)
+      |> Map.put(:proposal, proposal)
+      |> Map.put(:workflow_id, proposal.workflow_id)
+    end)
+  end
+
+  @doc """
   Brings a proposal read back from an older log up to the current shape.
 
   Proposals are stored inside events as they were when written, so one
