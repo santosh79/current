@@ -4,258 +4,68 @@
 
 An Artifact is:
 
-> **An immutable, typed, stored object produced by a step or runtime stage, addressable by identity, and optionally bound to a named workflow output.**
+> **An immutable blob of bytes, stored once and addressed by the SHA-256 of its content.**
 
-If an intent is a proposal and an event is a fact, an artifact is a **result**.
+If an intent is a proposal and an event is a fact, an artifact is the **content** that proposals and facts point at.
 
-An artifact does not describe what should happen, and it does not record what happened. It holds what was produced.
+An artifact does not describe what should happen, and it does not record what happened. It holds bytes: a file's text, the text an edit replaces, a command's output, the model's reply.
 
 ---
 
 ## Invariants
 
-The following must always hold for any valid artifact:
+The following hold for every artifact:
 
-1. **Immutable** — Once written, an artifact must not be modified. New versions must be written as new artifacts, not edits to existing ones.
+1. **Immutable**: Once written, an artifact is never modified. Different bytes are a different artifact with a different id.
 
-2. **Addressable** — Every artifact must have a stable identity. Artifacts intended for downstream workflow use must also have a stable name within the scope of their run. The identity is canonical; the name is a workflow-level binding.
+2. **Content-addressed**: The id is `"sha256:" <> hex(sha256(bytes))`. The same bytes always have the same id, so storing them twice stores them once.
 
-3. **Typed** — Every artifact must belong to a predefined, closed set of artifact types. Arbitrary or untyped blobs are not allowed.
+3. **Just bytes**: An artifact has no type, name or metadata of its own. What the bytes *are* is known only from the field that references them (`contents_artifact_id`, `old_artifact_id`, `stdout_artifact_id`, and so on).
 
-4. **Serializable** — An artifact must be representable as data or a reference to stored data. It must not contain executable code.
+4. **Referenced by id, never embedded**: Intents, observations, effect results and events hold artifact ids, not contents. This keeps them small enough to live in the log.
 
-5. **Context-bound** — Every artifact must be attributable to a specific step, task, and run.
-
-6. **Not a proposal** — An artifact is not itself a proposal. It is a stored output produced by a step or runtime stage. This includes agent-produced outputs, runtime-produced outputs, and interpreter-produced outputs.
-
-7. **Event-referenced** — Artifacts may be persisted before the corresponding event is appended, but they become part of durable runtime history only once referenced by an event. An artifact that is never referenced by an event is not part of the canonical run record.
+5. **Event-referenced**: An artifact is written *before* the event that mentions it, so one can exist without being part of the record. It becomes part of durable history only once an event (directly, or through an intent, proposal or result inside an event) refers to it.
 
 ---
 
-## Canonical Representation
+## Representation
 
-An artifact should be representable as a structured value.
-
-```elixir
-%Current.Artifact{
-  id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  name: :patch_output,
-  type: :file_patch_result,
-  storage: %{
-    backend: :filesystem,
-    path: "artifacts/sha256/ab/cd/abcdef..."
-  },
-  metadata: %{
-    bytes: 1842,
-    content_type: "text/x-diff"
-  },
-  context: %{
-    step_id: "implement_auth",
-    task_id: "task_123",
-    run_id: "run_456"
-  },
-  timestamp: ~U[2026-03-21 15:00:10Z]
-}
-```
-
-The artifact struct describes a stored object and its location. It does not inline the result data — that is owned by the store and addressed by `id`.
-
-In v0, artifacts are stored on the local filesystem. The `storage` field is modeled explicitly so that future backends can be added without changing the artifact abstraction.
-
-### Artifact Identity
-
-Every artifact has two addresses:
-
-- **Canonical identity** — the `id`, typically a content hash. Stable, storage-level, and intended to be unique within the artifact store.
-- **Workflow name** — the `name` within a run. How steps refer to outputs within a pipeline.
-
-These are kept separate intentionally. The `id` gives you storage integrity; the `name` gives you composability.
-
-### Struct Definition
+There is no `Artifact` struct. The store is `Current.BlobStore`:
 
 ```elixir
-defmodule Current.Id do
-  @type t :: String.t()
-
-  @sha256_prefix "sha256:"
-  @sha256_hex_length 64
-
-  def validate(@sha256_prefix <> hex) when byte_size(hex) == @sha256_hex_length do
-    if String.match?(hex, ~r/\A[0-9a-f]+\z/) do
-      :ok
-    else
-      {:error, :invalid_id_hex}
-    end
-  end
-
-  def validate(_), do: {:error, :invalid_id}
-end
+Current.BlobStore.put(binary)          # {:ok, "sha256:<hex>"}; writes nothing if already stored
+Current.BlobStore.read(id)             # {:ok, binary} | {:error, :not_found}
+Current.BlobStore.path_for(id)         # {:ok, path}   | {:error, :not_found}
+Current.BlobStore.ids_with_prefix(p)   # ids starting with "sha256:6c8e06", to resolve a short id
 ```
 
-```elixir
-defmodule Current.Artifact do
-  @enforce_keys [:id, :type, :storage, :metadata, :context, :timestamp]
-  defstruct [
-    :id,
-    :name,
-    :type,
-    :storage,
-    :metadata,
-    :context,
-    :timestamp
-  ]
+On disk, the blob for `sha256:<hex>` is the file `<data_dir>/artifacts/sha256-<hex>`. The local filesystem is the only backend.
 
-  @type type ::
-          :file_patch_result
-          | :command_result
-          | :test_result
-          | :read_result
-          | :claim_result
-          | :report
-          | :manifest
+### Artifact ids and other ids
 
-  @type storage :: %{
-          backend: :filesystem,
-          path: String.t()
-        }
+Events, intents, proposals, tasks and workflows also have ids that start `sha256:`, but those are random (`Current.Id.generate/0`). Only an artifact's id is a hash of its content. Treat the two kinds as unrelated.
 
-  @type metadata :: %{
-          optional(:bytes) => non_neg_integer(),
-          optional(:content_type) => String.t()
-        }
+---
 
-  @type context :: %{
-          step_id: String.t(),
-          task_id: String.t(),
-          run_id: String.t()
-        }
+## What gets stored
 
-  @type t :: %__MODULE__{
-          id: Current.Id.t(),
-          name: atom() | nil,
-          type: type(),
-          storage: storage(),
-          metadata: metadata(),
-          context: context(),
-          timestamp: DateTime.t()
-        }
-end
-```
-### Artifact Reference
+Every field that holds an artifact id, and what is behind it:
 
-Steps do not pass artifacts directly. They pass references. This keeps the pipeline data model lightweight and allows the store to own the actual bytes.
+| Where | Field | The bytes are |
+|---|---|---|
+| `Intent.WriteFile` | `contents_artifact_id` | the text of the file to create |
+| `Intent.EditFile` | `old_artifact_id`, `new_artifact_id` | the exact text to replace, and its replacement |
+| `EffectResult.ReadFile` | `contents_artifact_id` | the file as read |
+| `EffectResult.EditFile` | `before_artifact_id`, `after_artifact_id` | the file before and after the edit |
+| `EffectResult.DeleteFile` | `before_artifact_id` | the file as it was when deleted |
+| `EffectResult.Command` | `stdout_artifact_id`, `stderr_artifact_id` | the command's output |
+| `EffectResult.Glob`, `EffectResult.Grep` | `matches_artifact_id` | the match listing |
+| `EffectResult.Grep` | `searched_artifact_ids` | the files that were searched |
+| `Observation` | `artifact_id` | what the agent was shown |
+| `Observation` | `reply_artifact_id` | the model reply that asked for it, untouched |
+| `Event.ProposalProduced`, `ProposalProductionError` | `raw_output_blob_id` | the model's exact reply |
 
-```elixir
-defmodule Current.ArtifactRef do
-  @enforce_keys [:id, :name, :run_id]
-  defstruct [
-    :id,
-    :name,
-    :run_id,
-    :type
-  ]
-
-  @type t :: %__MODULE__{
-          id: Current.Id.t(),
-          name: atom(),
-          run_id: String.t(),
-          type: Current.Artifact.type() | nil
-        }
-end
-```
-
-`id` is the canonical storage address. `name` + `run_id` is the workflow address. Both are included so that refs work for both storage integrity checks and pipeline composition.
-
-`ArtifactRef` is used for workflow-visible outputs. As a result, refs always include a `name`, even though stored artifacts themselves may be unnamed.
-
-### Validation Rules
-
-Every artifact must pass validation before it can be stored.
-
-```elixir
-defmodule Current.Artifact.Validator do
-  alias Current.Artifact
-
-  @valid_types [
-    :file_patch_result,
-    :command_result,
-    :test_result,
-    :read_result,
-    :claim_result,
-    :report,
-    :manifest
-  ]
-
-  def validate(%Artifact{} = artifact) do
-    with :ok <- validate_type(artifact.type),
-         :ok <- validate_name(artifact.name),
-         :ok <- Current.Id.validate(artifact.id),
-         :ok <- validate_storage(artifact.storage),
-         :ok <- validate_context(artifact.context),
-         :ok <- validate_timestamp(artifact.timestamp),
-         :ok <- validate_metadata(artifact.metadata) do
-      :ok
-    end
-  end
-  
-  defp validate_name(nil), do: :ok
-  defp validate_name(name) when is_atom(name), do: :ok
-  defp validate_name(_), do: {:error, :invalid_name}
-
-  defp validate_type(type) when type in @valid_types, do: :ok
-  defp validate_type(_), do: {:error, :invalid_type}
-
-  defp validate_storage(%{backend: :filesystem, path: p})
-     when is_binary(p) and byte_size(p) > 0,
-     do: :ok
-  defp validate_storage(_), do: {:error, :invalid_storage}
-
-  defp validate_context(%{step_id: s, task_id: t, run_id: r})
-       when is_binary(s) and is_binary(t) and is_binary(r),
-       do: :ok
-
-  defp validate_context(_), do: {:error, :invalid_context}
-
-  defp validate_timestamp(%DateTime{}), do: :ok
-  defp validate_timestamp(_), do: {:error, :invalid_timestamp}
-
-  defp validate_metadata(metadata) when is_map(metadata) do
-    case metadata do
-        %{bytes: bytes} when not is_integer(bytes) or bytes < 0 ->
-            {:error, :invalid_metadata}
-        %{content_type: ct} when not is_binary(ct) ->
-            {:error, :invalid_metadata}
-        _ -> :ok
-    end
-  end
-  defp validate_metadata(_), do: {:error, :invalid_metadata}
-end
-```
-
-Validation enforces:
-
-- type must be from a closed set
-- id must be present and non-empty
-- storage must specify a valid backend and path
-- context must include step, task, and run identifiers
-- timestamp must be present and valid
-
-If validation fails, the artifact must not be stored.
-
-**Minimum required fields:**
-
-- `id` — canonical artifact identity, currently encoded as a SHA-256 content address of the form sha256:<hex>
-- `type` — atom identifying the artifact kind
-- `storage` — backend and path where the artifact is stored
-- `metadata` — structured descriptive fields such as size and content type
-- `context` — origin metadata
-- `timestamp` — when the artifact was produced
-
-**Optional fields:**
-
-- `name` — workflow-level name used when the artifact is bound to a named output within its run
-
-In v0, artifacts are stored on the local filesystem. The `storage` field is modeled explicitly so that future backends (for example object stores or remote blob stores) can be added without changing the artifact abstraction.
+The event-side field is called `raw_output_blob_id`. It is an artifact id like the rest.
 
 ---
 
@@ -263,213 +73,98 @@ In v0, artifacts are stored on the local filesystem. The `storage` field is mode
 
 ### 1. Addressable
 
-An artifact has two levels of identity.
+An artifact has one address: its content hash. The CLI uses it directly:
 
-At the storage level, it has a canonical `id` — typically a content hash — that is stable and intended to be unique within the artifact store, regardless of which run produced it.
-
-At the workflow level, it has a `name` within a run. This is what downstream steps use to declare what they need:
-
-```elixir
-%Current.ArtifactRef{
-  id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  name: :patch_output,
-  run_id: "run_456"
-}
+```sh
+current artifact <artifact-id>      # the exact bytes, for piping
 ```
 
-Without the `id`, you lose storage integrity. When an artifact is exposed as a workflow output, a `name` provides pipeline composability. The `id` is always required. A `name` is required only when the artifact is intended to be referenced as a named workflow output.
+Ids can be shortened to any unique prefix of 4 or more hex digits.
 
-### 2. Typed
+### 2. A result, or an input
 
-Every artifact belongs to a closed set of types. This ensures the runtime knows how to store, validate, and project each artifact.
+Most artifacts are produced by applying an effect: a file as it was, a command's output. Some are inputs captured on the way in: the text an edit will replace, a file's new contents, the model's raw reply. Either way the artifact is what was or will be there, not a description of it.
 
-Examples:
+❌ Not: `"apply this edit"`: that is an intent.
 
-- `:file_patch_result`
-- `:command_result`
-- `:test_result`
-- `:report`
-- `:manifest`
+❌ Not: `"edit was applied"`: that is an event.
 
-This forms the runtime's **algebra of outputs**.
+✅ But: the file as it was before, and as it is after: those are artifacts.
 
-### 3. Result
+### 3. Immutable
 
-This is the most important distinction.
+Once stored, an artifact cannot be changed. If a step runs again and produces different bytes, they get a new id. The old one remains. That is what makes replay and inspection coherent.
 
-An artifact is not a proposal and not a record of process. It is the output that a step produced.
+### 4. Event-referenced
 
-❌ Not: `"apply this patch"` — that is an intent.
-
-❌ Not: `"patch was applied"` — that is an event.
-
-✅ But: `"here is the result of the applied patch"` — that is an artifact.
-
-### 4. Immutable
-
-Once stored, an artifact cannot be changed.
-
-If a step runs again, it produces a new artifact with a new `id`. The old one remains. This is what makes replay and time-travel inspection coherent.
-
-### 5. Not a Proposal
-
-An artifact is not proposed by the agent. It is produced by a step or runtime stage after work has been done.
-
-This includes outputs from:
-
-- the interpreter (after applying an effect)
-- the runtime itself (e.g. a validation report or prepared diff)
-- an agent step that directly produces structured output
-
-The key property is that an artifact is never speculative. It represents something that was produced, not something that should be.
-
-```
-Intent proposed → Intent validated → Effect applied → Artifact persisted → Event recorded
-```
-
-### 6. Event-Referenced
-
-Artifacts may be persisted to storage before the event log is updated. But an artifact only becomes part of the canonical run record once an event references it.
-
-This means:
+Artifacts may be written before the event log is updated. But an artifact only becomes part of the record once an event refers to it.
 
 - the event log remains the source of truth for what happened
 - artifacts are the durable objects that events point to
-- a stored artifact with no corresponding event is not part of the run history
+- a stored artifact nothing refers to is not part of any workflow's history
 
----
-
-## The Simplest Way to Think About It
-
-> **An artifact is a committed result — an immutable stored object that the runtime addresses by identity and the pipeline may address by name.**
+```
+Intent proposed → Intent validated → Effect applied → Artifact stored → Event recorded
+```
 
 ---
 
 ## Concrete Examples
 
-**Example 1 — Patch result**
+**Example 1: Edit result**
 
 ```elixir
-%Current.Artifact{
-  id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  name: :patch_output,
-  type: :file_patch_result,
-  storage: %{backend: :filesystem, path: "artifacts/sha256/ab/cd/abcdef..."},
-  metadata: %{bytes: 1842, content_type: "text/x-diff"},
-  context: %{step_id: "implement", task_id: "task_123", run_id: "run_456"},
-  timestamp: ~U[2026-03-21 15:00:10Z]
+%Current.EffectResult.EditFile{
+  path: "/project/lib/auth.ex",
+  before_artifact_id: "sha256:5f2c…",   # the file before the edit
+  after_artifact_id: "sha256:a91e…",    # the file after
+  replacements: 1
 }
 ```
 
-Means: *"The patch was applied and the result is stored at this location."*
+Means: *"The edit was applied once, and here are the exact bytes before and after."*
 
 ---
 
-**Example 2 — Test result**
+**Example 2: Command output**
 
 ```elixir
-%Current.Artifact{
-  id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  name: :test_output,
-  type: :test_result,
-  storage: %{backend: :filesystem, path: "artifacts/sha256/de/f4/def456..."},
-  metadata: %{bytes: 512, content_type: "application/json"},
-  context: %{step_id: "verify", task_id: "task_123", run_id: "run_456"},
-  timestamp: ~U[2026-03-21 15:00:15Z]
+%Current.EffectResult.Command{
+  exit_code: 0,
+  stdout_artifact_id: "sha256:77b0…",
+  stderr_artifact_id: "sha256:e3b0…",   # the hash of empty output
+  stdout_bytes: 912,
+  stderr_bytes: 0
 }
 ```
 
-Means: *"The test run completed and the result is stored."*
+Means: *"The command ran; its output is stored and can be read back byte for byte."*
 
 ---
 
-**Example 3 — Report**
+**Example 3: The model's reply**
 
 ```elixir
-%Current.Artifact{
-  id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  name: :summary,
-  type: :report,
-  storage: %{backend: :filesystem, path: "artifacts/sha256/gh/i7/ghi789..."},
-  metadata: %{bytes: 2048, content_type: "text/markdown"},
-  context: %{step_id: "summarize", task_id: "task_123", run_id: "run_456"},
-  timestamp: ~U[2026-03-21 15:00:20Z]
+%Current.Event.ProposalProduced{
+  workflow_id: "sha256:…",
+  proposal: %Current.Proposal{...},
+  raw_output_blob_id: "sha256:c0de…"    # exactly what the model said
 }
 ```
 
-Means: *"The summarize step produced this human-readable output."*
-
----
-
-**Example 4 — Manifest**
-
-```elixir
-%Current.Artifact{
-  id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  name: :manifest,
-  type: :manifest,
-  storage: %{backend: :filesystem, path: "artifacts/sha256/jk/l0/jkl012..."},
-  metadata: %{bytes: 128, content_type: "application/json"},
-  context: %{step_id: "summarize", task_id: "task_123", run_id: "run_456"},
-  timestamp: ~U[2026-03-21 15:00:21Z]
-}
-```
-
-Means: *"This run produced these named outputs."*
-
----
-
-**Example 5 — Unnamed command transcript**
-
-```elixir
-%Current.Artifact{
-  id: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-  name: nil,
-  type: :command_result,
-  storage: %{
-    backend: :filesystem,
-    path: "artifacts/sha256/55/55/5555555555555555555555555555555555555555555555555555555555555555"
-  },
-  metadata: %{
-    bytes: 912,
-    content_type: "text/plain"
-  },
-  context: %{
-    step_id: "verify",
-    task_id: "task_123",
-    run_id: "run_456"
-  },
-  timestamp: ~U[2026-03-21 15:00:18Z]
-}
-```
-
-Means: *"The runtime stored the raw output of a command for audit and replay, but it was not exposed as a named workflow output."*
-
----
-
-## The Deeper Structure
-
-Every artifact has:
-
-1. **ID** — canonical artifact identity, currently encoded as a SHA-256 content address of the form sha256:<hex>
-2. **Name** — optional workflow-level address within its run
-3. **Type** — what kind of output it is
-4. **Storage** — where the artifact is durably held; in v0 this is the local filesystem, but the model is backend-aware
-5. **Metadata** — size and content type hints
-6. **Context** — which step, task, and run produced it
-7. **Timestamp** — when it was produced
+Means: *"This proposal was decoded from this reply, which is kept as it arrived."*
 
 ---
 
 ## Where Artifacts Sit in the System
 
 ```
-Agent → Intent → Validation → Interpreter → Effect → Artifact persisted → Event recorded → State
+Agent → Intent → Validation → Interpreter → Effect → Artifact stored → Event recorded → State
 ```
 
-Artifacts sit **between effect and event**. The effect produces the artifact; the event records that it happened and references it by `id`; the state projection makes it addressable by name within the run.
+Artifacts sit **between effect and event**. The effect produces them; the event records that it happened and carries the effect result, which refers to them by id. Inputs (an edit's `old_string`, a file's new contents) are stored earlier, when the model's reply is decoded.
 
-An artifact only enters the canonical run record once it is referenced by an event. The event log remains the source of truth. The artifact store holds what the log points to.
+An artifact only enters the record once an event refers to it. The event log remains the source of truth. The artifact store holds what the log points to.
 
 ---
 
@@ -480,93 +175,75 @@ It completes the three-primitive model:
 | Primitive | When | Role |
 |---|---|---|
 | Intent | Before execution | Proposal |
-| Artifact | After execution | Result |
 | Event | After execution | Fact |
+| Artifact | Throughout | The bytes both of them point at |
 
-Without artifacts, results are implicit in events. That works until you need to replay, inspect, or hand off output between steps — at which point the model breaks down.
-
----
-
-## The Key Insight
-
-Without artifacts:
-
-> results are buried in events or floating in unstructured workspace state
-
-With artifacts:
-
-> every meaningful step output can be stored as a typed, content-addressed artifact, and may be bound to a workflow name when downstream steps need to reference it
+Without artifacts, file contents and command output would live inside events, and the log would grow with every byte. Content addressing also deduplicates for free: reading the same file twice stores it once.
 
 ---
 
 ## What an Artifact is NOT
 
-❌ **Not an intent** — intents are proposals; artifacts are results.
+❌ **Not an intent**: intents are proposals; artifacts are bytes.
 
-❌ **Not an event** — events record that something happened; artifacts hold what was produced. Events reference artifacts; they are not the same thing.
+❌ **Not an event**: events record that something happened; artifacts hold what it involved. Events reference artifacts; they are not the same thing.
 
-❌ **Not workspace state** — artifacts are immutable and addressed; workspace state is mutable and implicit.
+❌ **Not typed or named**: there is no artifact type, name or storage descriptor. The field that holds the id says what the bytes are.
 
-❌ **Not a log** — logs are for humans; artifacts are structured runtime objects addressed by identity.
+❌ **Not workspace state**: artifacts are immutable and addressed; workspace state is mutable and implicit.
+
+❌ **Not a log**: logs are for humans; artifacts are addressed bytes.
 
 ---
 
 ## A Better Analogy
 
-Think of an artifact like a **build output in a CI system**:
+Think of the artifact store as a **Git object store**:
 
-- it is produced by a specific job
-- it is stored under a known address
-- it can be downloaded or passed to a later stage
-- it does not change after it is written
-- it can be inspected long after the job completed
-
-The job's log records that it ran. The artifact holds what it produced. Both are necessary; neither replaces the other.
+- an object is named by the hash of its content
+- the same content is stored once
+- objects never change
+- commits (here, events) refer to objects by hash
 
 ---
 
 ## Minimal Mental Model
 
-> **Artifact = Immutable stored result, addressed by identity, and optionally bound to a workflow name.**
+> **Artifact = Immutable bytes, addressed by their SHA-256.**
 
 ---
 
 ## Relationship to Intents and Events
 
-The three primitives form a complete loop:
+**Intent**: what the agent proposes should happen.
 
-**Intent** — what the agent proposes should happen.
+**Event**: what the runtime records as having happened.
 
-**Event** — what the runtime records as having happened.
-
-**Artifact** — what the step actually produced, stored durably and referenced by events.
+**Artifact**: the bytes either of them refers to, stored durably.
 
 Example flow:
 
 ```
-Agent emits intent
+Agent emits intent (edit_file, with old and new text stored as artifacts)
 → Runtime validates intent
-→ Interpreter applies effect
-→ Artifact persisted (id assigned)
-→ Event recorded (references artifact id)
+→ Interpreter applies effect (stores the file before and after as artifacts)
+→ Event recorded (EffectApplied: the intent and its result, with artifact ids)
 → Reducer derives new state
-→ Next step receives artifact ref
 ```
 
 - **Intents** are how AI speaks to the system
 - **Events** are how the system remembers what happened
-- **Artifacts** are how steps hand durable results to each other and to projections
+- **Artifacts** are where the bytes live
 
 ---
 
 ## Design Constraint
 
-> Every meaningful output of a step must be stored as an artifact and referenced by an event. If it is not stored and referenced, it is not part of the canonical run record and cannot be replayed or inspected.
+> Anything too large or too raw to live in an event is stored as an artifact and referenced by id. If it is not referenced by an event, it is not part of the record.
 
 ---
 
 ## The System in One Sentence
 
-> *Intents propose change. Artifacts hold results. Events record fact. State is derived from the event log and the immutable artifacts it references.*
-
+> *Intents propose change. Artifacts hold bytes. Events record fact. State is derived from the event log and the immutable artifacts it references.*
 

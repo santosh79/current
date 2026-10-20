@@ -1,298 +1,150 @@
-### Validators
+# Validation
 
-### Proposal
+There is no `Validator` module per type. Validation happens in layers, each
+answering a different question and each running at a different time. The
+rules below are what the code does today.
 
-```elixir
-defmodule Current.Proposal.Validator do
-  alias Current.Proposal
-  alias Current.Intent
-  alias Current.Intent.Validator, as: IntentValidator
+| Layer | Module | Question | When |
+|---|---|---|---|
+| Decode | `ProposalDecoder` | Can these bytes be a proposal at all? | When a model reply arrives |
+| Absolutize | `IntentPaths.absolutize/2` | (not a check) make every path absolute against the project | Before the proposal is recorded |
+| Validate | `IntentValidator` | Is this proposal well-formed and in bounds right now? | Before it is shown for approval |
+| Apply | `EffectApplicator` | Is this still safe and possible on the live filesystem? | Just before each effect |
+| Events | `Event.valid?/1`, `Event.Schema`, `WorkflowReducer` | Is this a known event, and a legal next step? | When events are read or reduced |
+| Log | `Consensus.Log` | Is the chain intact? | Each commit, and on start |
 
-  def validate(%Proposal{} = proposal) do
-    with :ok <- Current.Id.validate(proposal.id),
-         :ok <- Current.Id.validate(proposal.workflow_id),
-         :ok <- validate_intents(proposal.intents),
-         :ok <- validate_justification(proposal.justification),
-         :ok <- validate_claims(proposal.claims),
-         :ok <- validate_dependencies(proposal.dependencies) do
-      :ok
-    end
-  end
+Validation is deliberately narrower than "will this apply". The project can
+change between validation and approval, and between approval and apply.
+Anything that can change is checked again at apply time, or only then.
 
-  defp validate_intents(intents) when is_list(intents) and length(intents) > 0 do
-    if Enum.all?(intents, &match?(%Intent{}, &1)) do
-      validate_each_intent(intents)
-    else
-      {:error, :invalid_intents}
-    end
-  end
+---
 
-  defp validate_intents(_), do: {:error, :invalid_intents}
+## Decoding: `ProposalDecoder`
 
-  defp validate_each_intent(intents) do
-    Enum.reduce_while(intents, :ok, fn intent, :ok ->
-      case IntentValidator.validate(intent) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, {:invalid_intent, intent.id, reason}}}
-      end
-    end)
-  end
+`ProposalDecoder.decode(raw, workflow_id)` turns the model's raw text into a
+`%Proposal{}` or returns `{:error, message}`. It never raises. It checks:
 
-  defp validate_justification(nil), do: :ok
-  defp validate_justification(j) when is_binary(j), do: :ok
-  defp validate_justification(_), do: {:error, :invalid_justification}
+- the JSON parses and has the expected shape (see
+  [wire_schema.md](wire_schema.md));
+- every intent has a known type and its required fields;
+- references between intents resolve (a claim's `source_intent_ref` must name
+  an intent in the same proposal).
 
-  defp validate_claims(nil), do: :ok
-  defp validate_claims(claims) when is_list(claims) do
-    if Enum.all?(claims, &is_binary/1), do: :ok, else: {:error, :invalid_claims}
-  end
-  defp validate_claims(_), do: {:error, :invalid_claims}
+It assigns real ids. It also stores inline text (file contents, `old_string`
+and `new_string`) as artifacts, so the intents it returns hold artifact ids.
+`decode_reply/2` also accepts the other legal reply, `{"observe": [...]}`,
+and says which one it got.
 
-  defp validate_dependencies(nil), do: :ok
-  defp validate_dependencies(deps) when is_list(deps) do
-    if Enum.all?(deps, &is_binary/1), do: :ok, else: {:error, :invalid_dependencies}
-  end
-  defp validate_dependencies(_), do: {:error, :invalid_dependencies}
-end
-```
+It does not decide whether a proposal is acceptable.
 
-#### Intent
+---
+
+## Validating: `IntentValidator`
 
 ```elixir
-defmodule Current.Intent.Validator do
-  alias Current.Intent
-
-  @valid_types [
-    :file_patch,
-    :write_file,
-    :delete_file,
-    :run_command,
-    :read_file,
-    :glob,
-    :grep,
-    :claim,
-    :report
-  ]
-
-  def validate(%Intent{} = intent) do
-    with :ok <- Current.Id.validate(intent.id),
-         :ok <- Current.Id.validate(intent.proposal_id),
-         :ok <- validate_type(intent.type),
-         :ok <- validate_payload(intent) do
-      :ok
-    end
-  end
-
-  defp validate_type(type) when type in @valid_types, do: :ok
-  defp validate_type(_), do: {:error, :invalid_type}
-
-  defp validate_payload(%Intent{type: :file_patch, payload: %{path: p, diff: d}})
-       when is_binary(p) and is_binary(d),
-       do: :ok
-
-  defp validate_payload(%Intent{type: :write_file, payload: %{path: p, content: c}})
-       when is_binary(p) and is_binary(c),
-       do: :ok
-
-  defp validate_payload(%Intent{type: :delete_file, payload: %{path: p}})
-       when is_binary(p),
-       do: :ok
-
-  defp validate_payload(%Intent{type: :run_command, payload: %{cmd: cmd}})
-       when is_list(cmd),
-       do: :ok
-
-  defp validate_payload(%Intent{type: :read_file, payload: %{path: p}})
-       when is_binary(p),
-       do: :ok
-
-  defp validate_payload(%Intent{type: :glob, payload: %{pattern: p}})
-       when is_binary(p),
-       do: :ok
-
-  defp validate_payload(%Intent{type: :grep, payload: %{pattern: p}})
-       when is_binary(p),
-       do: :ok
-
-  defp validate_payload(%Intent{type: :claim, payload: %{value: v}})
-       when is_binary(v),
-       do: :ok
-
-  defp validate_payload(%Intent{type: :report, payload: %{data: _}}),
-       do: :ok
-
-  defp validate_payload(_), do: {:error, :invalid_payload}
-end
+@spec validate(Proposal.t(), Path.t()) :: :ok | {:error, ValidationError.t()}
+IntentValidator.validate(proposal, project_dir)
 ```
 
-#### Artifact
+Intents are checked in order and the **first** failure stops validation. Each
+failure is a `%ValidationError{intent_id, reason, details}`.
 
-```elixir
-defmodule Current.Artifact.Validator do
-  alias Current.Artifact
+Every intent first passes the **path check** (`IntentPaths.violation/2`).
+Every path field must be absolute, must contain no `..` segment, and must
+lie inside `project_dir`. The check is lexical and does not follow symlinks.
+A relative path here means the caller skipped absolutizing, and it is
+rejected rather than resolved against the node's working directory.
 
-  @valid_types [
-    :file_patch_result,
-    :command_result,
-    :test_result,
-    :read_result,
-    :claim_result,
-    :report,
-    :manifest
-  ]
+Then the per-intent rules:
 
-  def validate(%Artifact{} = artifact) do
-    with :ok <- Current.Id.validate(artifact.id),
-         :ok <- Current.Id.validate(artifact.workflow_id),
-         :ok <- validate_type(artifact.type),
-         :ok <- validate_name(artifact.name),
-         :ok <- validate_storage(artifact.storage),
-         :ok <- validate_metadata(artifact.metadata),
-         :ok <- validate_timestamp(artifact.timestamp) do
-      :ok
-    end
-  end
+| Intent | Checked | Left to apply time |
+|---|---|---|
+| `read_file` | `path` is a regular file | |
+| `write_file` | the contents artifact exists | whether `path` already exists |
+| `edit_file` | `path` exists; the `old` and `new` artifacts exist; `Current.Edit.replace/4` succeeds against the file as it is now | the same check again, against the file as it is then |
+| `delete_file` | `path` is a non-empty string | a missing file counts as already deleted |
+| `run_command` | `cmd` is a non-empty string; `args` is a list of strings | whether the executable exists on `PATH` |
+| `grep` | every path is a regular file | |
+| `glob` | `pattern` is relative; `base_dir` is an existing directory | |
+| `claim` | evidence is present; `source_intent_id` names an intent **earlier in the proposal**; the condition can be evaluated against that kind of intent | whether the result satisfies it |
+| `report` | nothing | |
 
-  defp validate_type(type) when type in @valid_types, do: :ok
-  defp validate_type(_), do: {:error, :invalid_type}
+Every member of `Current.Intent.t()` has an explicit clause. There is no
+catch-all, so an intent type without a rule fails loudly instead of being
+silently accepted.
 
-  defp validate_name(nil), do: :ok
-  defp validate_name(name) when is_atom(name), do: :ok
-  defp validate_name(_), do: {:error, :invalid_name}
+### What counts as a valid edit
 
-  defp validate_storage(%{backend: :filesystem, path: p})
-       when is_binary(p) and byte_size(p) > 0,
-       do: :ok
-  defp validate_storage(_), do: {:error, :invalid_storage}
+`Current.Edit.replace(contents, old, new, replace_all)` is the single
+definition of a valid `edit_file`. It is pure (no files, no artifacts) and
+is called both here and at apply time, so the two cannot disagree.
 
-  defp validate_metadata(metadata) when is_map(metadata) do
-    case metadata do
-      %{bytes: bytes} when not is_integer(bytes) or bytes < 0 ->
-        {:error, :invalid_metadata}
-      %{content_type: ct} when not is_binary(ct) ->
-        {:error, :invalid_metadata}
-      _ ->
-        :ok
-    end
-  end
-  defp validate_metadata(_), do: {:error, :invalid_metadata}
+| Case | Result |
+|---|---|
+| `old` is empty | error: use `write_file` to create a file |
+| `old` not found | error: it must match exactly, whitespace and indentation included |
+| `old` found once | ok, 1 replacement |
+| `old` found more than once, `replace_all` false | error: include more surrounding lines, or set `replace_all` |
+| `old` found more than once, `replace_all` true | ok, every occurrence replaced |
 
-  defp validate_timestamp(%DateTime{}), do: :ok
-  defp validate_timestamp(_), do: {:error, :invalid_timestamp}
-end
-```
+Matching is byte for byte. If a proposal holds two edits to one file, each
+is checked against the file on disk, not against the result of the earlier
+edit.
 
-#### Event
+### Which claims can be evaluated
 
-```elixir
-defmodule Current.Event.Validator do
-  alias Current.Event
+A claim is accepted only if its condition applies to the kind of intent it
+cites. This table mirrors the pairs `EffectApplicator` can evaluate:
 
-  @valid_types [
-    :task_submitted,
-    :workflow_created,
-    :workflow_started,
-    :proposal_produced,
-    :approval_requested,
-    :proposal_accepted,
-    :proposal_rejected,
-    :intent_proposed,
-    :intent_validated,
-    :intent_rejected,
-    :effect_applied,
-    :effect_failed,
-    :artifact_produced,
-    :claim_verified,
-    :workflow_artifact_assembled,
-    :workflow_completed,
-    :workflow_failed
-  ]
+| Condition | Source intent |
+|---|---|
+| `match_count_greater_than` | `grep`, `glob` |
+| `match_count_equals` | `grep` |
+| `exit_code_equals` | `run_command` |
 
-  def validate(%Event{} = event) do
-    with :ok <- Current.Id.validate(event.id),
-         :ok <- Current.Id.validate(event.workflow_id),
-         :ok <- validate_type(event.type),
-         :ok <- validate_data(event),
-         :ok <- validate_timestamp(event.timestamp) do
-      :ok
-    end
-  end
+Any other pair is rejected at validation, because it could never be
+evaluated. If a pair is added to the applicator, it must be added here too.
 
-  defp validate_type(type) when type in @valid_types, do: :ok
-  defp validate_type(_), do: {:error, :invalid_type}
+---
 
-  defp validate_timestamp(%DateTime{}), do: :ok
-  defp validate_timestamp(_), do: {:error, :invalid_timestamp}
+## Applying: `EffectApplicator`
 
-  defp validate_data(%Event{type: :task_submitted, data: %{task: task}})
-       when is_binary(task),
-       do: :ok
+`EffectApplicator.apply(intent, prior_results, project_dir)` re-runs the path
+check immediately before touching the filesystem. This time it follows every
+symlink that exists right now (`IntentPaths.resolved_violation/2`) and
+refuses a path that is relative, contains `..`, has too many levels of
+links, or resolves outside the project. The re-check narrows the window for
+a path to escape the project but does not close it (see T2 in the
+[threat model](threat_model.md)).
 
-  defp validate_data(%Event{type: :workflow_created, data: %{workflow_id: id}})
-       when is_binary(id),
-       do: :ok
+Then each effect does its own checks: `write_file` fails if the file exists,
+`edit_file` re-reads the file and reruns `Current.Edit.replace/4`,
+`run_command` fails if the executable can't be found, and a `claim` is
+evaluated against the results of the intents before it. A false claim fails
+the workflow, and so does any effect that returns `{:error, reason}`.
 
-  defp validate_data(%Event{type: :workflow_started, data: %{workflow_id: id}})
-       when is_binary(id),
-       do: :ok
+---
 
-  defp validate_data(%Event{type: :proposal_produced, data: %{proposal_id: id}})
-       when is_binary(id),
-       do: :ok
+## Events
 
-  defp validate_data(%Event{type: :approval_requested, data: %{proposal_id: id}})
-       when is_binary(id),
-       do: :ok
+There is no validator that inspects an event's fields. Instead:
 
-  defp validate_data(%Event{type: :proposal_accepted, data: %{proposal_id: id}})
-       when is_binary(id),
-       do: :ok
+- The set of event types is closed. `Current.Event.valid?/1` is true only for
+  the structs listed in `Current.Event.modules/0`.
+- Fields are enforced by each struct's `@enforce_keys`.
+- Events are read back through `Current.Event.Schema.upcast/1`, which
+  migrates an on-disk event to the current shape one version at a time. It
+  raises `ArgumentError` for an unknown struct, `UpcastError` when a version
+  has no migration, and `FutureVersionError` when the log was written by
+  newer code. See [event.md](event.md).
+- `WorkflowReducer.apply_event/2` rejects an event that is not a legal next
+  step: `{:error, {:invalid_transition, status, event_module}}`, or
+  `{:error, {:workflow_id_mismatch, expected, got}}`.
 
-  defp validate_data(%Event{type: :proposal_rejected, data: %{proposal_id: id, reason: reason}})
-       when is_binary(id) and is_binary(reason),
-       do: :ok
+## The log
 
-  defp validate_data(%Event{type: :intent_proposed, data: %{intent_ids: ids}})
-       when is_list(ids),
-       do: :ok
-
-  defp validate_data(%Event{type: :intent_validated, data: %{intent_id: id}})
-       when is_binary(id),
-       do: :ok
-
-  defp validate_data(%Event{type: :intent_rejected, data: %{intent_id: id, reason: reason}})
-       when is_binary(id) and is_binary(reason),
-       do: :ok
-
-  defp validate_data(%Event{type: :effect_applied, data: %{intent_id: id, result: _}})
-       when is_binary(id),
-       do: :ok
-
-  defp validate_data(%Event{type: :effect_failed, data: %{intent_id: id, reason: reason}})
-       when is_binary(id) and is_binary(reason),
-       do: :ok
-
-  defp validate_data(%Event{type: :artifact_produced, data: %{artifact_id: id}})
-       when is_binary(id),
-       do: :ok
-
-  defp validate_data(%Event{type: :claim_verified, data: %{claim: claim, result: result}})
-       when is_binary(claim) and result in [:ok, :error],
-       do: :ok
-
-  defp validate_data(%Event{type: :workflow_artifact_assembled, data: %{workflow_artifact_id: id}})
-       when is_binary(id),
-       do: :ok
-
-  defp validate_data(%Event{type: :workflow_completed, data: %{workflow_id: id}})
-       when is_binary(id),
-       do: :ok
-
-  defp validate_data(%Event{type: :workflow_failed, data: %{workflow_id: id, reason: reason}})
-       when is_binary(id) and is_binary(reason),
-       do: :ok
-
-  defp validate_data(_), do: {:error, :invalid_data}
-end
-```
+A commit is accepted only if its index is exactly one past the current head
+and its `previous_hash` matches the head's hash. The log refuses to start if
+the chain is broken, if the first segment is not number 1, or if a segment
+is missing. See the [commit log notes](commit_log_design_notes.md).
 

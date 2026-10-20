@@ -62,7 +62,7 @@ ol. Everything below follows from that.
   │     │        │              │                 │          │
   └─────┼────────┼──────────────┼─────────────────┼──────────┘
         ②        ③              ④                 ⑤
-      HTTPS   read-only   write, patch,        append
+      HTTPS   read-only   write, edit,         append
         │        │        run commands            │
         ▼        ▼              ▼                 ▼
     OpenAI /  project     project dir;        data dir
@@ -78,7 +78,7 @@ ol. Everything below follows from that.
 | ① | HTTP client ↔ runtime | Tasks (including which directory to work in), approvals, applies, queries, artifact contents | Neither. The API does not authenticate; whoever can reach the port is treated as the operator (see T6) |
 | ② | Runtime ↔ model provider | Prompts (project layout, files the model asked for), replies | Runtime. The reply is untrusted input |
 | ③ | Runtime ↔ project, while observing | Reads chosen by the model | Runtime, which decides what may be read |
-| ④ | Runtime ↔ project and OS, while applying | Writes, patches, deletes, commands | Runtime, once an approval and an apply request have arrived over ①. Who sent them isn’t verified |
+| ④ | Runtime ↔ project and OS, while applying | Writes, edits, deletes, commands | Runtime, once an approval and an apply request have arrived over ①. Who sent them isn’t verified |
 | ⑤ | Runtime ↔ data dir | Log segments, artifacts | Whoever can write the directory. The hash chain shows corruption, not tampering |
 
 ---
@@ -92,14 +92,14 @@ ol. Everything below follows from that.
 | API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) | Spend money; in the runtime's environment |
 | Access to the HTTP API port | Whoever can reach it controls the runtime (T6) |
 | Secrets inside the project | Can reach the provider (via observe) or the data dir (via read results and command output) |
-| The data dir (`_data/`) | The record. Also holds copies of everything read, deleted, patched or printed |
+| The data dir (`_data/`) | The record. Also holds copies of everything read, deleted, edited or printed |
 | The reviewer's attention | The last line of defence. Can be exhausted or misled |
 
 ---
 
 ## Adversaries
 
-**A1. A mistaken model.** The common case. Proposes the wrong patch, a
+**A1. A mistaken model.** The common case. Proposes the wrong edit, a
 destructive command, or a claim that isn't true.
 
 **A2. A model steered by content it reads** (prompt injection). The model
@@ -174,8 +174,8 @@ Remaining:
   system calls. Something that can change the project directory in between
   (a concurrent process, or a command earlier in the same proposal) could
   swap a component for a symlink. Writes use ordinary `File.write/2`, which
-  follows symlinks. `patch` is run on the checked path, and when a hunk
-  fails it writes a `.rej` file beside it.
+  follows symlinks. An `edit_file` reads the file, replaces the text in
+  memory and writes the whole file back to the checked path.
 - **Commands are not path-checked at all** (see T3).
 
 **Status: mitigated for file intents, apart from the race.**
@@ -192,7 +192,7 @@ This is the largest risk, and approval is the only control.
   interpretation (the runtime uses `bash` only to redirect output), but
   nothing stops a proposal from running `bash` with `-c`.
 - A proposal can `write_file` a script and then `run_command` it.
-- A proposal can `file_patch` something another tool executes:
+- A proposal can `edit_file` something another tool executes:
   `mix.exs`, `package.json` scripts, a `Makefile`, CI configuration, or a
   Git hook under `.git/hooks/`. The read policy hides `.git` from the model,
   but nothing stops a proposal from *writing* there.
@@ -250,7 +250,7 @@ The data dir holds, as plain files:
 
 - the model's raw replies, and the prompts' inputs it was shown;
 - the contents of every file read (by observe or by a `read_file` intent),
-  and the before/after of every patched or deleted file;
+  and the before/after of every edited or deleted file;
 - the full stdout and stderr of every command.
 
 Note the asymmetry with T4: the read policy governs only what the *model*
@@ -344,7 +344,7 @@ doesn't hold, stops the workflow; earlier effects stay. If the runtime stops
 while applying, the workflow is failed on restart instead of resumed, so
 nothing is applied twice, but the project may be in between.
 
-Before contents of patched and deleted files are kept as artifacts, so they
+Before contents of edited and deleted files are kept as artifacts, so they
 can be restored by hand.
 
 **Status: partly mitigated.** Recommended: atomic apply (apply to a copy,
@@ -357,8 +357,11 @@ Approval can come long after validation. What was approved cannot change:
 the proposal and every diff and file it carries are stored immutably,
 content-addressed, in the log. But the project can change.
 
-- `file_patch` uses `--fuzz=0`, so a patch fails rather than applies
-  somewhere unexpected.
+- `edit_file` needs its `old_string` to match the file exactly once (or
+  at least once with `replace_all`), so an edit fails rather than applying
+  somewhere unexpected. It is checked at validation and again at apply
+  time. The read and the write inside one edit are separate steps, so a
+  change made to the file between them is overwritten.
 - `write_file` fails if the file now exists.
 - Paths are re-checked against the filesystem at apply time (T2).
 - Commands are not re-checked: their meaning depends on the state they run
@@ -443,7 +446,7 @@ failed workflow.
 **Protect the record**
 
 - `chmod 700` the data dir. It contains copies of everything read, deleted,
-  patched and printed.
+  edited and printed.
 - Back it up if the history matters; it is the only copy.
 
 **Review like it matters**
@@ -505,7 +508,7 @@ cheapest way to keep the claim true.
 | Commands get no shell interpretation of arguments | `EffectApplicator.run_command_with_redirect/5` (`exec "$1" "${@:4}"`, args passed positionally) | An argument containing `;` or `$(...)` is passed literally |
 | Commands inherit the environment, have no timeout | Same function: `System.cmd/3` without `env:` or a timeout | `run_command printenv`; `run_command sleep 1000000` |
 | Whole-proposal timeout, and per-task override | `LLMProposalBuilder.within_task_timeout/2`, `task_timeout_ms/0`; `Current.validate_timeout/1` (1 s to 1 h) | Tests in `llm_proposal_test.exs` and `submit_task_test.exs` |
-| `file_patch` exact-match only | `EffectApplicator.apply_patch/3` (`--batch --forward --fuzz=0`) | Patch a file that changed after approval |
+| `edit_file` exact-match only | `Current.Edit.replace/4`, called by `IntentValidator` and by `EffectApplicator.do_apply/3` (EditFile) | Change the file after approval so `old_string` no longer matches, or matches twice |
 | `write_file` refuses an existing file | `EffectApplicator.do_apply/3` (WriteFile) | |
 | First failure or false claim stops apply; no rollback | `WorkflowOrchestrator.apply_intents_streaming/4` | |
 | Interrupted apply is failed, not resumed | `WorkflowOrchestrator.recover/3` (status `:applying`) → `fail_interrupted_effects/1` | Kill the runtime during a slow command, restart |
