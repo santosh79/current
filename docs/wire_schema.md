@@ -25,8 +25,8 @@ context request is `definitions.context_request` in the same file.
 
 The prompt is built by `Current.LLMProposalBuilder`. It includes that JSON
 schema verbatim -- so the `description`s in it are instructions the model
-reads -- followed by the `file_patch` diff rules and example described
-under [`file_patch`](#file_patch) below, the rules for context requests,
+reads -- followed by the `edit_file` rules and example described
+under [`edit_file`](#edit_file) below, the rules for context requests,
 and the project's layout (paths and sizes, no file contents).
 
 ## Where this fits
@@ -207,7 +207,7 @@ What is recorded, and when:
 
 1. The model's raw response is stored as a blob before decoding,
    untouched -- paths exactly as the model wrote them.
-2. Decoding stores each `diff`/`contents` payload as a blob. It records
+2. Decoding stores each `contents`, `old_string` and `new_string` payload as a blob. It records
    nothing else; the decoded intents still carry the model's paths.
 3. `WorkflowOrchestrator` resolves every path against the project
    directory, and only then records the proposal, in the
@@ -297,7 +297,7 @@ carries a `contents_artifact_id`, not the raw text.
 
 `write_file` only ever **creates** a file: `EffectApplicator` refuses it
 if the target already exists. There is no overwrite; change an existing
-file with `file_patch`. (This is checked at apply time, not validation
+file with `edit_file`. (This is checked at apply time, not validation
 time, since whether a file exists can change in between.)
 
 ### `delete_file`
@@ -310,49 +310,52 @@ time, since whether a file exists can change in between.)
 |--------|--------|----------|
 | `path` | string | yes      |
 
-### `file_patch`
+### `edit_file`
 
 ```json
-{ "type": "file_patch", "path": "lib/signup.ex", "diff": "--- a/lib/signup.ex\n+++ b/lib/signup.ex\n@@ -1,2 +1,3 @@\n defmodule Signup do\n+  def validate_email(email), do: String.contains?(email, \"@\")\n end\n" }
+{ "type": "edit_file", "path": "lib/signup.ex", "old_string": "defmodule Signup do\n", "new_string": "defmodule Signup do\n  def validate_email(email), do: String.contains?(email, \"@\")\n" }
 ```
 
-| Field  | Type   | Required |
-|--------|--------|----------|
-| `path` | string | yes      |
-| `diff` | string | yes      |
+| Field         | Type    | Required | Default |
+|---------------|---------|----------|---------|
+| `path`        | string  | yes      | —       |
+| `old_string`  | string  | yes      | —       |
+| `new_string`  | string  | yes      | —       |
+| `replace_all` | boolean | no       | `false` |
 
-`diff` is written to `BlobStore`; the resulting intent carries a
-`diff_artifact_id`. The target file must already exist (to create one,
-use `write_file`).
+`old_string` and `new_string` are written to `BlobStore`; the resulting
+intent carries an `old_artifact_id` and a `new_artifact_id`, not the raw
+text. The target file must already exist (to create one, use
+`write_file`).
 
-**Diff format.** `diff` must be a standard unified diff of that one file
--- the format `diff -u` produces -- because `EffectApplicator` applies it
-with exactly:
+**Matching.** `Current.Edit.replace/4` does the replacing, and it is the
+only place the rules live: `IntentValidator` calls it to refuse an edit
+that cannot apply, and `EffectApplicator` calls it to apply the edit.
 
-```sh
-patch --batch --forward --fuzz=0 <path> <diff>
-```
-
-So:
-
-- The `---`/`+++` header names are ignored; the target is always `path`.
-- Each hunk header is `@@ -<old_start>,<old_count> +<new_start>,<new_count> @@`.
-  All four numbers must be correct: the starts are the 1-based lines
-  where the hunk begins before and after the change, `old_count` is
-  context plus removed lines, and `new_count` is context plus added
-  lines.
-- Every hunk line starts with one character: ` ` context, `-` removed,
-  `+` added. A blank context line is a single space.
-- Context and removed lines must match the file exactly, whitespace
-  included -- `--fuzz=0` allows no drift.
-- Other patch formats are rejected, notably the `*** Begin Patch` /
-  `*** Update File` format some models default to.
+- `old_string` must occur in the file **exactly once**, byte for byte --
+  whitespace and indentation included. Zero matches, or more than one, is
+  an error. There is no fuzzy matching.
+- With `"replace_all": true`, `old_string` must occur at least once, and
+  every occurrence is replaced.
+- `new_string` may be empty, which deletes `old_string`.
+- The decoder rejects an empty `old_string` (to create a file, use
+  `write_file`) and an `old_string` identical to `new_string`.
+- `old_string` is plain text. It is not a regular expression, and it must
+  not carry line numbers copied from a listing.
 
 The prompt states these rules and gives a worked example
-(`LLMProposalBuilder.file_patch_example/0`). The model is told to patch
-only files whose contents it has been shown; nothing enforces that yet.
-Whether a given diff applies is currently only discovered at apply time;
-see "What this schema does not enforce."
+(`LLMProposalBuilder.edit_file_example/0`). The model is told to edit only
+files whose contents it has been shown; nothing enforces that yet.
+
+**Several edits to one file.** The prompt tells the model that edits to the
+same file are applied in order, so each must match the file as the earlier
+ones leave it. `EffectApplicator` does exactly that. `IntentValidator` does
+not: it checks every edit against the file as it is on disk, not against
+the result of the edits before it. So a second edit whose `old_string`
+exists only because of the first is refused at validation, even though it
+would apply, and two edits that overlap can validate and still fail on
+apply. Until that changes, the safe form is one `edit_file` per distinct
+piece of text, none of them depending on another's result.
 
 ### `run_command`
 
@@ -470,13 +473,16 @@ proposal will run against — not on whether the response is well-formed:
   time, by `EffectApplicator`.
 - Whether a `write_file` target already exists (apply fails if it does),
   for the same reason.
-- Whether a `file_patch` diff actually applies to its file. In `plan`
-  mode a proposal can therefore validate and still fail on apply.
-  Checking it at validation (`patch --dry-run` against the current file)
-  is a candidate for `IntentValidator`.
-- Whether a `file_patch` targets a file the model was actually shown.
-  The proposal's `observations` say what it saw, so this too is a
-  candidate for `IntentValidator`.
+- Whether an `edit_file`'s `old_string` is in its file. The decoder only
+  checks that the strings are well-formed. `IntentValidator` checks the
+  edit against the file as it is when the proposal is validated (see
+  "Several edits to one file" above for what that does not cover), and
+  `EffectApplicator` checks again at apply time, because the file can
+  change in between. A proposal can therefore validate and still fail on
+  apply.
+- Whether an `edit_file` targets a file the model was actually shown.
+  The proposal's `observations` say what it saw, so this is a candidate
+  for `IntentValidator`.
 
 For context requests, the decoder checks shape only. Whether an
 observation's path exists, is inside the project, or may be shown is
@@ -492,10 +498,11 @@ back to the model, not into a failure.
   "dependencies": [],
   "intents": [
     {
-      "ref": "patch_1",
-      "type": "file_patch",
+      "ref": "edit_1",
+      "type": "edit_file",
       "path": "lib/signup.ex",
-      "diff": "--- a/lib/signup.ex\n+++ b/lib/signup.ex\n@@ -1,2 +1,3 @@\n defmodule Signup do\n+  def validate_email(email), do: String.contains?(email, \"@\")\n end\n"
+      "old_string": "defmodule Signup do\n",
+      "new_string": "defmodule Signup do\n  def validate_email(email), do: String.contains?(email, \"@\")\n"
     },
     {
       "ref": "cmd_1",

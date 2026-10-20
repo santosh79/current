@@ -16,192 +16,93 @@ An event does not describe what *should* happen. It records what *did* happen.
 
 The following must always hold for any valid event:
 
-1. **Immutable** — An event must never be modified after it is recorded. Corrections must be expressed as new events, not edits to old ones.
+1. **Immutable**: An event is never modified after it is recorded. Corrections are expressed as new events, not edits to old ones.
 
-2. **Serializable** — An event must be representable as data (e.g. JSON, Erlang term). It must not contain executable code.
+2. **Serializable**: An event is plain data (an Erlang term). It contains no executable code.
 
-3. **Typed** — Every event must belong to a predefined, closed set of event types. Arbitrary or free-form event types are not allowed.
+3. **Typed**: Every event belongs to a predefined, closed set of event types. Free-form event types are not allowed.
 
-4. **Past-tense only** — An event must describe something that has already occurred. It must never describe a proposed or hypothetical action.
+4. **Past-tense only**: An event describes something that has already occurred. It never describes a proposed or hypothetical action.
 
-5. **Context-bound** — Every event must be attributable to a specific task, step, or runtime action.
+5. **Context-bound**: Every event belongs to a workflow (`workflow_id`). The one exception is `TaskCreated`, which comes first and belongs to a task (`task_id`).
 
-6. **Append-only** — Events are only added to the log. Existing events must never be deleted or rewritten.
+6. **Append-only**: Events are only added to the log. Existing events are never deleted or rewritten.
 
-7. **Replayable** — Events must contain enough information to support deterministic state reconstruction.
+7. **Replayable**: Events contain enough information to reconstruct workflow state deterministically.
+
+8. **Versioned**: Every event records the schema version it was written at, so an old log can be read after the code changes.
 
 ---
 
 ## Canonical Representation
 
-An event should be representable as a structured value.
+There is no generic `%Event{type:, data:}`. Each event type is its own struct. Every one has an `id`, a `timestamp` and a `version`, plus the fields that fact needs. Nearly all also have a `workflow_id`.
 
 ```elixir
-%Current.Event{
-  type: :intent_validated,
-  data: %{
-    intent_id: "intent_123",
-    validation_result: :ok
-  },
-  context: %{
-    task_id: "task_123",
-    step_id: "implement_auth",
-    run_id: "run_456"
-  },
-  timestamp: ~U[2026-03-21 15:00:00Z]
+%Current.Event.EffectApplied{
+  id: "sha256:c41d…",
+  workflow_id: "sha256:77aa…",
+  intent: %Current.Intent.EditFile{...},
+  result: %Current.EffectResult.EditFile{...},
+  timestamp: ~U[2026-03-21 15:00:07Z],
+  version: 1
 }
 ```
 
-### Struct Definition
+An event carries the intent and the result themselves. Their large contents are [artifacts](artifact.md), held by id.
+
+### The event types
+
+`Current.Event.t()` is the union of these structs, and `Current.Event.modules/0` is the closed set.
+
+| Event | Records | Fields (besides `id`, `timestamp`, `version`) |
+|---|---|---|
+| `TaskCreated` | A task was submitted | `task_id`, `input`, `context`, `mode`, `project_dir`, `model`, `timeout_ms`, `submitted_at` |
+| `WorkflowCreated` | A workflow began for a task | `workflow_id`, `task_id`, `mode` |
+| `ProposalProductionStarted` | The model was asked for a proposal | `workflow_id` |
+| `ModeInvalid` | The task's mode is not `:plan` or `:apply` | `workflow_id`, `mode` |
+| `ProposalProduced` | A proposal was decoded from the model's reply | `workflow_id`, `proposal`, `raw_output_blob_id` |
+| `ProposalProductionFailed` | No proposal could be produced | `workflow_id`, `error` |
+| `ProposalValidated` | The proposal passed validation | `workflow_id`, `proposal` |
+| `ProposalValidationFailed` | The proposal failed validation | `workflow_id`, `proposal`, `error` |
+| `ProposalApproved` | A person approved the proposal | `workflow_id`, `proposal_id`, `metadata` |
+| `ProposalRejected` | A person rejected the proposal | `workflow_id`, `proposal_id`, `metadata` |
+| `EffectApplicationStarted` | Applying the intents began | `workflow_id` |
+| `EffectApplied` | One intent was applied | `workflow_id`, `intent`, `result` |
+| `EffectFailed` | One intent failed | `workflow_id`, `intent`, `reason` |
+| `EffectApplicationComplete` | Every intent was applied | `workflow_id`, `intent_results` |
+| `WorkflowResultAssembled` | The result was assembled | `workflow_id`, `result` |
+| `WorkflowCompleted` | The workflow ended successfully | `workflow_id` |
+| `WorkflowFailed` | The workflow ended in failure | `workflow_id`, `reason` |
+| `WorkflowAbandoned` | No further automatic progress is possible | `workflow_id`, `reason` |
+
+`TaskCreated` has no `workflow_id`, so `Current.Event.lifecycle_modules/0` is every type but that one.
+
+### Validation
+
+There is no per-event validator. The type set is closed (`Current.Event.valid?/1` is true only for the structs above), each struct enforces its required keys, and `WorkflowReducer` refuses an event that is not a legal next step. See [validators.md](validators.md).
+
+### Versions and upcasting
+
+Events are written to the log as raw Erlang terms and read back as plain maps tagged with `__struct__`. Adding, removing or renaming a field changes what `%Event.X{}` means without changing what is on disk. So each event module declares a schema version:
 
 ```elixir
-defmodule Current.Event do
-  @enforce_keys [:type, :data, :context, :timestamp]
-  defstruct [
-    :type,
-    :data,
-    :context,
-    :timestamp
-  ]
+defmodule Current.Event.ProposalProduced do
+  use Current.Event.Versioned, version: 3
 
-  @type type ::
-          :task_submitted
-          | :step_scheduled
-          | :step_started
-          | :intent_proposed
-          | :intent_validated
-          | :intent_rejected
-          | :effect_applied
-          | :effect_failed
-          | :claim_verified
-          | :step_completed
-          | :step_failed
-          | :pipeline_completed
-
-  @type t :: %__MODULE__{
-          type: type(),
-          data: map(),
-          context: %{
-            task_id: String.t(),
-            step_id: String.t() | nil,
-            run_id: String.t()
-          },
-          timestamp: DateTime.t()
-        }
+  def upcast(fields, 1), do: fields
+  def upcast(fields, 2), do: Map.update(fields, :proposal, nil, &Current.Proposal.upcast/1)
 end
 ```
 
-### Validation Rules
+Reading an event goes through `Current.Event.Schema.upcast/1`, which applies `upcast(fields, from)` once per version until the event is current. The rules:
 
-Every event must pass validation before it can be appended to the event log.
+- Every version bump needs an `upcast/2` clause for the version being left behind. For a purely additive change it returns `fields` unchanged, and the struct's default fills the new field.
+- A rename, a removed field or a changed meaning must be handled explicitly in that clause.
+- Never delete an `upcast/2` clause. An old log may still need it.
+- An event written by newer code than the one reading it raises `FutureVersionError`. A version with no upcast raises `UpcastError`.
 
-```elixir
-defmodule Current.Event.Validator do
-  alias Current.Event
-
-  @valid_types [
-    :task_submitted,
-    :step_scheduled,
-    :step_started,
-    :intent_proposed,
-    :intent_validated,
-    :intent_rejected,
-    :effect_applied,
-    :effect_failed,
-    :claim_verified,
-    :step_completed,
-    :step_failed,
-    :pipeline_completed
-  ]
-
-  def validate(%Event{} = event) do
-    with :ok <- validate_type(event.type),
-         :ok <- validate_data(event),
-         :ok <- validate_context(event.context),
-         :ok <- validate_timestamp(event.timestamp) do
-      :ok
-    end
-  end
-
-  defp validate_type(type) when type in @valid_types, do: :ok
-  defp validate_type(_), do: {:error, :invalid_type}
-
-  defp validate_context(%{task_id: task_id, run_id: run_id})
-       when is_binary(task_id) and is_binary(run_id),
-       do: :ok
-
-  defp validate_context(_), do: {:error, :invalid_context}
-
-  defp validate_timestamp(%DateTime{}), do: :ok
-  defp validate_timestamp(_), do: {:error, :invalid_timestamp}
-
-  defp validate_data(%Event{type: :task_submitted, data: %{task: task}})
-       when is_binary(task),
-       do: :ok
-
-  defp validate_data(%Event{type: :step_scheduled, data: %{step_id: step_id}})
-       when is_binary(step_id),
-       do: :ok
-
-  defp validate_data(%Event{type: :step_started, data: %{step_id: step_id}})
-       when is_binary(step_id),
-       do: :ok
-
-  defp validate_data(%Event{type: :intent_proposed, data: %{intent_ids: ids}})
-       when is_list(ids),
-       do: :ok
-
-  defp validate_data(%Event{type: :intent_validated, data: %{intent_id: id}})
-       when is_binary(id),
-       do: :ok
-
-  defp validate_data(%Event{type: :intent_rejected, data: %{intent_id: id, reason: reason}})
-       when is_binary(id) and is_binary(reason),
-       do: :ok
-
-  defp validate_data(%Event{type: :effect_applied, data: %{intent_id: id, result: _}})
-       when is_binary(id),
-       do: :ok
-
-  defp validate_data(%Event{type: :effect_failed, data: %{intent_id: id, reason: reason}})
-       when is_binary(id) and is_binary(reason),
-       do: :ok
-
-  defp validate_data(%Event{type: :claim_verified, data: %{claim: claim, result: result}})
-       when is_binary(claim) and result in [:ok, :error],
-       do: :ok
-
-  defp validate_data(%Event{type: :step_completed, data: %{step_id: step_id}})
-       when is_binary(step_id),
-       do: :ok
-
-  defp validate_data(%Event{type: :step_failed, data: %{step_id: step_id, reason: reason}})
-       when is_binary(step_id) and is_binary(reason),
-       do: :ok
-
-  defp validate_data(%Event{type: :pipeline_completed, data: %{run_id: run_id}})
-       when is_binary(run_id),
-       do: :ok
-
-  defp validate_data(_), do: {:error, :invalid_data}
-end
-```
-
-Validation enforces:
-
-- type must be from a closed set
-- data must match the event type
-- context must be present and well-formed
-- timestamp must be present and valid
-
-If validation fails, the event must not be appended to the event log.
-
-**Minimum required fields:**
-
-- `type` — atom identifying the event kind
-- `data` — structured payload for the event
-- `context` — origin metadata
-- `timestamp` — when the event occurred
+Some changes cannot be migrated. `TaskCreated` v3 added a required `model` that no earlier record had, so a v2 task cannot be read at all, and its `upcast/2` says so.
 
 ---
 
@@ -227,17 +128,17 @@ An event belongs to a finite set of allowed event types.
 
 Examples:
 
-- `:task_submitted`
-- `:intent_proposed`
-- `:intent_validated`
-- `:effect_applied`
-- `:step_completed`
+- `Event.TaskCreated`
+- `Event.ProposalProduced`
+- `Event.ProposalApproved`
+- `Event.EffectApplied`
+- `Event.WorkflowCompleted`
 
 This forms the runtime's **algebra of facts**.
 
 ### 3. Record of the Past
 
-This is the most important distinction. An event is not a request or a plan — it is a record that something has already happened.
+This is the most important distinction. An event is not a request or a plan. It is a record that something has already happened.
 
 ❌ Not:
 
@@ -245,25 +146,27 @@ This is the most important distinction. An event is not a request or a plan — 
 
 ✅ But:
 
-> "tests were run and produced this result"
+> "the command ran and exited with code 1; its output is stored here"
 
 ### 4. Append-Only
 
-Events are never updated in place. The log grows by appending new events. This gives the system history, traceability, replayability, and time-travel inspection.
+Events are never updated in place. The log grows by appending new events, in hash-chained commits (see the [commit log notes](commit_log_design_notes.md)). This gives the system history, traceability, replayability and time-travel inspection.
 
 ### 5. Context-Bound
 
-Every event must belong to a specific runtime context. At minimum, that means a `task_id` and a `run_id` — and often a `step_id`. Without context, an event is not useful for reconstruction.
+Every event belongs to a workflow, which is how a log of many workflows is told apart. The workflow's events, in order, are what `current events <id>` prints. Without a workflow, an event is not useful for reconstruction.
 
 ### 6. Replayable
 
-Events are not just audit records. They are the raw material from which state is derived. The runtime must be able to do this:
+Events are not just audit records. They are the raw material from which state is derived. The runtime does this on every start:
 
 ```
 initial_state + event_log -> current_state
 ```
 
-If replay is impossible, the event model is incomplete.
+`WorkflowReducer.apply_event/2` takes the current workflow (or `nil` for the first event) and one event, and returns the next workflow. `WorkflowReducer.replay/1` folds a whole list. If replay is impossible, the event model is incomplete.
+
+Some events change nothing but are still facts worth keeping. `EffectApplied`, `EffectFailed` and `EffectApplicationComplete` record what happened without moving the workflow's status.
 
 ---
 
@@ -275,14 +178,16 @@ If replay is impossible, the event model is incomplete.
 
 ## Concrete Examples
 
-**Example 1 — Task submitted**
+**Example 1: Task created**
 
 ```elixir
-%Current.Event{
-  type: :task_submitted,
-  data: %{task: "add email validation to signup flow"},
-  context: %{task_id: "task_123", step_id: nil, run_id: "run_456"},
-  timestamp: ~U[2026-03-21 15:00:00Z]
+%Current.Event.TaskCreated{
+  task_id: "sha256:12ab…",
+  input: "add email validation to signup flow",
+  mode: :apply,
+  project_dir: "/home/me/project",
+  model: "anthropic:claude-opus-5-5",
+  ...
 }
 ```
 
@@ -290,48 +195,48 @@ Means: *"The runtime received this task."*
 
 ---
 
-**Example 2 — Intent proposed**
+**Example 2: Proposal produced**
 
 ```elixir
-%Current.Event{
-  type: :intent_proposed,
-  data: %{intent_ids: ["intent_1", "intent_2"]},
-  context: %{task_id: "task_123", step_id: "implement", run_id: "run_456"},
-  timestamp: ~U[2026-03-21 15:00:05Z]
+%Current.Event.ProposalProduced{
+  workflow_id: "sha256:77aa…",
+  proposal: %Current.Proposal{intents: [...]},
+  raw_output_blob_id: "sha256:c0de…"
 }
 ```
 
-Means: *"This step produced these intents."*
+Means: *"The model's reply was decoded into this proposal. The reply itself is kept as it arrived."*
 
 ---
 
-**Example 3 — Intent rejected**
+**Example 3: Validation failed**
 
 ```elixir
-%Current.Event{
-  type: :intent_rejected,
-  data: %{intent_id: "intent_2", reason: "invalid payload"},
-  context: %{task_id: "task_123", step_id: "implement", run_id: "run_456"},
-  timestamp: ~U[2026-03-21 15:00:06Z]
+%Current.Event.ProposalValidationFailed{
+  workflow_id: "sha256:77aa…",
+  proposal: %Current.Proposal{...},
+  error: %Current.Error.ValidationError{
+    intent_id: "sha256:9d2f…",
+    reason: "edit_file old_string was not found in the file; ..."
+  }
 }
 ```
 
-Means: *"This intent was not accepted by the runtime."*
+Means: *"This proposal was not accepted by the runtime, and this is why."*
 
 ---
 
-**Example 4 — Effect applied**
+**Example 4: Effect applied**
 
 ```elixir
-%Current.Event{
-  type: :effect_applied,
-  data: %{intent_id: "intent_1", result: %{status: :ok}},
-  context: %{task_id: "task_123", step_id: "implement", run_id: "run_456"},
-  timestamp: ~U[2026-03-21 15:00:07Z]
+%Current.Event.EffectApplied{
+  workflow_id: "sha256:77aa…",
+  intent: %Current.Intent.EditFile{...},
+  result: %Current.EffectResult.EditFile{replacements: 1, ...}
 }
 ```
 
-Means: *"The interpreter applied the approved intent."*
+Means: *"The interpreter applied the approved intent, and this is what it produced."*
 
 ---
 
@@ -339,10 +244,12 @@ Means: *"The interpreter applied the approved intent."*
 
 Every event has:
 
-1. **Type** — what kind of fact is being recorded
-2. **Data** — the structured payload for that fact
-3. **Context** — where in the runtime the fact occurred
-4. **Timestamp** — when the fact occurred
+1. **Type**: which struct it is, and so what fact is being recorded
+2. **Id**: a random id, unique to this event
+3. **Context**: the `workflow_id` it belongs to
+4. **Timestamp**: when the fact occurred
+5. **Version**: the schema version it was written at
+6. **Fields**: the structured payload for that fact
 
 ---
 
@@ -386,11 +293,11 @@ This is what makes replay possible, debugging tractable, state derivation determ
 
 ## What an Event is NOT
 
-❌ **Not an intent** — intents describe what is proposed; events describe what occurred.
+❌ **Not an intent**: intents describe what is proposed; events describe what occurred.
 
-❌ **Not mutable state** — state is derived from events; it is not the same thing as the event log.
+❌ **Not mutable state**: state is derived from events; it is not the same thing as the event log.
 
-❌ **Not a log line** — log lines are for humans; events are structured runtime facts.
+❌ **Not a log line**: log lines are for humans; events are structured runtime facts.
 
 ---
 
@@ -410,9 +317,9 @@ Think of an event like a **committed database transaction record**. It represent
 
 The distinction is fundamental.
 
-**Intent** — a proposal before execution.
+**Intent**: a proposal before execution.
 
-**Event** — a fact after execution or runtime decision.
+**Event**: a fact after execution or runtime decision.
 
 Example flow:
 
@@ -442,3 +349,4 @@ If this is not true, the event model is incomplete.
 ## The System in One Sentence
 
 > *Intents propose change. Events record fact. State is derived from the event log.*
+

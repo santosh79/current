@@ -36,7 +36,7 @@ out what the agent did by looking at what changed.
 Current turns that around. Because the agent can only *describe* changes, you
 can:
 
-- **read the whole change before it happens**: every diff, every new file,
+- **read the whole change before it happens**: every edit, every new file,
   every command and its arguments;
 - **approve or reject it as a unit**, and record who did and why;
 - **check the agent's claims**: a claim cites the intent that proves it, and
@@ -46,7 +46,7 @@ can:
 
 | Concern | Typical agent runtime | Current |
 |---|---|---|
-| File edits | Agent edits directly | Agent proposes a diff; the runtime applies it after approval |
+| File edits | Agent edits directly | Agent proposes an exact-text replacement; the runtime applies it after approval |
 | Commands | Agent invokes a shell | Agent requests an executable and arguments; runs only after approval |
 | What the agent read | Whatever it opened | Recorded with the proposal, filtered by a read policy |
 | State | Ad hoc workspace state | Derived from an append-only, hash-chained event log |
@@ -59,7 +59,7 @@ can:
 **Requirements**
 
 - Elixir 1.18+ on Erlang/OTP 27+
-- `patch` and `bash` on your `PATH` (used when applying)
+- `bash` on your `PATH` (used when running commands)
 - An API key for OpenAI (`OPENAI_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), or both
 
 **1. Start the runtime.** Current is a long-running server with an HTTP API
@@ -97,7 +97,7 @@ nothing touches the project until `apply`.
 ./current run "add input validation to the signup form" \
   --model anthropic:claude-opus-5-5 --dir path/to/project
 
-# every diff and file, as Markdown (or --json)
+# every edit, file and command, as Markdown (or --json)
 ./current review <proposal-id>
 
 ./current approve <proposal-id> -m "looks right"
@@ -115,7 +115,7 @@ nothing touches the project until `apply`.
 # every intent, and what the model looked at first
 ./current proposal <proposal-id>
 
-# exact bytes, e.g. a proposed diff
+# exact bytes, e.g. the text an edit replaces
 ./current artifact <artifact-id>
 ```
 
@@ -125,8 +125,8 @@ Ids can be shortened to any unique prefix of 4 or more hex digits.
 
 ## How it works
 
-A proposal is a list of typed *intents*: "patch `lib/signup.ex` with this
-diff", "run `mix test`", "claim the tests pass, because that command exits
+A proposal is a list of typed *intents*: "in `lib/signup.ex`, replace this text
+with that", "run `mix test`", "claim the tests pass, because that command exits
 0". The runtime decodes and validates it, records it, and waits. Once you
 approve it and ask for it to be applied, a small, trusted interpreter
 carries out the intents one at a time and records every result.
@@ -182,7 +182,7 @@ that log, and replaying the log always yields the same state.
 
 Validation answers "is this proposal well-formed and in bounds right now?",
 not "will it apply cleanly?". The project can change between validation and
-apply, and a valid proposal can still fail: a patch that no longer matches,
+apply, and a valid proposal can still fail: an edit whose old text no longer matches,
 a file that now exists, a command that exits non-zero. Those failures are
 caught and recorded at apply time.
 
