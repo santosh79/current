@@ -1,56 +1,274 @@
 # Current
 
-**A deterministic runtime for AI workflows.**
+**A runtime for agent-written changes you can trace to the request behind
+them, replay on another machine, and verify.**
 
-Agents propose changes. The runtime validates them, records them, and
-decides whether they happen.
+Everyone building with coding agents is adding logs of what the agent did.
+A log answers *what happened*. It doesn't answer the questions that matter
+once agent-written code ships:
 
-```text
-agent     proposes
-runtime   validates and records
-you       approve or reject
-runtime   applies and records
-```
+- **Why was this change made?** Which request asked for it?
+- **Who authorized it?**
+- **Can someone else check it?** Take the record somewhere else, replay it,
+  and get the same answer?
 
-The agent never writes a file or runs a command itself. Nothing touches
-your project until you approve its proposal and ask for it to be applied,
-and every step is kept in a hash-chained log.
+Most agents can't answer these, because the model calls tools from inside
+its reasoning loop. Deciding and doing are one event, and the only record
+is a transcript written about the work after the fact.
+
+Current is built so the record *is* the work. The agent can only propose.
+The runtime does everything else, and every step it takes is an event in
+a hash-chained commit log that every state is derived from.
+
+| | What it means | How Current does it |
+|---|---|---|
+| **Provenance** | Every change ties back to the request and the authorization behind it, not just to the agent action | Request, proposal, approval and effect are linked events in one log |
+| **Reproducibility** | Move the record to another machine, replay it, get the same result | State is a pure fold over the log; all content is content-addressed |
+| **Verifiability** | You can tell whether the history was altered | Each commit carries the SHA-256 of the one before; startup verifies the whole chain |
+| **The agent never mutates state** | The model proposes; only the runtime acts | A closed intent language, applied by one small interpreter |
+| **A gate before anything happens** | A person, or another agent, checks the proposal before it is applied | Approval is its own recorded event; `apply` is a separate step |
+
+All of this comes from applying event sourcing, CQRS, immutability and
+pure reducers to agent workflows (see [Architecture](#architecture)).
 
 > **Status: early.** One machine, one user, a local project. **Not a
 > sandbox**: an approved command runs with your privileges. See the
 > [threat model](docs/threat_model.md).
 
-[Why](#why) · [Quickstart](#quickstart) · [How it works](#how-it-works) ·
-[Intents](#intents) · [CLI](#cli-reference) · [Configuration](#configuration) ·
-[Security](#security) · [Status](#what-exists-today) ·
-[Design](#design-principles) · [Roadmap](#roadmap)
+[The agent proposes](#the-agent-proposes-the-runtime-acts) ·
+[Provenance](#provenance-from-a-change-back-to-the-request) ·
+[Reproducibility](#reproducibility-replay-the-record-anywhere) ·
+[Verifiability](#verifiability-a-hash-chained-history) ·
+[Architecture](#architecture) · [Quickstart](#quickstart) ·
+[How it works](#how-it-works) · [Intents](#intents) · [CLI](#cli-reference) ·
+[HTTP API](#http-api) · [Configuration](#configuration) ·
+[Security](#security) · [Status](#what-exists-today) · [Roadmap](#roadmap)
 
 ---
 
-## Why
+## The agent proposes, the runtime acts
 
-Most agent tools let the model edit files and run commands directly. That is
-convenient, and it puts side effects inside a probabilistic system: you find
-out what the agent did by looking at what changed.
+In a typical agent, a tool call *is* the action: the file is written the
+moment the model decides to write it. In Current, the model's output is a
+**proposal**, a list of typed intents:
 
-Current turns that around. Because the agent can only *describe* changes, you
-can:
+> "in `lib/signup.ex`, replace this text with that"; "run `mix test`";
+> "claim the tests pass, because that command exits 0"
 
-- **read the whole change before it happens**: every edit, every new file,
-  every command and its arguments;
-- **approve or reject it as a unit**, and record who did and why;
-- **check the agent's claims**: a claim cites the intent that proves it, and
-  a claim that doesn't hold fails the workflow;
-- **inspect everything afterwards**: what the model was asked, what it looked
-  at, what it said (byte for byte), and what each effect produced.
+A proposal does nothing on its own. Between it and your project, the
+runtime:
 
-| Concern | Typical agent runtime | Current |
+1. **decodes** the model's reply, which is untrusted bytes, into a closed
+   set of intent types. Anything outside it is rejected, not interpreted;
+2. **validates** it: paths confined to the project, files exist, every
+   edit matches exactly, claims cite earlier intents they can be checked
+   against;
+3. **waits for a decision.** A proposal is reviewed as a unit
+   (`current review`, or `--json` for a machine reader) and approved or
+   rejected. The reviewer can be a person or another agent: approval is
+   an API call, recorded as its own event with the reviewer's metadata;
+4. **applies** it, in a separate step, with a small trusted interpreter
+   that re-checks every path immediately before touching it and records
+   every result;
+5. **checks the outcome itself.** Claims are evaluated against recorded
+   results, and a claim that doesn't hold fails the workflow. The agent
+   doesn't grade its own work.
+
+The model also never reads your project directly. It sees the layout
+(names and sizes), and every file it asks to see goes through path
+confinement and a read policy, within fixed budgets, and is recorded.
+
+---
+
+## Provenance: from a change back to the request
+
+Because the runtime is the only thing that acts, and records each step
+before taking the next, every change sits at the end of an explicit chain:
+
+```text
+TaskCreated                  the request: prompt, model, project, submitted_at
+└─ WorkflowCreated
+   └─ ProposalProduced       intents, what the model read first, its raw reply
+      └─ ProposalValidated
+         └─ ProposalApproved     who, when, with what message
+            └─ EffectApplicationStarted
+               ├─ EffectApplied      an edit: file before and after
+               ├─ EffectApplied      a command: exit code, stdout, stderr
+               ├─ EffectApplied      a claim: verified, and against what
+               └─ WorkflowCompleted
+```
+
+So for any change you can answer, from the record alone and without the
+model:
+
+| Question | Answered by |
+|---|---|
+| Who asked for this, and what exactly did they ask? | `TaskCreated`: the prompt, model and project |
+| Why does the agent say it's needed? | The proposal's justification and claims |
+| What did the model look at before deciding? | Each observation, with its reason and the exact bytes it was shown |
+| What did the model actually say? | Its raw reply, stored byte for byte |
+| Who authorized it, and when? | `ProposalApproved` and its metadata |
+| What exactly changed? | Each effect's result: file before and after, command output |
+| Did it do what the agent claimed? | Each claim's verification and evidence |
+| What *didn't* happen, and why? | Rejections, validation failures, failed effects, each with a reason |
+
+```sh
+current events <workflow-id>     # the chain, in log order (a task id works too)
+current proposal <proposal-id>   # intents, claims, and what the model read first
+current artifact <artifact-id>   # exact bytes: a file before an edit, command output, a raw reply
+```
+
+**Authorization is recorded, not enforced by identity.** Current
+guarantees that nothing is applied without an approval event in the chain,
+followed by a separate apply, and the reducer enforces that at commit
+time. Who may approve is for a layer in front of it: approvals enter
+through one route (`POST /v1/proposals/:id/approve`), where a gateway can
+authenticate the caller and write verified identity into the approval's
+metadata. Today `reviewed_by` is whatever the client sends.
+
+---
+
+## Reproducibility: replay the record anywhere
+
+The commit log and the artifact store are the whole of Current's state.
+Nothing else is persisted, and everything the runtime shows you (tasks,
+proposals, workflows) is rebuilt from them. So the record is portable:
+copy the data directory to another machine, and replaying it gives the
+same history.
+
+There are two levels of replay, and it matters which one you mean.
+
+**Replaying the record (works today).** Every workflow state is a pure
+function of its events (see [the reducer](#the-reducer)). Every piece of
+content those events refer to is an immutable artifact named by its
+SHA-256. Replaying the same log, anywhere, gives the same states, the
+same accepted transitions and the same rejections, and every artifact
+can be checked against its own name. Point `CURRENT_DATA_DIR` at a copy
+and the runtime rebuilds it on start. (Starting the runtime also resumes
+or fails workflows that were still in progress, which appends new
+events. Copy a record whose workflows have finished.)
+
+**Re-executing the proposals (planned).** This is the stronger check:
+take the approved proposals, apply them to the same starting tree on
+another machine, and compare. Current records what makes that
+comparison exact. Each edit stores the file's before and after content
+hashes, and each command stores its exit code and output, so a re-run can
+be diffed against the original byte for byte. Edits replay
+deterministically. Commands are as reproducible as the environment
+they run in, and a difference shows up as a different artifact hash. A
+`current export` / `current replay` pair to do this is on the
+[roadmap](#roadmap).
+
+---
+
+## Verifiability: a hash-chained history
+
+The commit log is a hash chain, the structure blockchains use to make
+history tamper-evident (without mining, tokens or multi-party consensus).
+
+```text
+commit 1              commit 2                commit 3
+┌────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ index: 1       │    │ index: 2         │    │ index: 3         │
+│ previous: nil  │◀───│ previous: H(c1)  │◀───│ previous: H(c2)  │◀── head
+│ events: [...]  │    │ events: [...]    │    │ events: [...]    │
+└────────────────┘    └──────────────────┘    └──────────────────┘
+                 H(c) = SHA-256 of the serialized commit
+```
+
+Changing any byte of any past commit changes its hash and breaks every
+link after it, so **the head hash fingerprints the entire history**. It
+also covers the content: events refer to file contents, edits, command
+output and model replies by their SHA-256 artifact ids, so those are
+committed to as well.
+
+- **Only valid successors are written.** A commit must have the next index
+  and the head's hash as `previous_hash`, or it is refused and nothing is
+  written.
+- **Durable before acknowledged.** A commit is fsynced before anyone hears
+  of it.
+- **Verified on every start.** Every link is re-checked, across segments.
+  A gap, a broken link or corrupt bytes stop the runtime from starting,
+  naming the file. It refuses to serve a history it can't vouch for.
+- **Closed segments are immutable**, and opened read-only.
+
+**What this proves today:** integrity. The history the runtime replays is
+exactly the history it wrote, unbroken and in order. **What it doesn't
+yet:** authenticity to an outsider. Commits aren't signed, so someone
+who can write the data directory can rewrite history and recompute every
+hash. Signing the head, or publishing it somewhere the writer can't reach,
+closes that gap: once a third party holds a head hash, every request,
+approval and effect beneath it is verifiable against it. That, and
+re-verifying artifact hashes on read, are on the [roadmap](#roadmap).
+
+---
+
+## Architecture
+
+Current applies functional-programming and distributed-systems patterns
+to agent workflows. Each provides one of the properties above.
+
+| Pattern | In Current | Gives you |
 |---|---|---|
-| File edits | Agent edits directly | Agent proposes an exact-text replacement; the runtime applies it after approval |
-| Commands | Agent invokes a shell | Agent requests an executable and arguments; runs only after approval |
-| What the agent read | Whatever it opened | Recorded with the proposal, filtered by a read policy |
-| State | Ad hoc workspace state | Derived from an append-only, hash-chained event log |
-| Audit | Chat transcript | Every event, plus content-addressed artifacts for every input and output |
+| **Event sourcing** | Every step is a typed, past-tense, versioned event. The log is the only source of truth | Provenance, replay |
+| **CQRS** | Commands (`submit`, `approve`, `apply`) go through `Current.API` and become proposed events. Queries read projections (`WorkflowStore`, `ProposalStore`, `TaskStore`) built from committed events | Reads never mutate; writes are only events |
+| **Pure reducer** | `WorkflowReducer.apply_event/2`: state × event → state, or refusal | Deterministic state; one definition of what is allowed |
+| **Immutability** | Events are never edited or deleted; corrections are new events. Artifacts never change | A history worth verifying |
+| **Content addressing** | Artifacts are named by the SHA-256 of their bytes | Deduplication, and content that checks itself |
+| **Hash-chained WAL** | Each commit carries the previous commit's hash | Tamper evidence |
+| **Interpreter pattern** | Intents are data in a closed algebra; `EffectApplicator` is the one module that interprets them against the world | The agent can't act; a minimal trusted surface |
+| **Pure core, impure edge** | Model calls and effects run at the edge and come back as events | Effects are captured, not hidden |
+| **Schema evolution by upcasting** | Old events are migrated on read by pure, versioned functions, never rewritten on disk | Old logs keep replaying through new code |
+| **Consensus interface** | Commits are ordered through `Current.Consensus.propose/1`; single-node today | A path to a replicated log |
+
+### The reducer
+
+At the center is one pure function:
+
+```elixir
+WorkflowReducer.apply_event(workflow | nil, event)
+  :: {:ok, workflow} | {:error, {:invalid_transition, status, event_type}}
+
+WorkflowReducer.replay(events)   # a fold of apply_event over the log
+```
+
+It reads no clock, touches no disk and calls no model. Every timestamp
+comes from the event. It *is* the workflow state machine, an explicit
+table of `(status, event) → status` clauses, and anything not in the
+table is refused:
+
+| Rule | Enforced by |
+|---|---|
+| Nothing applies without approval | `EffectApplicationStarted` is accepted only from `:approved` |
+| A plan can never be applied | `ProposalApproved` is accepted only for `mode: :apply` |
+| One decision per proposal | approval and rejection are accepted only from `:waiting_for_approval` |
+| Terminal means terminal | nothing moves a `completed`, `planned`, `rejected`, `failed` or `abandoned` workflow |
+
+The same function is used at every layer, so the layers can't disagree.
+`EventStore` replays a workflow's events plus each new one **at commit
+time**, so an event the reducer refuses never becomes canonical, and of
+two racing approvals only one is accepted. The API runs it as an early
+check before proposing. The projections are the reducer applied to the
+stream, and recovery replays through it on restart. Because acceptance
+is itself a pure function of the events already accepted, replaying the
+log reproduces every rejection as well as every state.
+
+### The orchestrator is a policy, not a script
+
+`WorkflowOrchestrator` maps each committed event to the next event it
+proposes (`WorkflowCreated → ProposalProductionStarted`, `ProposalProduced
+→ ProposalValidated | ProposalValidationFailed`, ...). It never changes
+state directly, and acts only on what is committed. Model calls and effects
+run in separate processes, and their results come back as messages that
+become events. Nothing an effect does counts until it is an event.
+
+### Never guess after a crash
+
+On restart, every workflow is rebuilt from the log and resumed from what
+the log says. A workflow interrupted mid-apply is failed rather than
+resumed, because an effect that may already have happened is never
+repeated. One that crash-loops is retried with backoff, then abandoned on
+the record.
 
 ---
 
@@ -62,147 +280,107 @@ can:
 - `bash` on your `PATH` (used when running commands)
 - An API key for OpenAI (`OPENAI_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), or both
 
-**1. Start the runtime.** Current is a long-running server with an HTTP API
-(on `127.0.0.1:4000` by default); `current` is a client of it. The server
-prints every request and every commit to the log as it happens. Ctrl-C stops
-it.
+**1. Start the runtime.** A long-running server with an HTTP API (on
+`127.0.0.1:4000` by default). It prints every request and every commit as
+it happens.
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-... bin/current-server
 ```
 
-**2. Build the CLI** in another terminal, and check it can reach the runtime.
+**2. Build the CLI** in another terminal. It is a client of the API.
 
 ```sh
 make client
 ./current status
-# the models your API keys give you
-./current models
+./current models     # the models your API keys give you
 ```
 
-**3. Ask for a plan.** Nothing is executed. The model is shown your
-project's layout, can ask to read files, and replies with a proposal, which
-is validated and recorded.
-
-```sh
-./current plan "add input validation to the signup form" \
-  --model anthropic:claude-opus-5-5 --dir path/to/project
-```
-
-**4. Run, review, approve, apply.** `run` does the same in apply mode and
-stops when the proposal is waiting for approval. Each step is separate, and
-nothing touches the project until `apply`.
+**3. Make a request.** `run` stops when the proposal is waiting for
+review. Nothing has touched the project.
 
 ```sh
 ./current run "add input validation to the signup form" \
   --model anthropic:claude-opus-5-5 --dir path/to/project
-
-# every edit, file and command, as Markdown (or --json)
-./current review <proposal-id>
-
-./current approve <proposal-id> -m "looks right"
-
-# applies the intents, and follows the workflow to the end
-./current apply <proposal-id>
 ```
 
-**5. Inspect what was recorded.**
+**4. Review, approve, apply.** Each is a separate, recorded step.
 
 ```sh
-# the workflow's events, in log order (a task id works too)
+./current review <proposal-id>                    # every edit, file and command (or --json)
+./current approve <proposal-id> -m "looks right"  # recorded; nothing is applied yet
+./current apply <proposal-id>                     # apply, verify claims, follow to the end
+```
+
+**5. Trace it.**
+
+```sh
 ./current events <workflow-id>
-
-# every intent, and what the model looked at first
 ./current proposal <proposal-id>
-
-# exact bytes, e.g. the text an edit replaces
 ./current artifact <artifact-id>
 ```
 
-Ids can be shortened to any unique prefix of 4 or more hex digits.
+`plan` instead of `run` produces and validates a proposal that can never
+be applied. Ids can be shortened to any unique prefix of 4 or more hex
+digits.
 
 ---
 
 ## How it works
 
-A proposal is a list of typed *intents*: "in `lib/signup.ex`, replace this text
-with that", "run `mix test`", "claim the tests pass, because that command exits
-0". The runtime decodes and validates it, records it, and waits. Once you
-approve it and ask for it to be applied, a small, trusted interpreter
-carries out the intents one at a time and records every result.
-
 ```mermaid
 flowchart TD
-    task["Task: prompt, project, model"] --> layout["Model sees the project layout"]
+    task["Request: prompt, project, model"] --> layout["Model sees the project layout"]
     layout --> reply{"Model replies"}
-    reply -- "observe" --> read["Runtime reads files<br/>(read-only, filtered)"]
+    reply -- "observe" --> read["Runtime reads files<br/>(read-only, filtered, recorded)"]
     read -- "up to 8 rounds" --> reply
     reply -- "proposal" --> recorded[("Decoded and recorded")]
     recorded --> validate{"Validate"}
     validate -- "invalid" --> failed1(["failed"])
     validate -- "plan mode" --> planned(["planned"])
-    validate -- "apply mode" --> review{"You review"}
+    validate -- "apply mode" --> review{"Review<br/>(person or agent)"}
     review -- "reject" --> rejected(["rejected"])
-    review -- "approve, then apply" --> apply["Apply intents in order"]
-    apply -- "all succeed" --> completed(["completed"])
-    apply -- "effect fails or<br/>claim is false" --> failed2(["failed"])
+    review -- "approve, then apply" --> apply["Runtime applies intents in order"]
+    apply --> verify{"Claims hold?"}
+    verify -- "yes" --> completed(["completed"])
+    apply -- "effect fails" --> failed2(["failed"])
+    verify -- "no" --> failed2
 ```
 
-Every step in this diagram is recorded as an event. Rounded boxes are where
-a workflow ends.
-
-> **AI workflows as pure state transitions, with effects at the edge.**
-
-The model is probabilistic, and so is the world it acts on: files change,
-commands fail. What Current makes deterministic is the bookkeeping. Workflow
-state is a pure function of an append-only event log, every decision is in
-that log, and replaying the log always yields the same state.
+Every step is an event. Rounded boxes are where a workflow ends.
 
 ### Producing a proposal
 
 1. A **task** is submitted with a prompt, a project directory and a model.
-   The directory is resolved once to its real path and recorded; every path
-   the agent names is checked against it from then on.
-2. The model is given the project's **layout**: file paths and sizes, no
+   The directory is resolved once to its real path and recorded.
+2. The model is given the project's **layout**: paths and sizes, no
    contents. Dependencies, build output, VCS directories and `.env*` files
    are left out.
 3. The model may reply with an **observe** request: up to 20 `read_file`,
-   `glob` or `grep` intents. The runtime runs them read-only, under the same
-   path checks as applied intents plus the read policy, and asks again with
-   the results. It may do this up to 8 times, within 400 KB of results in
-   total; a file over 200 KB is not shown.
-4. The model replies with a **proposal**: the intents it wants carried out.
-   Its exact reply is stored, whatever it contains.
-5. The proposal is **decoded** into typed intents (the wire contract is
-   [docs/wire_schema.md](docs/wire_schema.md), and
-   `priv/schema/proposal_response.schema.json`), every path is made absolute
-   against the project, and the proposal is **validated**: paths stay inside
-   the project, referenced files exist, claims cite earlier intents whose
-   results they can be checked against.
+   `glob` or `grep` intents, each with a reason. The runtime runs them
+   read-only, under path confinement and the read policy, and asks again
+   with the results. Up to 8 rounds, 400 KB of results in total, 200 KB
+   per file.
+4. The model replies with a **proposal**. Its exact reply is stored as an
+   artifact, whatever it contains.
+5. The proposal is **decoded** into typed intents
+   ([wire contract](docs/wire_schema.md)), every path is made absolute
+   against the project, and it is **validated**.
 
-Validation answers "is this proposal well-formed and in bounds right now?",
-not "will it apply cleanly?". The project can change between validation and
-apply, and a valid proposal can still fail: an edit whose old text no longer matches,
-a file that now exists, a command that exits non-zero. Those failures are
-caught and recorded at apply time.
-
-Producing a proposal is bounded: each model call by
-`llm_proposal_timeout_ms`, and the whole conversation by the task's own
-`--timeout-minutes` or, by default, 10 minutes.
+Validation answers "is this well-formed and in bounds right now?", not
+"will it apply cleanly?". The project can change before apply, and those
+failures are caught and recorded then. Producing a proposal is bounded by
+`llm_proposal_timeout_ms` per call and the task's `--timeout-minutes`
+(default 10) overall.
 
 ### Applying it
 
-A proposal from `run` waits for a decision. `approve` records it; `reject`
-ends the workflow. `apply` is a separate step: it starts the interpreter,
-which re-checks every path against the filesystem as it is *now* (following
-symlinks), then carries out the intents in order. The re-check narrows the
-window for a path to escape the project; it does not close it (see T2 in the
-[threat model](docs/threat_model.md)). The first failure, or the
-first claim that doesn't hold, stops it and fails the workflow. Effects are
-not rolled back.
-
-If the runtime stops mid-apply, the workflow is failed on restart rather
-than resumed: an effect that may or may not have happened is never repeated.
+`apply` starts the interpreter. It re-checks every path against the
+filesystem as it is *now* (following symlinks), then carries out the
+intents in order. The first failure, or the first claim that doesn't
+hold, stops it and fails the workflow. Effects are not rolled back. The
+re-check narrows the window for a path to escape the project but doesn't
+close it (T2 in the [threat model](docs/threat_model.md)).
 
 ### Lifecycle
 
@@ -215,16 +393,16 @@ any stage:      → failed      (production, validation or an effect failed)
                 → abandoned   (no further automatic progress is possible)
 ```
 
-### The record
+### Three primitives
 
-Everything that happens is an **event**, appended to a write-ahead log on
-disk. Each commit carries the hash of the one before it, and the log
-refuses to start if the chain is broken. In-memory views of tasks,
-proposals and workflows are rebuilt from the log on every start.
+| Primitive | When | Role | More |
+|---|---|---|---|
+| Intent | Before execution | A proposal, as data | [intent.md](docs/intent.md) |
+| Event | After execution or decision | A fact | [event.md](docs/event.md) |
+| Artifact | Throughout | Immutable bytes, named by their SHA-256 | [artifact.md](docs/artifact.md) |
 
-Contents (file text, edits, snapshots, command output, the model's raw replies)
-are stored as **artifacts**: immutable blobs named by their SHA-256. Events
-refer to artifacts by id.
+> *Intents propose change. Artifacts hold bytes. Events record fact.
+> State is derived from the event log.*
 
 ---
 
@@ -236,13 +414,11 @@ refer to artifacts by id.
 | `glob` | Lists files matching a relative pattern | yes |
 | `grep` | Finds lines containing a literal string in listed files | yes |
 | `write_file` | Creates a new file; fails if it already exists | |
-| `edit_file` | Replaces exact text (`old_string` → `new_string`) in an existing file; `old_string` must match once unless `replace_all`; stores before and after | |
+| `edit_file` | Replaces exact text (`old_string` → `new_string`); must match once unless `replace_all`; stores before and after | |
 | `delete_file` | Deletes a file; stores its contents first | |
-| `run_command` | Runs an executable with arguments in the project directory; stores stdout, stderr and exit code | |
+| `run_command` | Runs an executable with arguments in the project; stores stdout, stderr and exit code | |
 | `claim` | Checks a statement against an earlier intent's result (`exit_code_equals`, `match_count_equals`, `match_count_greater_than`) | |
 | `report` | A summary for the reader; no effect | |
-
-The exact JSON is specified in [docs/wire_schema.md](docs/wire_schema.md).
 
 ---
 
@@ -250,31 +426,29 @@ The exact JSON is specified in [docs/wire_schema.md](docs/wire_schema.md).
 
 | Command | What it does |
 |---|---|
-| `current plan <prompt> --model <m> [--dir <d>] [--timeout-minutes <n>]` | Produce and validate a proposal. Nothing is executed. |
-| `current run <prompt> --model <m> [--dir <d>] [--timeout-minutes <n>]` | The same in apply mode; stops when the proposal waits for approval. |
-| `current review <proposal-id> [--json] [--max-lines <n>] [--raw]` | A proposal with its edits and file contents. `--json` emits `current.review/v1`. |
+| `current run <prompt> --model <m> [--dir <d>] [--timeout-minutes <n>]` | Make a request; stops when the proposal waits for review. |
+| `current plan <prompt> --model <m> [--dir <d>] [--timeout-minutes <n>]` | Produce and validate a proposal that can never be applied. |
+| `current review <proposal-id> [--json] [--max-lines <n>] [--raw]` | A proposal with its edits, files and commands. `--json` emits `current.review/v1`. |
 | `current approve <proposal-id> [-m <message>]` | Record approval. Nothing is applied. |
 | `current reject <proposal-id> [-m <message>]` | Turn a proposal down; the workflow ends. |
-| `current apply <proposal-id>` | Apply an approved proposal, and follow it to the end. |
-| `current events <workflow-or-task-id>` | A workflow's events, in log order. |
-| `current proposal <proposal-id>` | A proposal in full: intents, observations, artifacts. |
+| `current apply <proposal-id>` | Apply an approved proposal, verify its claims, follow it to the end. |
+| `current events <workflow-or-task-id>` | The chain: a workflow's events, in log order. |
+| `current proposal <proposal-id>` | A proposal in full: intents, claims, observations, artifacts. |
 | `current artifact <artifact-id>` | An artifact's exact bytes, for piping. |
 | `current models` | Models discovered from the configured providers. |
 | `current status` | Whether the runtime is up, and how it is configured. |
 
-`--model` is required and has no default; use a name `current models`
-prints, e.g. `openai:gpt-5.6`. `--timeout-minutes` is a whole number from
-1 to 60.
-
-The CLI holds no state. Interrupt it at any point; the workflow carries on
-in the runtime, and `current events <id>` picks it up again. Exit codes are
-0 on the expected outcome, 1 on failure and 2 on a usage error.
+`--model` is required; use a name `current models` prints.
+`--timeout-minutes` is 1 to 60. The CLI holds no state: interrupt it at any
+point and the workflow carries on in the runtime. Exit codes are 0 on the
+expected outcome, 1 on failure and 2 on a usage error.
 
 ---
 
 ## HTTP API
 
-The CLI does nothing a script can't: it calls these routes.
+The CLI does nothing a script, or another agent, can't: it calls these
+routes.
 
 | Route | Does |
 |---|---|
@@ -289,9 +463,8 @@ The CLI does nothing a script can't: it calls these routes.
 | `GET /v1/artifacts/:id` | An artifact's exact bytes |
 | `GET /v1/models`, `GET /v1/health` | The model catalog; whether the runtime is up |
 
-Errors are `{"error": {"code", "message"}}` with a matching status. The API
-does no authentication (see [Security](#security)); the routes and their
-details are documented in `lib/http/router.ex`.
+Errors are `{"error": {"code", "message"}}` with a matching status. The
+API does no authentication (see [Security](#security)).
 
 ---
 
@@ -308,17 +481,13 @@ details are documented in `lib/http/router.ex`.
 | `CURRENT_HTTP_IP` | runtime | Address the HTTP API binds (default `127.0.0.1`) |
 | `CURRENT_URL` | CLI | Where the CLI finds the runtime (default `http://127.0.0.1:4000`) |
 
-Models are discovered once, when the runtime starts. A provider without a
-key, or one that doesn't answer, contributes no models, and a task naming
-one of its models is refused.
-
 ### Application config (`config/*.exs`)
 
 | Key | Default | Meaning |
 |---|---|---|
 | `data_dir` | `"./_data"` | Log in `consensus/`, artifacts in `artifacts/` |
 | `llm_proposal_timeout_ms` | `240_000` | Bound on one model call |
-| `llm_task_timeout_ms` | `600_000` | Default bound on producing one proposal (all calls and reads) |
+| `llm_task_timeout_ms` | `600_000` | Default bound on producing one proposal |
 | `commit_log_segment_bytes` | 64 MiB | Log segment size before rolling over |
 | `proposal_builder` | `Current.LLMProposalBuilder` | What produces proposals |
 | `effect_applicator` | `Current.EffectApplicator` | What applies intents |
@@ -328,36 +497,27 @@ one of its models is refused.
 
 ## Security
 
-Current narrows what an agent can do *without you*. It does not limit what an
-approved proposal can do. In short:
+Current controls *when* an agent's proposal takes effect and records
+everything about it. It does not limit *what* an approved proposal can do.
 
-- **Nothing an agent proposes is executed without explicit authorization.**
-  Its output is parsed into typed intents; nothing is applied without an
-  approval and a separate `apply`. What happens once you authorize it is
-  bounded only by what the proposal contains.
-- **Paths are confined** to the project directory, checked lexically at
-  validation and again, following symlinks, immediately before each effect.
-- **What the model sees is filtered** by name: dependencies, build output,
-  VCS directories and `.env*` files are never listed or shown. Other secrets
-  in your project (keys, credential files) are *not* recognised.
-- **`run_command` is not confined.** Arguments are passed without shell
-  interpretation, but the command itself runs as you, with your environment
-  (including your API keys), network access and no time limit. Approving a
-  command is approving arbitrary code: `mix test` runs whatever the tests
-  contain.
-- **The control plane is a trusted, unauthenticated HTTP API.** Current does
-  not authenticate callers or implement identity-based access control. It
-  listens on 127.0.0.1 by default. Deployments are responsible for restricting
-  access through network isolation, reverse proxies, API gateways, or other
-  external controls. Any caller able to reach the API should be considered
-  capable of exercising its workflow operations, including approving and
-  applying proposals.
-- **The log is tamper-evident to the runtime, not to an attacker.** The hash
-  chain catches corruption; it is not signed.
+- **Nothing an agent proposes runs without approval** and a separate
+  `apply`, enforced by the reducer at commit time.
+- **Paths are confined** to the project, checked lexically at validation
+  and again, following symlinks, just before each effect.
+- **What the model sees is filtered** by name (dependencies, build output,
+  VCS directories, `.env*`). Other secrets in the project are *not*
+  recognised.
+- **`run_command` is not sandboxed.** It runs as you, with your
+  environment, network and no time limit. Approving a command is
+  approving arbitrary code.
+- **The HTTP API is unauthenticated.** It listens on 127.0.0.1. Restrict
+  who can reach it with a gateway, proxy or network policy; anyone who can
+  reach it can approve and apply.
+- **The log is tamper-evident to the runtime, not yet to an attacker.**
+  See [Verifiability](#verifiability-a-hash-chained-history).
 
-The full analysis, with what is mitigated, what is not, and how to run
-Current more safely, is in [docs/threat_model.md](docs/threat_model.md).
-Please report vulnerabilities privately rather than in a public issue.
+Full analysis: [docs/threat_model.md](docs/threat_model.md). Please report
+vulnerabilities privately.
 
 ---
 
@@ -365,52 +525,23 @@ Please report vulnerabilities privately rather than in a public issue.
 
 | | Status |
 |---|---|
-| Plan, run, review, approve, reject, apply from the CLI | ✅ |
-| OpenAI and Anthropic models, chosen per task | ✅ |
-| Model asks to see files before proposing (observe) | ✅ |
-| Typed wire contract with a JSON Schema | ✅ |
-| Validation, with path confinement checked twice | ✅ |
-| Hash-chained, segmented write-ahead log; state rebuilt on start | ✅ |
-| Content-addressed artifacts for every input and output | ✅ |
+| Request, review, approve, reject, apply from the CLI or HTTP | ✅ |
+| Request, proposal, approval and effects linked in one log | ✅ |
+| What the model read, and its raw replies, recorded with the proposal | ✅ |
 | Verified claims: a false claim fails the workflow | ✅ |
-| Per-task timeout on producing a proposal | ✅ |
-| Policies (e.g. a command allowlist) | planned |
-| `simulate`: apply in a throwaway copy first | planned |
-| Sandboxed command execution, and a timeout on commands | planned |
-| Atomic apply (all intents or none) | planned |
-| HTTP/JSON API; the CLI is a client of it | ✅ |
+| Pure reducer enforcing every transition at commit time | ✅ |
+| Hash-chained, segmented WAL, verified on every start | ✅ |
+| State and rejections rebuilt deterministically from the log | ✅ |
+| Content-addressed artifacts for every input and output | ✅ |
+| Versioned events with upcasting | ✅ |
+| OpenAI and Anthropic models, chosen per task | ✅ |
+| `current export` / `current replay`: re-execute on another machine and diff | planned |
+| `current verify`: check the chain and every artifact, print the head hash | planned |
+| Signed or externally anchored log heads | planned |
+| Approval policy hook / authenticated approvers | planned (layered on top) |
+| Command allowlist, timeout and output cap | planned |
+| Atomic apply, `simulate` | planned |
 | MCP server | planned |
-| Listing and searching workflows | planned |
-| Log snapshots (today every commit is replayed on start) | planned |
-
----
-
-## Design principles
-
-**Pure core, impure edge.** Workflow state is a pure function of the event
-log (`WorkflowReducer`). Side effects live in one module
-(`EffectApplicator`), small enough to read.
-
-**Intents over actions.** Agents describe intended changes. They never
-execute them.
-
-**Event sourcing by default.** Task submitted, proposal produced,
-validated, approved, each effect applied or failed, workflow completed:
-every step is an event, and state is derived from them.
-
-**Deterministic orchestration around a non-deterministic world.** The
-model's reply, the filesystem and command results all vary. Each is
-captured as it happens: the reply byte for byte, effect results as
-artifacts. The state machine and recovery are deterministic functions of
-what was recorded; validation and effects, which look at the live
-filesystem, are not.
-
-**Never guess after a crash.** A workflow interrupted while applying is
-failed, not resumed: an effect that may already have happened is not
-repeated.
-
-**Minimal trusted surface.** The code that touches the world is small,
-explicit, and tested.
 
 ---
 
@@ -418,19 +549,26 @@ explicit, and tested.
 
 **Next**
 
+- `current export` and `current replay`: bundle a workflow's events and
+  artifacts, re-apply on another machine against the same starting tree,
+  and diff every artifact hash
+- `current verify`: re-check the chain and every artifact against its
+  name, and print the head hash
+- an approval policy hook (N approvers, an approver other than the
+  requester), where an ACL layer plugs in
 - command policy (allowlist), and a timeout and output cap on commands
-- `simulate`: apply to a temporary copy, show the result, discard it
-- atomic apply: apply to a copy, promote only if every intent succeeds
-- an MCP server, so other agents and tools can drive Current
-- `current list`: workflows by status
+- atomic apply, and `simulate` in a throwaway copy
+- an MCP server, so other agents can drive and review through Current
 
 **Later**
 
-- sandboxed interpreters (containers or similar)
-- signed log heads, and snapshots so startup doesn't replay everything
-- branch/worktree support
-- workflow definitions with typed contracts between steps
-- distributed execution (the log is already behind a consensus interface)
+- signed log heads, and publishing head hashes externally
+- a stable canonical encoding for commit hashes (today they hash
+  `term_to_binary`, which isn't guaranteed identical across OTP versions;
+  this matters for verifying on another machine)
+- log snapshots, so startup doesn't replay everything
+- sandboxed interpreters
+- a replicated log behind the existing consensus interface
 
 ---
 
@@ -438,16 +576,15 @@ explicit, and tested.
 
 Contributions are welcome, especially in:
 
+- replay, export and verification tooling
+- approval policy and access control on top of the approval record
 - interpreters and sandboxing
-- policy design
 - the intent algebra and wire contract
 - event model, reducers and projections
-- test harnesses and replay tooling
-- clients: HTTP, MCP, editors
 
 `mix test` runs the suite. If your change alters what an event stores,
-bump the event's version and add an `upcast` clause; recorded logs must keep
-loading.
+bump the event's version and add an `upcast` clause; recorded logs must
+keep loading.
 
 ---
 
