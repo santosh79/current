@@ -40,6 +40,19 @@ defmodule Current.Event do
     Current.Event.WorkflowAbandoned
   ]
 
+  @doc """
+  Every committed event, newest first. TaskCreated events carry the
+  user's prompt (`input`), `model` and `timeout_ms`.
+  """
+  @spec all() :: [t()]
+  def all do
+    {:ok, entries} = Current.EventStore.complete_log_entries()
+
+    entries
+    |> Enum.sort_by(& &1.position, :desc)
+    |> Enum.map(& &1.event)
+  end
+
   @spec modules() :: [module()]
 
   def modules,

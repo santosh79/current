@@ -69,6 +69,20 @@ defmodule Current.Workflow do
         }
   @terminal_statuses [:completed, :planned, :rejected, :failed, :abandoned]
 
+  @doc """
+  Every workflow, newest first, each as a map holding the `:workflow`
+  together with the `:input` (the user's prompt), `:model`, `:timeout_ms`,
+  `:project_dir` and `:task_id` of the task it belongs to.
+  """
+  @spec all() :: [map()]
+  def all do
+    Current.WorkflowStore.all()
+    |> Enum.sort_by(& &1.created_at, {:desc, DateTime})
+    |> Enum.map(fn workflow ->
+      Map.put(Current.Task.request_details(workflow.task_id), :workflow, workflow)
+    end)
+  end
+
   @spec terminal?(t()) :: boolean()
   def terminal?(%__MODULE__{status: status}), do: status in @terminal_statuses
 end
