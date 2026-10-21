@@ -25,7 +25,7 @@ defmodule Current.FakeLLMClient do
 
   @type response :: {:ok, String.t()} | {:error, term()} | :hang
 
-  @spec set_response(response() | (String.t() -> response())) :: :ok
+  @spec set_response(response() | ([Current.LLMClient.message()] -> response())) :: :ok
   def set_response(response) do
     :persistent_term.put(@key, response)
   end

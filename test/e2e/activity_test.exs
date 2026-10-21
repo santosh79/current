@@ -25,7 +25,9 @@ defmodule Current.E2E.ActivityTest do
 
   test "each round is visible to a poller, and a caught-up poller sees nothing new",
        %{project: project} do
-    FakeLLMClient.set_response(fn prompt ->
+    FakeLLMClient.set_response(fn messages ->
+      prompt = Enum.map_join(messages, "\n", & &1.content)
+
       if prompt =~ ~s(<file path="lib/a.ex">) do
         {:ok, ~s({"justification": "done", "intents": [{"type": "report", "summary": "ok"}]})}
       else

@@ -29,7 +29,7 @@ defmodule Current.Consensus.Commit do
   @spec hash(t()) :: binary()
   def hash(%__MODULE__{} = commit) do
     commit
-    |> :erlang.term_to_binary()
+    |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
   end
 end
