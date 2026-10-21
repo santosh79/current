@@ -14,7 +14,7 @@ defmodule Current.E2E.WorkflowTest do
 
   defp fetch_matches(artifact_id) do
     {:ok, encoded} = Current.BlobStore.read(artifact_id)
-    :erlang.binary_to_term(encoded)
+    :erlang.binary_to_term(encoded, [:safe])
   end
 
   describe "plan mode" do

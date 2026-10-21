@@ -266,7 +266,7 @@ defmodule Current.Observer do
   # An artifact EffectApplicator just wrote itself, not model input.
   defp stored_term(artifact_id) do
     {:ok, encoded} = BlobStore.read(artifact_id)
-    :erlang.binary_to_term(encoded)
+    :erlang.binary_to_term(encoded, [:safe])
   end
 
   defp relative(path, root), do: Path.relative_to(path, root)
