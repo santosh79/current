@@ -59,13 +59,13 @@ Then the per-intent rules:
 
 | Intent | Checked | Left to apply time |
 |---|---|---|
-| `read_file` | `path` is a regular file | |
-| `write_file` | the contents artifact exists | whether `path` already exists |
+| `read_file` | `path` is a regular file | whether the file still exists when applied |
+| `write_file` | the contents artifact exists; rejects a path an earlier proposal intent left present | whether the path already exists on disk when applied |
 | `edit_file` | `path` exists; the `old` and `new` artifacts exist; `Current.Edit.replace/4` succeeds against the file as it is now | the same check again, against the file as it is then |
 | `delete_file` | `path` is a non-empty string | a missing file counts as already deleted |
 | `run_command` | `cmd` is a non-empty string; `args` is a list of strings | whether the executable exists on `PATH` |
-| `grep` | every path is a regular file | |
-| `glob` | `pattern` is relative; `base_dir` is an existing directory | |
+| `grep` | every path is a regular file | whether the files still exist when applied |
+| `glob` | `pattern` is relative; `base_dir` is an existing directory on disk | |
 | `claim` | evidence is present; `source_intent_id` names an intent **earlier in the proposal**; the condition can be evaluated against that kind of intent | whether the result satisfies it |
 | `report` | nothing | |
 
@@ -147,4 +147,5 @@ A commit is accepted only if its index is exactly one past the current head
 and its `previous_hash` matches the head's hash. The log refuses to start if
 the chain is broken, if the first segment is not number 1, or if a segment
 is missing. See the [commit log notes](commit_log_design_notes.md).
+
 

@@ -297,8 +297,11 @@ carries a `contents_artifact_id`, not the raw text.
 
 `write_file` only ever **creates** a file: `EffectApplicator` refuses it
 if the target already exists. There is no overwrite; change an existing
-file with `edit_file`. (This is checked at apply time, not validation
-time, since whether a file exists can change in between.)
+file with `edit_file`. (Whether the file exists on disk is checked at
+apply time, not validation time, since it can change in between. The
+exception is a path the same proposal already wrote or edited earlier:
+`IntentValidator` refuses that, because the proposal alone shows it. A
+path the proposal deletes first can be written again.)
 
 ### `delete_file`
 
@@ -347,15 +350,16 @@ The prompt states these rules and gives a worked example
 (`LLMProposalBuilder.edit_file_example/0`). The model is told to edit only
 files whose contents it has been shown; nothing enforces that yet.
 
-**Several edits to one file.** The prompt tells the model that edits to the
-same file are applied in order, so each must match the file as the earlier
-ones leave it. `EffectApplicator` does exactly that. `IntentValidator` does
-not: it checks every edit against the file as it is on disk, not against
-the result of the edits before it. So a second edit whose `old_string`
-exists only because of the first is refused at validation, even though it
-would apply, and two edits that overlap can validate and still fail on
-apply. Until that changes, the safe form is one `edit_file` per distinct
-piece of text, none of them depending on another's result.
+**Several edits to one file.** Edits to the same file are applied in order,
+so each must match the file as the earlier ones leave it. `IntentValidator`
+checks them the same way: it keeps an in-memory picture of each file the
+proposal touches and checks each edit against it. A second edit may depend
+on the first, and one the first made ambiguous or impossible is refused at
+validation. The picture comes from the proposal's own `write_file`,
+`edit_file` and `delete_file` intents, so an `edit_file` may also follow a
+`write_file` that creates the file, and fails after a `delete_file` of it.
+A `run_command` can change files unpredictably and is not modelled, so
+edits after one can still pass validation and fail on apply.
 
 ### `run_command`
 
@@ -466,19 +470,25 @@ proposal will run against — not on whether the response is well-formed:
 - A claim referencing an intent that appears **after** it in `intents`.
 - A claim's `condition` being incompatible with the *type* of intent its
   evidence references (e.g. `exit_code_equals` against a `grep`).
-- Whether a `path` exists on disk, or a referenced blob resolves.
+- Whether a `path` exists, or a referenced blob resolves. Existence is
+  judged as the proposal's earlier intents leave the file: a path an
+  earlier `write_file` creates exists, and one an earlier `delete_file`
+  removes does not. A path no earlier intent touched is looked up on disk.
 - `glob`'s `pattern` being relative rather than absolute.
 - Whether `run_command`'s `cmd` is actually on `PATH` — this can differ
   between validation time and apply time, so it's checked only at apply
   time, by `EffectApplicator`.
-- Whether a `write_file` target already exists (apply fails if it does),
-  for the same reason.
+- Whether a `write_file` target already exists on disk (apply fails if it
+  does), for the same reason. A `write_file` to a path the same proposal
+  already wrote or edited is refused at validation, since the proposal
+  alone shows it.
 - Whether an `edit_file`'s `old_string` is in its file. The decoder only
   checks that the strings are well-formed. `IntentValidator` checks the
-  edit against the file as it is when the proposal is validated (see
-  "Several edits to one file" above for what that does not cover), and
-  `EffectApplicator` checks again at apply time, because the file can
-  change in between. A proposal can therefore validate and still fail on
+  edit against the file as the proposal's earlier intents leave it (see
+  "Several edits to one file" above), and `EffectApplicator` checks again
+  at apply time against the file as it is then, because the file can
+  change in between and a `run_command` can change it in ways validation
+  doesn't model. A proposal can therefore validate and still fail on
   apply.
 - Whether an `edit_file` targets a file the model was actually shown.
   The proposal's `observations` say what it saw, so this is a candidate

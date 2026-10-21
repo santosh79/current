@@ -5,11 +5,29 @@ defmodule Current.IntentValidator do
   This is deliberately narrower than "will this succeed when applied":
   validation protects the contract (referenced blobs exist, structural
   shape is sane, claims only cite earlier intents whose condition they
-  could ever evaluate), not the world's future state. Whether a target
-  file happens to already exist, or a command's executable happens to be
-  on this box's PATH, can change between validation and apply -- those
-  stay effect-time-only failures (see EffectApplicator), exactly as they
-  already were before this module covered every intent type.
+  could ever evaluate), not the world's future state. Whether a command's
+  executable happens to be on this box's PATH can change between
+  validation and apply -- that stays an effect-time-only failure (see
+  EffectApplicator), exactly as it already was.
+
+  ## File state across intents
+
+  EffectApplicator applies intents in order, so each one sees the files as
+  the earlier ones left them. Validation mirrors that with an in-memory
+  overlay, `files`, of what the *proposal itself* has done to each path so
+  far:
+
+    * `{:present, contents}` -- an earlier `write_file` or `edit_file`
+      left the file with these contents;
+    * `:absent` -- an earlier `delete_file` removed it;
+    * no entry -- nothing in the proposal has touched the path yet, so the
+      file on disk is the truth.
+
+  Nothing is written to disk. The overlay is only as good as its model:
+  a `run_command` can change files in ways validation cannot predict
+  (a formatter, a code generator), so intents after one are checked
+  against what the proposal's own file intents imply, not what the command
+  did.
 
   Every member of Current.Intent.t() must have an explicit clause below.
   There is no catch-all: an intent type with no clause is a compile-time
@@ -25,9 +43,35 @@ defmodule Current.IntentValidator do
   alias Current.{BlobStore, Intent, IntentPaths, Proposal}
   alias Current.Error.ValidationError
 
+  @type files :: %{optional(Path.t()) => {:present, binary()} | :absent}
+  @type state :: %{seen: %{optional(Current.Id.t()) => Intent.t()}, files: files()}
+
   @spec validate(Proposal.t(), Path.t()) :: :ok | {:error, ValidationError.t()}
   def validate(%Proposal{intents: intents}, project_dir) when is_binary(project_dir) do
-    validate_helper(intents, %{}, Path.expand(project_dir))
+    validate_helper(intents, %{seen: %{}, files: %{}}, Path.expand(project_dir))
+  end
+
+  ## --- File overlay ---------------------------------------------------------
+
+  # The file's contents as the proposal has left it so far.
+  defp read_current(path, files) do
+    case Map.fetch(files, path) do
+      {:ok, {:present, contents}} -> {:ok, contents}
+      {:ok, :absent} -> :error
+      :error -> File.read(path) |> normalize_read()
+    end
+  end
+
+  defp normalize_read({:ok, contents}), do: {:ok, contents}
+  defp normalize_read({:error, _reason}), do: :error
+
+  # Whether a regular file exists at `path` as the proposal has left it.
+  defp exists_current?(path, files) do
+    case Map.fetch(files, path) do
+      {:ok, {:present, _contents}} -> true
+      {:ok, :absent} -> false
+      :error -> File.regular?(path)
+    end
   end
 
   ## --- Paths (every intent) ---------------------------------------------
@@ -50,12 +94,16 @@ defmodule Current.IntentValidator do
   defp path_reason(field, :outside_project_dir), do: "#{field} is outside the project directory"
   defp path_reason(field, :parent_segment), do: "#{field} must not contain '..'"
 
+  ## --- Per-intent rules -----------------------------------------------------
+  # Each clause returns {:ok, files} -- the overlay after this intent -- or a
+  # ValidationError.
+
   ## --- ReadFile -------------------------------------------------------
 
-  defp validate_intent(%Intent.ReadFile{id: id, path: path}, _seen_intents) do
-    case File.regular?(path) do
+  defp validate_intent(%Intent.ReadFile{id: id, path: path}, %{files: files}) do
+    case exists_current?(path, files) do
       true ->
-        nil
+        {:ok, files}
 
       _ ->
         %ValidationError{
@@ -67,16 +115,30 @@ defmodule Current.IntentValidator do
   end
 
   ## --- WriteFile --------------------------------------------------------
-  # Whether `path` already exists is apply-time only (EffectApplicator
-  # already handles it) -- it can change between now and apply, so
-  # validating it here would just be a race with no real payoff.
+  # Whether `path` already exists *on disk* is apply-time only
+  # (EffectApplicator already handles it) -- it can change between now and
+  # apply. A file the proposal itself created or edited earlier is a
+  # different matter: that is deterministic, so it is rejected here.
 
-  defp validate_intent(%Intent.WriteFile{id: id, contents_artifact_id: blob_id}, _seen_intents) do
-    case BlobStore.path_for(blob_id) do
-      {:ok, _path} ->
-        nil
+  defp validate_intent(
+         %Intent.WriteFile{id: id, path: path, contents_artifact_id: blob_id},
+         %{files: files}
+       ) do
+    case BlobStore.read(blob_id) do
+      {:ok, contents} ->
+        case Map.get(files, path) do
+          {:present, _} ->
+            %ValidationError{
+              intent_id: id,
+              reason: "write_file path already exists earlier in this proposal",
+              details: %{path: path}
+            }
 
-      {:error, :not_found} ->
+          _ ->
+            {:ok, Map.put(files, path, {:present, contents})}
+        end
+
+      {:error, _reason} ->
         %ValidationError{
           intent_id: id,
           reason: "write_file contents blob does not exist",
@@ -90,10 +152,10 @@ defmodule Current.IntentValidator do
   # as "already deleted" rather than an error, so there's nothing here
   # for validation to usefully reject ahead of time.
 
-  defp validate_intent(%Intent.DeleteFile{id: id, path: path}, _seen_intents) do
+  defp validate_intent(%Intent.DeleteFile{id: id, path: path}, %{files: files}) do
     case is_binary(path) and path != "" do
       true ->
-        nil
+        {:ok, Map.put(files, path, :absent)}
 
       _ ->
         %ValidationError{
@@ -105,12 +167,11 @@ defmodule Current.IntentValidator do
   end
 
   ## --- EditFile -----------------------------------------------------------
-  # More than "the path and blobs exist": the edit is checked against the
-  # file as it is now (Current.Edit), so a human is never asked to approve
-  # an edit that cannot apply. EffectApplicator checks again at apply time,
-  # because the file can change in between. Two edits to one file in a
-  # proposal are each checked against the file on disk, not against the
-  # result of the earlier one.
+  # The edit is checked against the file as the proposal has left it
+  # (see "File state across intents"), so a human is never asked to approve
+  # an edit that cannot apply, and a second edit can rely on the first.
+  # EffectApplicator checks again at apply time, because the file on disk
+  # can change in between.
 
   defp validate_intent(
          %Intent.EditFile{
@@ -120,14 +181,14 @@ defmodule Current.IntentValidator do
            new_artifact_id: new_id,
            replace_all: replace_all
          },
-         _seen_intents
+         %{files: files}
        ) do
-    with {:file, {:ok, contents}} <- {:file, File.read(path)},
+    with {:file, {:ok, contents}} <- {:file, read_current(path, files)},
          {:old, {:ok, old}} <- {:old, BlobStore.read(old_id)},
          {:new, {:ok, new}} <- {:new, BlobStore.read(new_id)},
-         {:edit, {:ok, _edited, _count}} <-
+         {:edit, {:ok, edited, _count}} <-
            {:edit, Current.Edit.replace(contents, old, new, replace_all)} do
-      nil
+      {:ok, Map.put(files, path, {:present, edited})}
     else
       {:file, _} ->
         %ValidationError{
@@ -163,8 +224,9 @@ defmodule Current.IntentValidator do
   # Deliberately no System.find_executable/1 check: what's on PATH here,
   # at validation time, may not be what's on PATH wherever/whenever this
   # gets applied. "command not found" stays an EffectApplicator failure.
+  # The overlay is left as is: what a command does to files is unknowable.
 
-  defp validate_intent(%Intent.RunCommand{id: id, cmd: cmd, args: args}, _seen_intents) do
+  defp validate_intent(%Intent.RunCommand{id: id, cmd: cmd, args: args}, %{files: files}) do
     cond do
       not (is_binary(cmd) and cmd != "") ->
         %ValidationError{
@@ -181,16 +243,16 @@ defmodule Current.IntentValidator do
         }
 
       true ->
-        nil
+        {:ok, files}
     end
   end
 
   ## --- Grep -------------------------------------------------------------
 
-  defp validate_intent(%Intent.Grep{id: id, paths: paths}, _seen_intents) do
-    case Enum.find(paths, &(not File.regular?(&1))) do
+  defp validate_intent(%Intent.Grep{id: id, paths: paths}, %{files: files}) do
+    case Enum.find(paths, &(not exists_current?(&1, files))) do
       nil ->
-        nil
+        {:ok, files}
 
       path ->
         %ValidationError{
@@ -202,8 +264,13 @@ defmodule Current.IntentValidator do
   end
 
   ## --- Glob -------------------------------------------------------------
+  # Directories are not tracked in the overlay, so base_dir is checked on
+  # disk.
 
-  defp validate_intent(%Intent.Glob{id: id, pattern: pattern, base_dir: base_dir}, _seen_intents) do
+  defp validate_intent(
+         %Intent.Glob{id: id, pattern: pattern, base_dir: base_dir},
+         %{files: files}
+       ) do
     cond do
       not is_binary(pattern) or Path.type(pattern) == :absolute ->
         %ValidationError{
@@ -220,7 +287,7 @@ defmodule Current.IntentValidator do
         }
 
       true ->
-        nil
+        {:ok, files}
     end
   end
 
@@ -232,7 +299,7 @@ defmodule Current.IntentValidator do
   # EffectApplicator's job at apply time -- this is "can this claim in
   # principle be evaluated," not "will it pass."
 
-  defp validate_intent(%Intent.Claim{id: id, evidence: nil}, _seen_intents) do
+  defp validate_intent(%Intent.Claim{id: id, evidence: nil}, _state) do
     %ValidationError{
       intent_id: id,
       reason: "claim requires evidence",
@@ -240,7 +307,7 @@ defmodule Current.IntentValidator do
     }
   end
 
-  defp validate_intent(%Intent.Claim{id: id, evidence: evidence}, seen_intents) do
+  defp validate_intent(%Intent.Claim{id: id, evidence: evidence}, %{seen: seen, files: files}) do
     source_intent_id = evidence_field(evidence, :source_intent_id)
     condition = evidence_field(evidence, :condition)
 
@@ -252,15 +319,15 @@ defmodule Current.IntentValidator do
           details: %{evidence: evidence}
         }
 
-      not Map.has_key?(seen_intents, source_intent_id) ->
+      not Map.has_key?(seen, source_intent_id) ->
         %ValidationError{
           intent_id: id,
           reason: "claim references an intent that does not precede it in the proposal",
           details: %{source_intent_id: source_intent_id}
         }
 
-      not condition_compatible?(condition, Map.fetch!(seen_intents, source_intent_id)) ->
-        source_intent = Map.fetch!(seen_intents, source_intent_id)
+      not condition_compatible?(condition, Map.fetch!(seen, source_intent_id)) ->
+        source_intent = Map.fetch!(seen, source_intent_id)
 
         %ValidationError{
           intent_id: id,
@@ -271,24 +338,27 @@ defmodule Current.IntentValidator do
         }
 
       true ->
-        nil
+        {:ok, files}
     end
   end
 
-  defp validate_intent(%Intent.Report{}, _seen_intents), do: nil
+  ## --- Report -------------------------------------------------------------
 
-  defp validate_helper([], _seen_intents, _project_dir) do
+  defp validate_intent(%Intent.Report{}, %{files: files}), do: {:ok, files}
+
+  ## --- Driver ---------------------------------------------------------------
+
+  defp validate_helper([], _state, _project_dir) do
     :ok
   end
 
-  defp validate_helper([intent | rest], seen_intents, project_dir) do
-    case validate_paths(intent, project_dir) || validate_intent(intent, seen_intents) do
-      %ValidationError{} = error ->
-        {:error, error}
-
-      nil ->
-        seen_intents = Map.put(seen_intents, intent.id, intent)
-        validate_helper(rest, seen_intents, project_dir)
+  defp validate_helper([intent | rest], state, project_dir) do
+    with nil <- validate_paths(intent, project_dir),
+         {:ok, files} <- validate_intent(intent, state) do
+      state = %{state | seen: Map.put(state.seen, intent.id, intent), files: files}
+      validate_helper(rest, state, project_dir)
+    else
+      %ValidationError{} = error -> {:error, error}
     end
   end
 
@@ -304,6 +374,4 @@ defmodule Current.IntentValidator do
   defp condition_compatible?(:match_count_equals, %Intent.Grep{}), do: true
   defp condition_compatible?(:exit_code_equals, %Intent.RunCommand{}), do: true
   defp condition_compatible?(_condition, _intent), do: false
-
-  ## --- Report -------------------------------------------------------------
 end
