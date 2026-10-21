@@ -11,9 +11,9 @@ defmodule Current.FakeLLMClient do
       Current.FakeLLMClient.set_response({:error, :econnrefused})
       # or, to simulate a client that never returns:
       Current.FakeLLMClient.set_response(:hang)
-      # or, to answer each call from the prompt it was given (a model
+      # or, to answer each call from the messages it was given (a model
       # that asks for context first and proposes once it has it):
-      Current.FakeLLMClient.set_response(fn prompt -> {:ok, "..."} end)
+      Current.FakeLLMClient.set_response(fn messages -> {:ok, "..."} end)
 
   Current.LLMProposalBuilder is expected to own its own timeout (see
   Current.ProposalBuilder's @callback doc), so :hang is here specifically
@@ -35,9 +35,9 @@ defmodule Current.FakeLLMClient do
   def list_models(_timeout_ms), do: {:ok, ["model_one_name", "model_two_name"]}
 
   # The model is ignored: the response is whatever the test set.
-  def complete(prompt, _timeout_ms, _model) do
+  def complete(messages, _timeout_ms, _model) do
     case :persistent_term.get(@key, {:error, :not_configured}) do
-      fun when is_function(fun, 1) -> respond(fun.(prompt))
+      fun when is_function(fun, 1) -> respond(fun.(messages))
       response -> respond(response)
     end
   end

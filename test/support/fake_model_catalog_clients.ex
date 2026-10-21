@@ -13,7 +13,7 @@ defmodule Current.TestOpenAIModelCatalogClient do
   def list_models(_timeout_ms), do: {:ok, ["gpt-5.6", "gpt-5.6-sol"]}
 
   @impl true
-  defdelegate complete(prompt, timeout_ms, model), to: Current.FakeLLMClient
+  defdelegate complete(messages, timeout_ms, model), to: Current.FakeLLMClient
 end
 
 defmodule Current.TestAnthropicModelCatalogClient do
@@ -27,5 +27,5 @@ defmodule Current.TestAnthropicModelCatalogClient do
   def list_models(_timeout_ms), do: {:ok, ["claude-opus-5-5", "claude-sonnet-4-5"]}
 
   @impl true
-  defdelegate complete(prompt, timeout_ms, model), to: Current.FakeLLMClient
+  defdelegate complete(messages, timeout_ms, model), to: Current.FakeLLMClient
 end

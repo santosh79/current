@@ -10,9 +10,9 @@ defmodule Current.LLMProposalBuilder do
   sizes, no contents. Each reply is either the proposal, which ends the
   conversation, or a request for context: observations, each wrapping a
   `read_file`, `glob` or `grep` intent, which Current.Observer runs
-  under the runtime's file-access rules. The model is then asked again
-  with everything it has been shown so far. Nothing is kept between
-  calls but that list, so every prompt is rebuilt from the same inputs.
+  under the runtime's file-access rules. The conversation is an
+  append-only message list, so each subsequent call includes the model's
+  earlier replies as well as the observation results or repair guidance.
 
   While it works, each round is also reported to Current.ActivityHub --
   what the model asked for, then how each request was settled -- so a
@@ -54,7 +54,6 @@ defmodule Current.LLMProposalBuilder do
   alias Current.Error.ProposalProductionError
 
   @max_repairs 2
-  # state gains: repairs_left: @max_repairs, repair: nil
 
   # How long one task's proposal may take in total, however many times
   # the model is called. Hard-coded for now; the application env key is
@@ -89,11 +88,10 @@ defmodule Current.LLMProposalBuilder do
           client: client,
           call_timeout_ms: timeout_ms,
           project: project,
+          messages: initial_messages(req, project),
           observations: [],
-          shown: [],
           rounds_left: @max_observe_rounds,
           repairs_left: @max_repairs,
-          repair: nil,
           budget: @context_budget_bytes
         })
       end
@@ -142,11 +140,14 @@ defmodule Current.LLMProposalBuilder do
   # One turn: ask, then either finish with the proposal or run what the
   # model asked to see and ask again.
   defp converse(state) do
-    prompt = prompt_for(state)
-
-    case call_with_timeout(state.client, prompt, state.call_timeout_ms, state.request.model) do
+    case call_with_timeout(
+           state.client,
+           state.messages,
+           state.call_timeout_ms,
+           state.request.model
+         ) do
       {:ok, raw} ->
-        handle_reply(raw, state)
+        handle_reply(raw, %{state | messages: append_message(state.messages, :assistant, raw)})
 
       {:error, :timeout} ->
         {:error,
@@ -203,15 +204,23 @@ defmodule Current.LLMProposalBuilder do
         converse(%{
           state
           | observations: state.observations ++ observations,
-            shown: state.shown ++ texts,
+            messages:
+              append_message(
+                state.messages,
+                :user,
+                observation_message(texts, state.rounds_left - 1)
+              ),
             rounds_left: state.rounds_left - 1,
-            repair: nil,
             repairs_left: @max_repairs,
             budget: budget
         })
 
       {:error, reason} when state.repairs_left > 0 ->
-        converse(%{state | repairs_left: state.repairs_left - 1, repair: reason})
+        converse(%{
+          state
+          | messages: append_message(state.messages, :user, repair_message(reason)),
+            repairs_left: state.repairs_left - 1
+        })
 
       {:error, reason} ->
         {:error,
@@ -254,8 +263,8 @@ defmodule Current.LLMProposalBuilder do
   # I/O) and used here as a backstop against clients that ignore it.
   # Whichever fires first, the result is {:error, :timeout}, so the
   # outcome is stage: :timeout either way.
-  defp call_with_timeout(client, prompt, timeout_ms, model) do
-    task = Task.async(fn -> safe_complete(client, prompt, timeout_ms, model) end)
+  defp call_with_timeout(client, messages, timeout_ms, model) do
+    task = Task.async(fn -> safe_complete(client, messages, timeout_ms, model) end)
 
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> result
@@ -268,10 +277,10 @@ defmodule Current.LLMProposalBuilder do
   # keeps a misbehaving client from ever propagating as an exception at
   # all, rather than relying on a caller-side rescue.
   #
-  defp safe_complete(client, prompt, timeout_ms, model) do
+  defp safe_complete(client, messages, timeout_ms, model) do
     case split(model) do
       {:ok, _provider, model_id} ->
-        client.complete(prompt, timeout_ms, model_id)
+        client.complete(messages, timeout_ms, model_id)
 
       :error ->
         {:error, {:invalid_model, model}}
@@ -280,57 +289,81 @@ defmodule Current.LLMProposalBuilder do
     kind, reason -> {:error, Exception.format_banner(kind, reason)}
   end
 
-  ## --- Prompt -----------------------------------------------------------
+  ## --- Messages ---------------------------------------------------------
 
-  # Everything that is the same for every turn of every task on this
-  # project comes first, and the observations are only ever appended to,
-  # so a provider's prompt cache can reuse the longest possible prefix.
-  defp prompt_for(%{request: %Request{input: input, context: context}} = state) do
+  # The protocol is stable system context. The task-specific layout and
+  # request are the first user turn; every later turn is appended so the
+  # provider can reuse the byte-identical conversation prefix.
+  defp initial_messages(%Request{input: input, context: context}, project) do
+    system =
+      """
+      You are Current, an agent that proposes structured changes to a codebase.
+
+      On every turn you reply with exactly ONE JSON object -- no prose, no
+      markdown fences. There are two kinds of reply:
+
+      1. CONTEXT REQUEST -- {"observe": [...]}. Use it when you need to look
+         at the project before you can propose the complete work. The runtime
+         shows you what you asked for and asks you again.
+
+      2. PROPOSAL -- {"intents": [...], ...}. Use it only when you have seen
+         what you need. It ends the exchange.
+
+      Never mix the two in one reply. Do not put read_file, glob or grep in a
+      proposal to find something out that you need in order to write that
+      proposal: that is what a context request is for.
+
+        - read_file / glob / grep inside "observe" mean: "show me this, so I
+          can decide what to propose".
+        - read_file / glob / grep inside a proposal mean: "reading this is
+          itself part of the proposed work" -- for example the evidence a
+          claim cites.
+
+      Both replies are described by the schema below (definitions.context_request
+      and definitions.proposal).
+
+      #{Current.ProposalWireSchema.raw()}
+
+      #{edit_file_rules()}
+
+      #{observe_rules()}
+      """
+
+    user =
+      """
+      Project layout (paths are relative to the project root; contents are not shown):
+
+      #{render_layout(project)}
+
+      Request: #{inspect(input)}
+      Context: #{inspect(context)}
+
+      You have not been shown any file contents yet.
+
+      #{render_turn(@max_observe_rounds)}
+      """
+
+    [%{role: :system, content: system}, %{role: :user, content: user}]
+  end
+
+  defp append_message(messages, role, content) do
+    messages ++ [%{role: role, content: content}]
+  end
+
+  defp observation_message(texts, rounds_left) do
     """
-    You are Current, an agent that proposes structured changes to a codebase.
+    What you have been shown for your latest context request, in the order you asked:
 
-    On every turn you reply with exactly ONE JSON object -- no prose, no
-    markdown fences. There are two kinds of reply:
+    #{Enum.join(texts, "\n\n")}
 
-    1. CONTEXT REQUEST -- {"observe": [...]}. Use it when you need to look
-       at the project before you can propose the complete work. The runtime
-       shows you what you asked for and asks you again.
-
-    2. PROPOSAL -- {"intents": [...], ...}. Use it only when you have seen
-       what you need. It ends the exchange.
-
-    Never mix the two in one reply. Do not put read_file, glob or grep in a
-    proposal to find something out that you need in order to write that
-    proposal: that is what a context request is for.
-
-      - read_file / glob / grep inside "observe" mean: "show me this, so I
-        can decide what to propose".
-      - read_file / glob / grep inside a proposal mean: "reading this is
-        itself part of the proposed work" -- for example the evidence a
-        claim cites.
-
-    Both replies are described by the schema below (definitions.context_request
-    and definitions.proposal).
-
-    #{Current.ProposalWireSchema.raw()}
-
-    #{edit_file_rules()}
-
-    #{observe_rules()}
-
-    Project layout (paths are relative to the project root; contents are not shown):
-
-    #{render_layout(state.project)}
-
-    Request: #{inspect(input)}
-    Context: #{inspect(context)}
-
-    #{render_shown(state.shown)}
-
-    #{render_repair(state.repair)}
-
-    #{render_turn(state.rounds_left)}
+    #{render_turn(rounds_left)}
     """
+  end
+
+  defp repair_message(reason) do
+    "Your previous reply could not be used (#{reason}). Reply again with exactly " <>
+      "ONE bare JSON object: either {\"observe\": [...]} or {\"intents\": [...]}. " <>
+      "No tags, no markdown fences, no prose."
   end
 
   defp observe_rules do
@@ -377,12 +410,6 @@ defmodule Current.LLMProposalBuilder do
         else: []
 
     Enum.join(listed ++ more, "\n")
-  end
-
-  defp render_shown([]), do: "You have not been shown any file contents yet."
-
-  defp render_shown(texts) do
-    "What you have been shown so far, in the order you asked:\n\n" <> Enum.join(texts, "\n\n")
   end
 
   defp render_turn(0) do
@@ -477,14 +504,6 @@ defmodule Current.LLMProposalBuilder do
      "old_string": #{JSON.encode!(@example_old)},
      "new_string": #{JSON.encode!(@example_new)}}
     """
-  end
-
-  defp render_repair(nil), do: ""
-
-  defp render_repair(reason) do
-    "Your previous reply could not be used (#{reason}). Reply again with exactly " <>
-      "ONE bare JSON object: either {\"observe\": [...]} or {\"intents\": [...]}. " <>
-      "No tags, no markdown fences, no prose."
   end
 
   def split(model_name) when is_binary(model_name) do

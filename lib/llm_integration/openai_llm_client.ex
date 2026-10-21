@@ -1,6 +1,8 @@
 defmodule Current.LLMClient.OpenAI do
   @behaviour Current.LLMClient
 
+  alias Current.LLMClient.Messages
+
   @connect_timeout_ms 10_000
   @models_endpoint "https://api.openai.com/v1/models"
   @endpoint "https://api.openai.com/v1/responses"
@@ -17,10 +19,10 @@ defmodule Current.LLMClient.OpenAI do
   end
 
   @impl true
-  def complete(prompt, timeout_ms, model)
-      when is_binary(prompt) and is_integer(timeout_ms) and timeout_ms > 0 and is_binary(model) do
+  def complete(messages, timeout_ms, model)
+      when is_list(messages) and is_integer(timeout_ms) and timeout_ms > 0 and is_binary(model) do
     with {:ok, api_key} <- api_key(),
-         {:ok, body} <- encode_request(prompt, model),
+         {:ok, body} <- encode_request(messages, model),
          {:ok, response} <- request(api_key, body, timeout_ms) do
       extract_text(response)
     end
@@ -108,11 +110,15 @@ defmodule Current.LLMClient.OpenAI do
     end
   end
 
-  defp encode_request(prompt, model) do
-    body = %{
-      "model" => model,
-      "input" => prompt
-    }
+  defp encode_request(messages, model) do
+    {instructions, input} = Messages.split_system(messages)
+
+    body =
+      %{
+        "model" => model,
+        "input" => Messages.encode(input)
+      }
+      |> then(&if instructions, do: Map.put(&1, "instructions", instructions), else: &1)
 
     {:ok, JSON.encode!(body)}
   rescue

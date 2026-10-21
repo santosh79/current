@@ -1,6 +1,8 @@
 defmodule Current.LLMClient.Anthropic do
   @behaviour Current.LLMClient
 
+  alias Current.LLMClient.Messages
+
   @endpoint "https://api.anthropic.com/v1/messages"
   @models_endpoint "https://api.anthropic.com/v1/models"
 
@@ -22,10 +24,10 @@ defmodule Current.LLMClient.Anthropic do
   end
 
   @impl true
-  def complete(prompt, timeout_ms, model)
-      when is_binary(prompt) and is_integer(timeout_ms) and timeout_ms > 0 and is_binary(model) do
+  def complete(messages, timeout_ms, model)
+      when is_list(messages) and is_integer(timeout_ms) and timeout_ms > 0 and is_binary(model) do
     with {:ok, api_key} <- api_key(),
-         {:ok, body} <- encode_request(prompt, model),
+         {:ok, body} <- encode_request(messages, model),
          {:ok, response} <- request(api_key, body, timeout_ms) do
       extract_text(response)
     end
@@ -123,13 +125,17 @@ defmodule Current.LLMClient.Anthropic do
     end
   end
 
-  defp encode_request(prompt, model) do
-    body = %{
-      "model" => model,
-      "max_tokens" => @max_tokens,
-      "cache_control" => %{"type" => "ephemeral"},
-      "messages" => [%{"role" => "user", "content" => prompt}]
-    }
+  defp encode_request(messages, model) do
+    {system, chat} = Messages.split_system(messages)
+
+    body =
+      %{
+        "model" => model,
+        "max_tokens" => @max_tokens,
+        "cache_control" => %{"type" => "ephemeral"},
+        "messages" => Messages.encode(chat)
+      }
+      |> then(&if system, do: Map.put(&1, "system", system), else: &1)
 
     {:ok, JSON.encode!(body)}
   rescue

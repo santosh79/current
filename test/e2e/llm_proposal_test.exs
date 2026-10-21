@@ -117,23 +117,29 @@ defmodule Current.E2E.LLMProposalTest do
     end
 
     # The fake model answers each call with the next reply in `replies`
-    # (repeating the last one), and every prompt it is given is sent to
-    # the test as {:prompt, n, prompt}.
+    # (repeating the last one), and every transcript it is given is sent
+    # to the test as {:messages, n, messages}.
     defp script(replies) do
       test_pid = self()
       calls = :counters.new(1, [])
 
-      FakeLLMClient.set_response(fn prompt ->
+      FakeLLMClient.set_response(fn messages ->
         :counters.add(calls, 1, 1)
         n = :counters.get(calls, 1)
-        send(test_pid, {:prompt, n, prompt})
+        send(test_pid, {:messages, n, messages})
         {:ok, Enum.at(replies, n - 1, List.last(replies))}
       end)
     end
 
-    defp prompt!(n) do
-      assert_receive {:prompt, ^n, prompt}, 5_000
-      prompt
+    defp messages!(n) do
+      assert_receive {:messages, ^n, messages}, 5_000
+      messages
+    end
+
+    defp transcript!(n) do
+      n
+      |> messages!()
+      |> Enum.map_join("\n", & &1.content)
     end
 
     test "is given the layout, then what it asked for, and its proposal ends the workflow",
@@ -143,12 +149,16 @@ defmodule Current.E2E.LLMProposalTest do
       task_id = submit!([mode: :plan], project)
       workflow_id = await_workflow_created(task_id)
 
-      first = prompt!(1)
+      first = transcript!(1)
       assert first =~ "lib/signup.ex (24 bytes)"
       refute first =~ "defmodule Signup"
       refute first =~ ".env"
 
-      second = prompt!(2)
+      second_messages = messages!(2)
+      assert Enum.map(second_messages, & &1.role) == [:system, :user, :assistant, :user]
+      assert Enum.at(second_messages, 2).content == @observe_signup
+
+      second = Enum.map_join(second_messages, "\n", & &1.content)
       assert second =~ "glob lib/*.ex in .\n1 match\nlib/signup.ex"
       assert second =~ ~s(<file path="lib/signup.ex">\ndefmodule Signup do\nend\n</file>)
 
@@ -158,7 +168,7 @@ defmodule Current.E2E.LLMProposalTest do
 
       await(:workflow_completed, workflow_id)
       assert {:ok, :planned} = Current.get_status(task_id)
-      refute_received {:prompt, 3, _}
+      refute_received {:messages, 3, _}
     end
 
     test "is told, before anything else, that it replies with one of two shapes",
@@ -166,17 +176,18 @@ defmodule Current.E2E.LLMProposalTest do
       script([@proposal])
 
       submit!([mode: :plan], project) |> await_workflow_created()
-      prompt = prompt!(1)
+      [%{role: :system, content: system}, %{role: :user, content: user}] = messages!(1)
 
       # The protocol comes first: both replies, and which is for what.
-      assert prompt =~ "exactly ONE JSON object"
-      assert prompt =~ "CONTEXT REQUEST"
-      assert prompt =~ "PROPOSAL"
-      assert prompt =~ "Do not put read_file, glob or grep in a"
+      assert system =~ "exactly ONE JSON object"
+      assert system =~ "CONTEXT REQUEST"
+      assert system =~ "PROPOSAL"
+      assert system =~ "Do not put read_file, glob or grep in a"
 
       # The schema it is given starts with that choice too.
-      assert prompt =~ ~s("oneOf")
-      assert prompt =~ "definitions.context_request"
+      assert system =~ ~s("oneOf")
+      assert system =~ "definitions.context_request"
+      assert user =~ "lib/signup.ex (24 bytes)"
     end
 
     test "its proposal carries what it looked at and why, leading to what it was shown",
@@ -261,7 +272,7 @@ defmodule Current.E2E.LLMProposalTest do
 
       workflow_id = submit!([mode: :plan], project) |> await_workflow_created()
 
-      second = prompt!(2)
+      second = transcript!(2)
       assert second =~ "read_file .env\nerror: .env is not available"
       assert second =~ "read_file ../outside.txt\nerror: path is outside the project directory"
       assert second =~ "glob .env* in .\n0 matches"
@@ -282,9 +293,9 @@ defmodule Current.E2E.LLMProposalTest do
       assert error.raw_output_blob_id != nil
 
       # Eight requests were run; the ninth prompt demanded a proposal.
-      assert prompt!(8) =~ "You may make 1 more context request"
-      assert prompt!(9) =~ "You have no context requests left"
-      refute_received {:prompt, 10, _}
+      assert List.last(messages!(8)).content =~ "You may make 1 more context request"
+      assert List.last(messages!(9)).content =~ "You have no context requests left"
+      refute_received {:messages, 10, _}
 
       await(:workflow_failed, workflow_id)
       assert {:ok, :failed} = Current.get_status(task_id)
@@ -298,7 +309,7 @@ defmodule Current.E2E.LLMProposalTest do
       # on the whole task can stop this.
       calls = :counters.new(1, [])
 
-      FakeLLMClient.set_response(fn _prompt ->
+      FakeLLMClient.set_response(fn _messages ->
         :counters.add(calls, 1, 1)
         Process.sleep(100)
         {:ok, @observe_signup}
