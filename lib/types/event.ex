@@ -10,6 +10,7 @@ defmodule Current.Event do
           | Current.Event.ProposalValidated.t()
           | Current.Event.ProposalValidationFailed.t()
           | Current.Event.ProposalRejected.t()
+          | Current.Event.ProposalRevisionRequested.t()
           | Current.Event.EffectApplicationStarted.t()
           | Current.Event.EffectApplied.t()
           | Current.Event.EffectFailed.t()
@@ -30,6 +31,7 @@ defmodule Current.Event do
     Current.Event.ProposalValidationFailed,
     Current.Event.ProposalApproved,
     Current.Event.ProposalRejected,
+    Current.Event.ProposalRevisionRequested,
     Current.Event.EffectApplicationStarted,
     Current.Event.EffectApplied,
     Current.Event.EffectFailed,

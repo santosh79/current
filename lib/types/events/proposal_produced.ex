@@ -1,5 +1,5 @@
 defmodule Current.Event.ProposalProduced do
-  use Current.Event.Versioned, version: 3
+  use Current.Event.Versioned, version: 4
 
   @enforce_keys [:id, :workflow_id, :timestamp]
   defstruct [
@@ -25,4 +25,7 @@ defmodule Current.Event.ProposalProduced do
   # v3: Current.Proposal gained :observations. The proposal inside a v2
   # event was written without it.
   def upcast(fields, 2), do: Map.update(fields, :proposal, nil, &Current.Proposal.upcast/1)
+
+  # v4: Current.Proposal gained :revision and :revises.
+  def upcast(fields, 3), do: Map.update(fields, :proposal, nil, &Current.Proposal.upcast/1)
 end

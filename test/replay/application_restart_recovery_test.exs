@@ -809,7 +809,7 @@ defmodule Current.Replay.ApplicationRestartRecoveryTest do
 
     assert {:ok, ^pre_versioning} = Log.get(event.id)
 
-    assert [%Event.WorkflowCreated{version: 1} = rebuilt] =
+    assert [%Event.WorkflowCreated{version: 2} = rebuilt] =
              EventStore.list_by_workflow_id(workflow_id)
 
     assert rebuilt == event

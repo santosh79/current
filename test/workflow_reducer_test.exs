@@ -160,7 +160,7 @@ defmodule Current.WorkflowReducerTest do
       assert w.status == :created
       assert w.created_at == ts(fixture, 0)
       assert w.updated_at == ts(fixture, 0)
-      assert w.proposal == nil
+      assert Workflow.current_proposal(w) == nil
       assert w.result == nil
       assert w.events == []
       assert w.started_at == nil
@@ -219,7 +219,7 @@ defmodule Current.WorkflowReducerTest do
       w = validating(fixture)
 
       assert w.status == :validating
-      assert w.proposal == proposal(fixture)
+      assert Workflow.current_proposal(w) == proposal(fixture)
       assert w.updated_at == ts(fixture, 2)
     end
 
@@ -255,7 +255,7 @@ defmodule Current.WorkflowReducerTest do
       w = waiting_for_approval(fixture)
 
       assert w.status == :waiting_for_approval
-      assert w.proposal == proposal(fixture)
+      assert Workflow.current_proposal(w) == proposal(fixture)
       assert w.updated_at == ts(fixture, 3)
     end
 
@@ -556,7 +556,7 @@ defmodule Current.WorkflowReducerTest do
       assert w.status == :completed
       assert w.id == fixture.workflow_id
       assert w.task_id == fixture.task_id
-      assert w.proposal == proposal(fixture)
+      assert Workflow.current_proposal(w) == proposal(fixture)
       assert w.result == result
       assert w.created_at == ts(fixture, 0)
       assert w.started_at == ts(fixture, 1)
@@ -598,7 +598,7 @@ defmodule Current.WorkflowReducerTest do
 
       assert w.status == :planned
       assert w.mode == :plan
-      assert w.proposal == proposal(fixture)
+      assert Workflow.current_proposal(w) == proposal(fixture)
       assert w.result == nil
       assert w.completed_at == ts(fixture, 4)
     end
@@ -610,6 +610,7 @@ defmodule Current.WorkflowReducerTest do
     :validating,
     :waiting_for_approval,
     :validation_failed,
+    :revision_requested,
     :approved,
     :applying,
     :assembling_result,
@@ -628,12 +629,13 @@ defmodule Current.WorkflowReducerTest do
       task_id: fixture.task_id,
       status: status,
       mode: mode,
-      created_at: ts(fixture, 0)
+      created_at: ts(fixture, 0),
+      proposals: if(status == :waiting_for_approval, do: [proposal(fixture)], else: [])
     }
   end
 
   @transitions [
-    {Event.ProposalProductionStarted, [:created]},
+    {Event.ProposalProductionStarted, [:created, :revision_requested]},
     {Event.ModeInvalid, [:created]},
     {Event.ProposalProduced, [:planning]},
     {Event.ProposalProductionFailed, [:planning]},
@@ -641,6 +643,7 @@ defmodule Current.WorkflowReducerTest do
     {Event.ProposalValidationFailed, [:validating]},
     {Event.ProposalApproved, [:waiting_for_approval]},
     {Event.ProposalRejected, [:waiting_for_approval]},
+    {Event.ProposalRevisionRequested, [:waiting_for_approval]},
     {Event.EffectApplicationStarted, [:approved]},
     {Event.EffectApplied, [:applying]},
     {Event.EffectApplicationComplete, [:applying]},
@@ -652,6 +655,7 @@ defmodule Current.WorkflowReducerTest do
     {Event.WorkflowAbandoned,
      [
        :created,
+       :revision_requested,
        :planning,
        :validating,
        :waiting_for_approval,
@@ -688,10 +692,13 @@ defmodule Current.WorkflowReducerTest do
   end
 
   Enum.each(@transitions, fn {mod, allowed} ->
-    test "#{inspect(mod)} is legal from exactly #{inspect(allowed)} at mode: :apply", %{
+    test "#{inspect(mod)} has correct transitions in apply mode", %{
       fixture: fixture
     } do
-      event = struct(unquote(mod), workflow_id: fixture.workflow_id)
+      event =
+        struct(unquote(mod), workflow_id: fixture.workflow_id)
+        |> prepare(fixture)
+
       allowed = unquote(allowed)
 
       Enum.each(allowed, fn status ->
@@ -711,10 +718,14 @@ defmodule Current.WorkflowReducerTest do
     test "every rule above except the review events and WorkflowCompleted-from-:waiting_for_approval is mode-independent",
          %{fixture: fixture} do
       @transitions
-      |> Enum.reject(fn {mod, _} -> mod in [Event.ProposalApproved, Event.ProposalRejected] end)
+      |> Enum.reject(fn {mod, _} ->
+        mod in [Event.ProposalApproved, Event.ProposalRejected, Event.ProposalRevisionRequested]
+      end)
       |> Enum.each(fn {mod, allowed} ->
         Enum.each(allowed, fn status ->
-          event = struct(mod, workflow_id: fixture.workflow_id)
+          event =
+            struct(mod, workflow_id: fixture.workflow_id)
+            |> prepare(fixture)
 
           apply_ok? =
             match?(
@@ -806,4 +817,17 @@ defmodule Current.WorkflowReducerTest do
              "Current.Workflow.statuses/0 and this test's @all_statuses have drifted apart"
     end
   end
+
+  defp prepare(%Event.ProposalProduced{} = event, fixture),
+    do: %{event | proposal: proposal(fixture)}
+
+  defp prepare(%{__struct__: mod} = event, fixture)
+       when mod in [
+              Event.ProposalApproved,
+              Event.ProposalRejected,
+              Event.ProposalRevisionRequested
+            ],
+       do: %{event | proposal_id: fixture.proposal_id}
+
+  defp prepare(event, _fixture), do: event
 end

@@ -27,7 +27,17 @@ defmodule Current.CLI.ReviewMarkdown do
       "- **Workflow:** `#{workflow["id"]}`",
       if(root, do: "- **Project:** `#{root}`"),
       "- **Status:** #{workflow["status"]} (#{workflow["mode"]} mode)",
+      if((proposal["revision"] || 0) > 0,
+        do:
+          "- **Revision:** #{proposal["revision"]} (replaces `#{Render.short(proposal["revises"])}`)"
+      ),
+      if(superseded?(review, proposal),
+        do: "- **Superseded by:** `#{Render.short(review["current_proposal_id"])}`"
+      ),
       "- **Intents:** #{length(intents)}",
+      if(present?(review["feedback"]),
+        do: ["", "## Feedback this revision answers", "", quote_block(review["feedback"])]
+      ),
       if(present?(proposal["justification"]),
         do: ["", "## Justification", "", proposal["justification"]]
       ),
@@ -46,7 +56,7 @@ defmodule Current.CLI.ReviewMarkdown do
       if(review["raw_output"],
         do: ["", "## Raw model output", "", artifact(review["raw_output"], "")]
       ),
-      next_step(workflow, proposal)
+      next_step(review, workflow, proposal)
     ]
     |> List.flatten()
     |> Enum.reject(&is_nil/1)
@@ -59,8 +69,9 @@ defmodule Current.CLI.ReviewMarkdown do
     ["", "### #{intent["index"]}. #{heading(intent, root)}", "", body(intent, root)]
   end
 
-  defp heading(%{"type" => type} = intent, _root) when type in ["EditFile", "WriteFile", "ReadFile", "DeleteFile"],
-    do: "#{type} #{code(path(intent))}"
+  defp heading(%{"type" => type} = intent, _root)
+       when type in ["EditFile", "WriteFile", "ReadFile", "DeleteFile"],
+       do: "#{type} #{code(path(intent))}"
 
   defp heading(%{"type" => type}, _root), do: type
 
@@ -185,20 +196,51 @@ defmodule Current.CLI.ReviewMarkdown do
     ]
   end
 
-  defp next_step(%{"status" => "waiting_for_approval", "mode" => "apply"}, proposal) do
+  defp superseded?(review, proposal),
+    do: review["current_proposal_id"] not in [nil, proposal["id"]]
+
+  # A decision on an older proposal is refused, so none is offered.
+  defp next_step(review, workflow, proposal) do
+    if superseded?(review, proposal),
+      do: superseded_step(review),
+      else: follow_up(review, workflow, proposal)
+  end
+
+  defp superseded_step(review) do
+    [
+      "",
+      "---",
+      "",
+      "This proposal was superseded. Review the latest instead:",
+      "",
+      code("current review #{Render.short(review["current_proposal_id"])}")
+    ]
+  end
+
+  defp follow_up(review, %{"status" => "waiting_for_approval", "mode" => "apply"}, proposal) do
+    id = Render.short(proposal["id"])
+
     [
       "",
       "---",
       "",
       "Waiting for approval. Nothing has been applied.",
       "",
-      "Approve with: #{code("current approve #{Render.short(proposal["id"])} -m \"<message>\"")}",
+      "Approve with: #{code("current approve #{id} -m \"<message>\"")}",
+      case review["revisions_remaining"] do
+        left when is_integer(left) and left > 0 ->
+          "Or ask for changes: #{code("current revise #{id} -m \"<feedback>\"")} " <>
+            "(#{left} #{if left == 1, do: "revision", else: "revisions"} left)"
+
+        _ ->
+          "No revisions left: approve or reject."
+      end,
       "",
       "Approving doesn't apply it; `current apply` does that afterwards."
     ]
   end
 
-  defp next_step(%{"status" => "approved"}, proposal) do
+  defp follow_up(_review, %{"status" => "approved"}, proposal) do
     [
       "",
       "---",
@@ -209,7 +251,7 @@ defmodule Current.CLI.ReviewMarkdown do
     ]
   end
 
-  defp next_step(_workflow, _proposal), do: []
+  defp follow_up(_review, _workflow, _proposal), do: []
 
   ## Markdown helpers
 

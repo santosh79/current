@@ -11,6 +11,7 @@ defmodule Current.HTTP.Router do
       GET  /v1/proposals/:id/review        review     (?max_lines=&raw=true)
       POST /v1/proposals/:id/approve       approve
       POST /v1/proposals/:id/reject        reject
+      POST /v1/proposals/:id/revise        request_revision
       POST /v1/proposals/:id/apply         apply_proposal
       GET  /v1/artifacts/:id               artifact   (raw bytes)
       GET  /v1/models                      models
@@ -44,6 +45,16 @@ defmodule Current.HTTP.Router do
       {"message": "looks right", "reviewed_by": "santosh"}   // both optional
 
   Recorded verbatim on the event, with `"via": "http"`.
+
+  ### POST /v1/proposals/:id/revise
+
+      {"feedback": "keep the validation, drop the logging",   // required
+       "reviewed_by": "santosh"}                              // optional
+
+  Sends the workflow back for a new proposal. `:id` must be the workflow's
+  most recent proposal, else `409 stale_proposal` (with
+  `details.current_proposal_id`); once the workflow's revisions are used
+  up, `409 revision_limit_reached`. Answers `200 {"workflow_id": "..."}`.
   """
 
   use Plug.Router
@@ -152,6 +163,22 @@ defmodule Current.HTTP.Router do
 
   post "/v1/proposals/:id/reject" do
     decide(conn, id, &API.reject/2)
+  end
+
+  post "/v1/proposals/:id/revise" do
+    params = conn.body_params
+
+    with {:ok, feedback} <- required_string(params, "feedback"),
+         {:ok, reviewed_by} <- optional_string(params, "reviewed_by") do
+      metadata = %{reviewed_by: reviewed_by, via: :http}
+
+      case API.request_revision(id, feedback, metadata) do
+        {:ok, workflow_id} -> json(conn, 200, %{workflow_id: workflow_id})
+        {:error, reason} -> respond_error(conn, reason)
+      end
+    else
+      {:error, message} -> error(conn, 400, "bad_request", message)
+    end
   end
 
   post "/v1/proposals/:id/apply" do
@@ -322,6 +349,18 @@ defmodule Current.HTTP.Router do
 
   defp describe_error({:not_apply_mode, mode}),
     do: {409, "not_apply_mode", "the proposal is from a #{mode}-mode workflow", %{mode: mode}}
+
+  # The proposal named is not the workflow's latest. Only the reducer
+  # decides this; the router just translates its error.
+  defp describe_error({:stale_proposal, given_id, current_id}) do
+    {409, "stale_proposal", "#{given_id} was superseded by #{current_id}",
+     %{current_proposal_id: current_id}}
+  end
+
+  defp describe_error({:revision_limit_reached, max}) do
+    {409, "revision_limit_reached", "the workflow has used all #{max} of its revisions",
+     %{max_revisions: max}}
+  end
 
   defp describe_error({:invalid_transition, status, _event}) do
     {409, "invalid_transition", "the workflow is #{status}, which doesn't allow that",

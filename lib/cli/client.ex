@@ -126,6 +126,21 @@ defmodule Current.CLI.Client do
   def approve(client, id, metadata), do: decide(client, id, "approve", metadata)
   def reject(client, id, metadata), do: decide(client, id, "reject", metadata)
 
+  @doc """
+  Sends a proposal back for a new one. `feedback` is what to change;
+  `metadata` has `:reviewed_by`. Answers the workflow id.
+  """
+  @spec revise(t(), String.t(), map()) :: {:ok, String.t()} | {:error, error()}
+  def revise(client, id, %{feedback: feedback} = metadata) do
+    body = %{feedback: feedback, reviewed_by: metadata[:reviewed_by]}
+    body = Map.reject(body, fn {_key, value} -> is_nil(value) end)
+
+    with {:ok, %{"workflow_id" => workflow_id}} <-
+           json(client, :post, "/v1/proposals/" <> segment(id) <> "/revise", body) do
+      {:ok, workflow_id}
+    end
+  end
+
   @spec apply_proposal(t(), String.t()) :: {:ok, String.t()} | {:error, error()}
   def apply_proposal(client, id) do
     with {:ok, %{"workflow_id" => workflow_id}} <-

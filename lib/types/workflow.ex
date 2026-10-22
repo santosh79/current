@@ -4,7 +4,6 @@ defmodule Current.Workflow do
     :id,
     :task_id,
     :status,
-    :proposal,
     :result,
     :events,
     :mode,
@@ -12,7 +11,9 @@ defmodule Current.Workflow do
     :created_at,
     :completed_at,
     :updated_at,
-    :error
+    :error,
+    proposals: [],
+    max_revisions: 10
   ]
 
   @type status ::
@@ -21,6 +22,7 @@ defmodule Current.Workflow do
           | :validating
           | :waiting_for_approval
           | :validation_failed
+          | :revision_requested
           | :approved
           | :applying
           | :assembling_result
@@ -38,6 +40,7 @@ defmodule Current.Workflow do
     :validating,
     :waiting_for_approval,
     :validation_failed,
+    :revision_requested,
     :approved,
     :applying,
     :assembling_result,
@@ -57,7 +60,8 @@ defmodule Current.Workflow do
           id: Current.Id.t(),
           task_id: Current.Id.t(),
           status: status(),
-          proposal: Current.Proposal.t() | nil,
+          proposals: [Current.Proposal.t()],
+          max_revisions: non_neg_integer(),
           result: Current.WorkflowResult.t() | nil,
           events: [Current.Event.t()],
           mode: Current.Mode.t(),
@@ -82,6 +86,17 @@ defmodule Current.Workflow do
       Map.put(Current.Task.request_details(workflow.task_id), :workflow, workflow)
     end)
   end
+
+  @doc """
+  The most recent proposal, or `nil` before the first one is produced.
+  Every review decision must name this one.
+  """
+  @spec current_proposal(t()) :: Current.Proposal.t() | nil
+  def current_proposal(%__MODULE__{proposals: proposals}), do: List.last(proposals)
+
+  @doc "How many revisions have been requested and answered so far."
+  @spec revisions_used(t()) :: non_neg_integer()
+  def revisions_used(%__MODULE__{proposals: proposals}), do: max(length(proposals) - 1, 0)
 
   @spec terminal?(t()) :: boolean()
   def terminal?(%__MODULE__{status: status}), do: status in @terminal_statuses

@@ -31,11 +31,13 @@ defmodule Current.CLI.Render do
   def outcome(%{"entries" => entries, "workflow_id" => workflow_id} = view) do
     events = Enum.map(entries, & &1["event"])
     root = project_dir(view)
-    produced = find(events, "ProposalProduced")
+    # With revisions a workflow holds several proposals; what is shown is
+    # the latest.
+    produced = find_last(events, "ProposalProduced")
 
     [
       if(root, do: ["", "Project  #{root}"]),
-      if(produced, do: proposal_summary(produced, root)),
+      if(produced, do: proposal_summary(produced, root, events)),
       "",
       steps(events, produced, root),
       claim_checks(entries, root),
@@ -47,7 +49,8 @@ defmodule Current.CLI.Render do
           "",
           "Waiting for approval. Nothing has been applied.",
           "  current review #{short(produced["proposal"]["id"])}",
-          "  current approve #{short(produced["proposal"]["id"])} [-m <message>]"
+          "  current approve #{short(produced["proposal"]["id"])} [-m <message>]",
+          revise_hint(produced["proposal"]["id"], events)
         ]
       ),
       "",
@@ -61,11 +64,53 @@ defmodule Current.CLI.Render do
     |> lines()
   end
 
-  defp proposal_summary(%{"proposal" => proposal} = produced, root) do
+  # How many revisions the workflow has left, from its own log: the bound
+  # is recorded on WorkflowCreated, the uses on ProposalRevisionRequested.
+  defp revisions_left(events) do
+    case find(events, "WorkflowCreated") do
+      %{"max_revisions" => max} when is_integer(max) ->
+        max - Enum.count(events, &(&1["type"] == "ProposalRevisionRequested"))
+
+      _ ->
+        nil
+    end
+  end
+
+  defp revise_hint(proposal_id, events) do
+    case revisions_left(events) do
+      left when is_integer(left) and left <= 0 ->
+        "  (no revisions left: approve or reject)"
+
+      left ->
+        "  current revise #{short(proposal_id)} -m <feedback>" <>
+          if(left, do: "   (#{plural(left, "revision")} left)", else: "")
+    end
+  end
+
+  # The reviewer feedback that this proposal answers, if it is a revision.
+  defp feedback_for(%{"revises" => revises}, events) when is_binary(revises) do
+    Enum.find_value(events, fn
+      %{"type" => "ProposalRevisionRequested", "proposal_id" => ^revises, "feedback" => feedback} ->
+        feedback
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp feedback_for(_proposal, _events), do: nil
+
+  defp proposal_summary(%{"proposal" => proposal} = produced, root, events) do
     [
       "",
       "Agent produced proposal",
       "  proposal #{proposal["id"]}",
+      if((proposal["revision"] || 0) > 0,
+        do: "  revision #{proposal["revision"]} (replaces #{short(proposal["revises"])})"
+      ),
+      if(feedback_for(proposal, events),
+        do: ["  feedback", indent(feedback_for(proposal, events), 4)]
+      ),
       if(produced["raw_output_blob_id"], do: "  raw      #{produced["raw_output_blob_id"]}"),
       if(present?(proposal["justification"]),
         do: ["", indent(proposal["justification"], 2)]
@@ -87,8 +132,9 @@ defmodule Current.CLI.Render do
   end
 
   defp steps(events, produced, root) do
-    production_failed = find(events, "ProposalProductionFailed")
-    validation_failed = find(events, "ProposalValidationFailed")
+    production_failed = find_last(events, "ProposalProductionFailed")
+    validation_failed = find_last(events, "ProposalValidationFailed")
+    revisions = Enum.count(events, &(&1["type"] == "ProposalRevisionRequested"))
     already_explained? = production_failed || validation_failed
 
     [
@@ -107,7 +153,8 @@ defmodule Current.CLI.Render do
         nil ->
           nil
       end,
-      if(find(events, "ProposalValidated"), do: "✓ Proposal validated"),
+      if(revisions > 0, do: "↻ #{plural(revisions, "revision")} requested"),
+      if(find_last(events, "ProposalValidated"), do: "✓ Proposal validated"),
       case validation_failed do
         %{"proposal" => proposal, "error" => %{"type" => "ValidationError"} = error} ->
           ["✗ Proposal validation failed", validation_error(proposal, error, root, 4)]
@@ -259,7 +306,7 @@ defmodule Current.CLI.Render do
             "#{pad(time(timestamp(entry)), 14)}#{truncate(table_detail(event, applied, root), 60)}"
         )
       end),
-      case find(Enum.map(entries, & &1["event"]), "ProposalProduced") do
+      case find_last(Enum.map(entries, & &1["event"]), "ProposalProduced") do
         %{"proposal" => proposal} ->
           ["", "Inspect", "  current proposal #{short(proposal["id"])}"]
 
@@ -395,6 +442,12 @@ defmodule Current.CLI.Render do
        ),
        do: inspect(message)
 
+  defp event_detail(
+         %{"type" => "ProposalRevisionRequested", "proposal_id" => id, "feedback" => feedback},
+         _root
+       ),
+       do: "#{short(id)} · #{inspect(feedback)}"
+
   defp event_detail(_event, _root), do: ""
 
   ## current proposal
@@ -408,6 +461,15 @@ defmodule Current.CLI.Render do
       "Workflow  #{view["workflow_id"]}",
       if(root, do: "Project   #{root}"),
       "Status    #{view["status"]} (#{view["mode"]} mode)",
+      if((proposal["revision"] || 0) > 0,
+        do: "Revision  #{proposal["revision"]} (replaces #{short(proposal["revises"])})"
+      ),
+      if(present?(view["feedback"]),
+        do: ["Feedback", indent(view["feedback"], 2)]
+      ),
+      if(view["current_proposal_id"] && view["current_proposal_id"] != proposal["id"],
+        do: "Superseded by #{short(view["current_proposal_id"])}"
+      ),
       if(view["raw_output_blob_id"],
         do: "Raw       #{view["raw_output_blob_id"]}   (model output)"
       ),
@@ -644,6 +706,9 @@ defmodule Current.CLI.Render do
   defp time(_), do: ""
 
   defp find(events, type), do: Enum.find(events, &(&1["type"] == type))
+
+  # The latest of its kind, for events that repeat once per revision.
+  defp find_last(events, type), do: events |> Enum.filter(&(&1["type"] == type)) |> List.last()
 
   defp terminal_event(events) do
     Enum.find(

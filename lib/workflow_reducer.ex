@@ -20,7 +20,8 @@ defmodule Current.WorkflowReducer do
       task_id: e.task_id,
       status: :created,
       mode: e.mode,
-      proposal: nil,
+      proposals: [],
+      max_revisions: e.max_revisions,
       result: nil,
       events: [],
       created_at: e.timestamp,
@@ -69,14 +70,32 @@ defmodule Current.WorkflowReducer do
     {:ok, ww}
   end
 
+  # A reviewer asked for a new proposal: production starts again, from
+  # :revision_requested rather than :created. started_at keeps the first
+  # start, so durations still measure the whole workflow.
+  defp apply_event_helper(
+         %Workflow{status: :revision_requested} = w,
+         %Event.ProposalProductionStarted{} = e
+       ) do
+    {:ok,
+     %{w | status: :planning, started_at: w.started_at || e.timestamp, updated_at: e.timestamp}}
+  end
+
   defp apply_event_helper(%Workflow{status: :created} = w, %Event.ModeInvalid{} = e) do
     ww = %{w | status: :invalid_mode, updated_at: e.timestamp}
     {:ok, ww}
   end
 
   defp apply_event_helper(%Workflow{status: :planning} = w, %Event.ProposalProduced{} = e) do
-    ww = %{w | proposal: e.proposal, status: :validating, updated_at: e.timestamp}
-    {:ok, ww}
+    with :ok <- ensure_lineage(List.last(w.proposals), e.proposal) do
+      {:ok,
+       %{
+         w
+         | proposals: w.proposals ++ [e.proposal],
+           status: :validating,
+           updated_at: e.timestamp
+       }}
+    end
   end
 
   defp apply_event_helper(%Workflow{status: :planning} = w, %Event.ProposalProductionFailed{} = e) do
@@ -111,20 +130,37 @@ defmodule Current.WorkflowReducer do
   # WorkflowCompleted, and a review landing in that window must not
   # commit: an approved plan workflow could then be applied.
 
+  # Every decision must name the workflow's most recent proposal. This is
+  # the one place that is enforced; callers just pass the error up.
+
   defp apply_event_helper(
          %Workflow{status: :waiting_for_approval, mode: :apply} = w,
          %Event.ProposalApproved{} = e
        ) do
-    ww = %{w | status: :approved, updated_at: e.timestamp}
-    {:ok, ww}
+    with :ok <- ensure_current(w, e.proposal_id) do
+      {:ok, %{w | status: :approved, updated_at: e.timestamp}}
+    end
   end
 
   defp apply_event_helper(
          %Workflow{status: :waiting_for_approval, mode: :apply} = w,
          %Event.ProposalRejected{} = e
        ) do
-    ww = %{w | status: :rejected, updated_at: e.timestamp}
-    {:ok, ww}
+    with :ok <- ensure_current(w, e.proposal_id) do
+      {:ok, %{w | status: :rejected, updated_at: e.timestamp}}
+    end
+  end
+
+  # Revisions are bounded. The bound was recorded at genesis, so replaying
+  # an old log never depends on today's config.
+  defp apply_event_helper(
+         %Workflow{status: :waiting_for_approval, mode: :apply} = w,
+         %Event.ProposalRevisionRequested{} = e
+       ) do
+    with :ok <- ensure_current(w, e.proposal_id),
+         :ok <- ensure_revisions_left(w) do
+      {:ok, %{w | status: :revision_requested, updated_at: e.timestamp}}
+    end
   end
 
   defp apply_event_helper(
@@ -137,9 +173,12 @@ defmodule Current.WorkflowReducer do
 
   # --- Effect application --------------------------------------------------
 
+  # proposal_id is nil only on events recorded before workflows could hold
+  # several proposals (EffectApplicationStarted v1); those replay as is.
   defp apply_event_helper(%Workflow{status: :approved} = w, %Event.EffectApplicationStarted{} = e) do
-    ww = %{w | status: :applying, updated_at: e.timestamp}
-    {:ok, ww}
+    with :ok <- ensure_current_or_legacy(w, e.proposal_id) do
+      {:ok, %{w | status: :applying, updated_at: e.timestamp}}
+    end
   end
 
   # Fact-only events: present in the log, but they do not move workflow status.
@@ -208,6 +247,49 @@ defmodule Current.WorkflowReducer do
   defp apply_event_helper(workflow, event) do
     {:error, {:invalid_transition, workflow.status, event.__struct__}}
   end
+
+  defp ensure_current(%Workflow{} = w, proposal_id) do
+    case Workflow.current_proposal(w) do
+      %{id: ^proposal_id} -> :ok
+      %{id: current_id} -> {:error, {:stale_proposal, proposal_id, current_id}}
+      nil -> {:error, {:invalid_transition, w.status, :no_proposal}}
+    end
+  end
+
+  defp ensure_current_or_legacy(_w, nil), do: :ok
+  defp ensure_current_or_legacy(w, proposal_id), do: ensure_current(w, proposal_id)
+
+  defp ensure_revisions_left(%Workflow{max_revisions: max} = w) do
+    case Workflow.revisions_used(w) < max do
+      true -> :ok
+      false -> {:error, {:revision_limit_reached, max}}
+    end
+  end
+
+  defp ensure_lineage(nil, %{revision: 0, revises: nil}), do: :ok
+
+  defp ensure_lineage(nil, p) do
+    {:error, {:invalid_proposal_lineage, %{new_revision: p.revision, new_revises: p.revises}}}
+  end
+
+  defp ensure_lineage(tail, p) do
+    if p.id != tail.id and p.revises == tail.id and p.revision == tail.revision + 1 do
+      :ok
+    else
+      {:error,
+       {:invalid_proposal_lineage,
+        %{
+          tail_id: tail.id,
+          tail_revision: tail.revision,
+          new_id: p.id,
+          new_revision: p.revision,
+          new_revises: p.revises
+        }}}
+    end
+  end
+
+  defp ensure_lineage(_tail, other),
+    do: {:error, {:invalid_proposal_lineage, {:not_a_proposal, other}}}
 
   defp error_reason(%{reason: reason}), do: reason
   defp error_reason(other), do: other

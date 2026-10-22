@@ -25,7 +25,9 @@ defmodule Current.WorkflowOrchestrator do
           project_dir: Path.t() | nil,
           task_id: Current.Id.t(),
           replayed: MapSet.t(Current.Id.t()),
-          proposal_production: pid() | nil
+          proposal_production: pid() | nil,
+          # Where the proposal being produced sits in the workflow's chain.
+          lineage: %{revision: non_neg_integer(), revises: Current.Id.t() | nil}
         }
 
   @type start_arg :: {Current.Id.t(), Task.t(), [pid()]}
@@ -81,7 +83,8 @@ defmodule Current.WorkflowOrchestrator do
       project_dir: task.project_dir,
       workflow_id: workflow_id,
       replayed: MapSet.new(),
-      proposal_production: nil
+      proposal_production: nil,
+      lineage: %{revision: 0, revises: nil}
     }
 
     {:ok, state, {:continue, :recover}}
@@ -100,6 +103,9 @@ defmodule Current.WorkflowOrchestrator do
             workflow_id: state.workflow_id,
             task_id: state.task_id,
             mode: state.request.mode,
+            # Read once, here, and recorded: the reducer enforces the
+            # bound from the log, never from config.
+            max_revisions: Application.get_env(:current, :max_revisions, 10),
             timestamp: DateTime.utc_now()
           })
 
@@ -132,14 +138,14 @@ defmodule Current.WorkflowOrchestrator do
 
   # Paths are made absolute here, before the proposal becomes durable, so
   # everything downstream -- IntentValidator, the reviewer reading
-  # ProposalStore, EffectApplicator (via workflow.proposal), and any replay
+  # ProposalStore, EffectApplicator (via Workflow.current_proposal/1), and any replay
   # -- sees exactly the same resolved paths. The model's untouched output
   # is still preserved in the raw_output_blob_id blob.
   def handle_info({:proposal_produced, %Proposal{} = proposal, raw_output_blob_id}, state) do
     propose(%Event.ProposalProduced{
       id: Id.generate(),
       workflow_id: state.workflow_id,
-      proposal: IntentPaths.absolutize(proposal, state.project_dir),
+      proposal: stamp_lineage(IntentPaths.absolutize(proposal, state.project_dir), state.lineage),
       raw_output_blob_id: raw_output_blob_id,
       timestamp: DateTime.utc_now()
     })
@@ -381,6 +387,19 @@ defmodule Current.WorkflowOrchestrator do
     {:stop, :normal, state}
   end
 
+  # The reducer has already moved the workflow to :revision_requested.
+  # Production starts again from there; the feedback reaches the builder
+  # via the workflow's events in start_proposal_production/1.
+  defp react(%Event.ProposalRevisionRequested{}, state) do
+    propose(%Event.ProposalProductionStarted{
+      id: Id.generate(),
+      workflow_id: state.workflow_id,
+      timestamp: DateTime.utc_now()
+    })
+
+    {:noreply, state}
+  end
+
   defp react(%Event.WorkflowFailed{}, state) do
     {:stop, :normal, state}
   end
@@ -401,9 +420,10 @@ defmodule Current.WorkflowOrchestrator do
     timeout_ms = Application.fetch_env!(:current, :llm_proposal_timeout_ms)
 
     orchestrator = self()
-    request = state.request
     project_dir = state.project_dir
     workflow_id = state.workflow_id
+    {revision, lineage} = revision_context(workflow_id)
+    request = %{state.request | revision: revision}
 
     pid =
       spawn_link(fn ->
@@ -433,8 +453,33 @@ defmodule Current.WorkflowOrchestrator do
         send(orchestrator, message)
       end)
 
-    %{state | proposal_production: pid}
+    %{state | proposal_production: pid, lineage: lineage}
   end
+
+  # What the builder needs to answer a revision request: every proposal so
+  # far and every round of feedback, oldest first. Read from the log, the
+  # same source recovery uses. Also the lineage to stamp on the result.
+  defp revision_context(workflow_id) do
+    events = EventStore.list_by_workflow_id(workflow_id)
+    {:ok, workflow} = WorkflowReducer.replay(events)
+
+    case workflow.proposals do
+      [] ->
+        {nil, %{revision: 0, revises: nil}}
+
+      proposals ->
+        feedback =
+          for %Event.ProposalRevisionRequested{feedback: feedback} <- events, do: feedback
+
+        {%{previous: proposals, feedback: feedback},
+         %{revision: Workflow.revisions_used(workflow) + 1, revises: List.last(proposals).id}}
+    end
+  end
+
+  # The orchestrator, not the model, decides where a proposal sits in the
+  # chain, so the lineage cannot be forged by model output.
+  defp stamp_lineage(%Proposal{} = proposal, %{revision: revision, revises: revises}),
+    do: %{proposal | revision: revision, revises: revises}
 
   defp client_module(%Request{model: model}) do
     case client_for(model) do
@@ -449,7 +494,7 @@ defmodule Current.WorkflowOrchestrator do
     orchestrator = self()
     {:ok, workflow} = Current.WorkflowStore.get(state.workflow_id)
 
-    intents = workflow.proposal.intents
+    intents = Workflow.current_proposal(workflow).intents
     project_dir = state.project_dir
 
     spawn_link(fn ->
@@ -584,6 +629,9 @@ defmodule Current.WorkflowOrchestrator do
 
   defp notification(%Event.ProposalRejected{} = event),
     do: {:proposal_rejected, event}
+
+  defp notification(%Event.ProposalRevisionRequested{} = event),
+    do: {:proposal_revision_requested, event}
 
   defp notification(%Event.ProposalProductionFailed{} = event),
     do: {:proposal_production_failed, event}
