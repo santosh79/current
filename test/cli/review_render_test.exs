@@ -80,6 +80,9 @@ defmodule Current.CLI.ReviewRenderTest do
     Map.merge(
       %{
         proposal: proposal,
+        current_proposal_id: proposal.id,
+        revisions_remaining: 10,
+        feedback: nil,
         workflow_id: proposal.workflow_id,
         status: :waiting_for_approval,
         mode: :apply,

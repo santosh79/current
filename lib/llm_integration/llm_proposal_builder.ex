@@ -88,7 +88,7 @@ defmodule Current.LLMProposalBuilder do
           client: client,
           call_timeout_ms: timeout_ms,
           project: project,
-          messages: initial_messages(req, project),
+          messages: initial_messages(req, project, project_dir),
           observations: [],
           rounds_left: @max_observe_rounds,
           repairs_left: @max_repairs,
@@ -294,7 +294,7 @@ defmodule Current.LLMProposalBuilder do
   # The protocol is stable system context. The task-specific layout and
   # request are the first user turn; every later turn is appended so the
   # provider can reuse the byte-identical conversation prefix.
-  defp initial_messages(%Request{input: input, context: context}, project) do
+  defp initial_messages(%Request{input: input, context: context} = req, project, project_dir) do
     system =
       """
       You are Current, an agent that proposes structured changes to a codebase.
@@ -337,7 +337,7 @@ defmodule Current.LLMProposalBuilder do
 
       Request: #{inspect(input)}
       Context: #{inspect(context)}
-
+      #{render_revision(req.revision, project_dir)}
       You have not been shown any file contents yet.
 
       #{render_turn(@max_observe_rounds)}
@@ -345,6 +345,165 @@ defmodule Current.LLMProposalBuilder do
 
     [%{role: :system, content: system}, %{role: :user, content: user}]
   end
+
+  ## --- Revisions ---------------------------------------------------------
+
+  # Each artifact a prior proposal shows is cut to this many characters.
+  @revision_artifact_chars 2_000
+
+  @doc """
+  The part of the first user turn that appears only when a reviewer sent
+  an earlier proposal back (`request.revision`): every proposal so far,
+  every round of feedback, what the agent looked at before, and the
+  instruction to answer with a complete replacement. Empty for a first
+  proposal. The conversation starts fresh: nothing from the earlier
+  exchange is carried over except what is rendered here, so the agent can
+  observe again as needed.
+  """
+  @spec render_revision(Request.revision() | nil, Path.t() | nil) :: String.t()
+  def render_revision(nil, _project_dir), do: ""
+
+  def render_revision(%{previous: previous, feedback: feedback}, project_dir) do
+    last_index = length(previous) - 1
+
+    proposals =
+      previous
+      |> Enum.with_index()
+      |> Enum.map_join("\n\n", fn {proposal, index} ->
+        render_prior(proposal, index + 1, index == last_index, project_dir)
+      end)
+
+    rounds =
+      feedback
+      |> Enum.with_index(1)
+      |> Enum.map_join("\n", fn {text, round} ->
+        "Feedback on proposal #{round}: #{inspect(text)}"
+      end)
+
+    looked_at =
+      case previous |> Enum.flat_map(&observed/1) |> Enum.uniq() do
+        [] ->
+          ""
+
+        paths ->
+          "\nWhat you looked at before (it may help; look again if you need to):\n" <>
+            Enum.map_join(paths, "\n", &"  - #{&1}") <> "\n"
+      end
+
+    """
+
+    A reviewer has asked for changes to your earlier proposal#{if length(previous) == 1, do: "", else: "s"}.
+
+    #{proposals}
+
+    #{rounds}
+    #{looked_at}
+    Reply with a complete replacement proposal that addresses the latest feedback.
+    It replaces the earlier ones entirely, so keep whatever the reviewer did not
+    object to.
+    """
+  end
+
+  defp render_prior(proposal, number, latest?, project_dir) do
+    [
+      "Proposal #{number}#{if latest?, do: " (the latest)", else: ""}:",
+      if(present?(proposal.justification), do: "  Justification: #{proposal.justification}"),
+      case proposal.claims do
+        [_ | _] = claims -> "  Claims:\n" <> Enum.map_join(claims, "\n", &"    - #{&1}")
+        _ -> nil
+      end,
+      "  Intents:",
+      proposal.intents
+      |> Enum.with_index(1)
+      |> Enum.map_join("\n", fn {intent, n} ->
+        "    #{n}. " <> render_intent(intent, project_dir, latest?)
+      end)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  # Only the latest proposal shows its text; older ones are one line per
+  # intent, so the prompt stays bounded however many revisions there were.
+  defp render_intent(%Current.Intent.EditFile{} = edit, root, true) do
+    "edit_file #{rel(edit.path, root)}\n" <>
+      "       replace:\n#{artifact_text(edit.old_artifact_id)}\n" <>
+      "       with:\n#{artifact_text(edit.new_artifact_id)}"
+  end
+
+  defp render_intent(%Current.Intent.WriteFile{} = write, root, true) do
+    "write_file #{rel(write.path, root)}\n#{artifact_text(write.contents_artifact_id)}"
+  end
+
+  defp render_intent(%Current.Intent.EditFile{path: path}, root, false),
+    do: "edit_file #{rel(path, root)}"
+
+  defp render_intent(%Current.Intent.WriteFile{path: path}, root, false),
+    do: "write_file #{rel(path, root)}"
+
+  defp render_intent(%Current.Intent.ReadFile{path: path}, root, _),
+    do: "read_file #{rel(path, root)}"
+
+  defp render_intent(%Current.Intent.DeleteFile{path: path}, root, _),
+    do: "delete_file #{rel(path, root)}"
+
+  defp render_intent(%Current.Intent.RunCommand{cmd: cmd, args: args}, _root, _),
+    do: "run_command #{Enum.join([cmd | args || []], " ")}"
+
+  defp render_intent(%Current.Intent.Grep{pattern: pattern}, _root, _),
+    do: "grep #{inspect(pattern)}"
+
+  defp render_intent(%Current.Intent.Glob{pattern: pattern}, _root, _),
+    do: "glob #{inspect(pattern)}"
+
+  defp render_intent(%Current.Intent.Claim{statement: statement}, _root, _),
+    do: "claim #{inspect(statement)}"
+
+  defp render_intent(%Current.Intent.Report{summary: summary}, _root, _),
+    do: "report #{inspect(summary)}"
+
+  defp render_intent(other, _root, _), do: inspect(other.__struct__)
+
+  defp artifact_text(artifact_id) do
+    text =
+      case BlobStore.read(artifact_id) do
+        {:ok, bytes} when is_binary(bytes) ->
+          if String.valid?(bytes),
+            do: truncate_chars(bytes, @revision_artifact_chars),
+            else: "(binary content)"
+
+        {:error, _reason} ->
+          "(content unavailable)"
+      end
+
+    text |> String.split("\n") |> Enum.map_join("\n", &("         | " <> &1))
+  end
+
+  defp truncate_chars(text, max) do
+    if String.length(text) > max,
+      do: String.slice(text, 0, max) <> "\n… (cut)",
+      else: text
+  end
+
+  # What the agent asked to see, from the observations kept with each
+  # proposal; refused requests are left out.
+  defp observed(%Proposal{observations: observations}) do
+    for %Current.Observation{status: :shown, intent: intent} <- observations || [],
+        label = observation_label(intent),
+        label != nil,
+        do: label
+  end
+
+  defp observation_label(%Current.Intent.ReadFile{path: path}), do: "read_file #{path}"
+  defp observation_label(%Current.Intent.Glob{pattern: pattern}), do: "glob #{pattern}"
+  defp observation_label(%Current.Intent.Grep{pattern: pattern}), do: "grep #{inspect(pattern)}"
+  defp observation_label(_other), do: nil
+
+  # Persisted paths are absolute; the model works in project-relative ones.
+  defp rel(path, root) when is_binary(path) and is_binary(root), do: Path.relative_to(path, root)
+  defp rel(path, _root), do: to_string(path)
+
+  defp present?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp append_message(messages, role, content) do
     messages ++ [%{role: role, content: content}]

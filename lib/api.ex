@@ -101,6 +101,30 @@ defmodule Current.API do
   end
 
   @doc """
+  Sends a proposal back for a new one, by full id or unique prefix, and
+  returns the id of its workflow so the caller can follow it.
+
+  `feedback` is what the reviewer wants changed; it reaches the proposal
+  builder verbatim. The proposal must be the workflow's most recent, and
+  the workflow must have revisions left; WorkflowReducer decides both and
+  its errors (`{:stale_proposal, given, current}`,
+  `{:revision_limit_reached, max}`) come back here unchanged.
+
+  `metadata` is recorded verbatim on ProposalRevisionRequested.
+  """
+  @spec request_revision(String.t(), String.t(), map()) ::
+          {:ok, Current.Id.t()}
+          | {:error, Inspector.lookup_error() | {:not_apply_mode, Current.Mode.t()} | term()}
+  def request_revision(proposal_id, feedback, metadata)
+      when is_binary(proposal_id) and is_binary(feedback) and is_map(metadata) do
+    logged(:request_revision, proposal_id, "revision requested", fn ref ->
+      with :ok <- Current.request_revision(ref.proposal_id, feedback, metadata) do
+        await_reviewed(ref.workflow_id)
+      end
+    end)
+  end
+
+  @doc """
   Starts applying an approved proposal, by full id or unique prefix, and
   returns the id of its workflow so the caller can follow it. See
   Current.apply_proposal/1.

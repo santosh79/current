@@ -178,6 +178,12 @@ defmodule Current.ActivityLog do
        ),
        do: reason
 
+  defp detail(
+         %Event.ProposalRevisionRequested{proposal_id: proposal_id, feedback: feedback},
+         _commit
+       ),
+       do: "proposal " <> short(proposal_id) <> " · " <> inspect(feedback)
+
   defp detail(%Event.EffectApplied{intent: intent}, _commit), do: intent_name(intent)
 
   defp detail(%Event.EffectFailed{intent: intent, reason: reason}, _commit),

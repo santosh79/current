@@ -199,6 +199,37 @@ defmodule Current do
   end
 
   @doc """
+  Sends a proposal back for a new one, with the reviewer's feedback.
+
+  Like approve and reject, the proposal named must be the workflow's most
+  recent, and the number of revisions is bounded; both rules live in
+  WorkflowReducer, whose errors (`{:stale_proposal, given, current}`,
+  `{:revision_limit_reached, max}`) are returned unchanged. This function
+  adds no checks of its own.
+  """
+  @spec request_revision(Current.Id.t(), String.t(), map()) ::
+          :ok
+          | {:error, :not_found}
+          | {:error, {:stale_proposal, Current.Id.t(), Current.Id.t()}}
+          | {:error, {:revision_limit_reached, non_neg_integer()}}
+          | {:error, term()}
+  def request_revision(proposal_id, feedback, metadata) do
+    with {:ok, proposal} <- ProposalStore.get(proposal_id),
+         {:ok, workflow} <- WorkflowStore.get(proposal.workflow_id),
+         event = %Event.ProposalRevisionRequested{
+           id: Id.generate(),
+           workflow_id: proposal.workflow_id,
+           proposal_id: proposal.id,
+           feedback: feedback,
+           metadata: metadata,
+           timestamp: DateTime.utc_now()
+         },
+         {:ok, _next} <- WorkflowReducer.apply_event(workflow, event) do
+      Current.Consensus.propose(event)
+    end
+  end
+
+  @doc """
   Starts applying an approved proposal's effects.
 
   Approval only makes a proposal eligible to be applied; it never applies
@@ -223,6 +254,7 @@ defmodule Current do
          event = %Event.EffectApplicationStarted{
            id: Id.generate(),
            workflow_id: proposal.workflow_id,
+           proposal_id: proposal.id,
            timestamp: DateTime.utc_now()
          },
          {:ok, _next} <- WorkflowReducer.apply_event(workflow, event) do

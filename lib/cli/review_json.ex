@@ -11,8 +11,12 @@ defmodule Current.CLI.ReviewJSON do
 
       {
         "schema": "current.review/v1",
-        "proposal": {"id", "workflow_id", "justification", "claims", "dependencies"},
+        "proposal": {"id", "workflow_id", "justification", "claims", "dependencies",
+                     "revision", "revises"},
         "workflow": {"id", "status", "mode"},
+        "current_proposal_id": string,
+        "revisions_remaining": integer,
+        "feedback": string | null,
         "project_dir": string | null,
         "validation_error": {"intent_id", "intent_index", "reason", "details"} | null,
         "intents": [
@@ -29,6 +33,13 @@ defmodule Current.CLI.ReviewJSON do
   "total_bytes", "total_lines", "shown_lines"}`, with `status` one of "ok", "binary",
   "missing" or "omitted" (see Current.Excerpt). `text` is null unless
   status is "ok".
+
+  `revision` is 0 for a workflow's first proposal and n for the one
+  produced after the n-th revision request; `revises` is the id of the
+  proposal it replaces (null for the first). `feedback` is the reviewer
+  feedback this proposal answers (null for the first). The four revision
+  fields were added without a version bump: the document only grew.
+  A decision on a proposal other than `current_proposal_id` is refused.
 
   Key order is not significant. Intent indexes are 1-based, matching the Markdown form. Paths are
   given as recorded (absolute) and, when inside the project, relative to
@@ -66,8 +77,13 @@ defmodule Current.CLI.ReviewJSON do
         "workflow_id" => proposal.workflow_id,
         "justification" => proposal.justification,
         "claims" => proposal.claims || [],
-        "dependencies" => proposal.dependencies || []
+        "dependencies" => proposal.dependencies || [],
+        "revision" => proposal.revision,
+        "revises" => proposal.revises
       },
+      "current_proposal_id" => review.current_proposal_id,
+      "revisions_remaining" => review.revisions_remaining,
+      "feedback" => review.feedback,
       "workflow" => %{
         "id" => review.workflow_id,
         "status" => Atom.to_string(review.status),

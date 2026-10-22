@@ -52,7 +52,14 @@ defmodule Current.Inspector do
           mode: Current.Mode.t(),
           project_dir: Path.t() | nil,
           raw_output_blob_id: Current.Id.t() | nil,
-          validation_error: Current.Error.ValidationError.t() | nil
+          validation_error: Current.Error.ValidationError.t() | nil,
+          # The workflow's most recent proposal. Differs from
+          # proposal.id when this one has been superseded.
+          current_proposal_id: Current.Id.t(),
+          revisions_remaining: non_neg_integer(),
+          # The reviewer feedback that led to this proposal; nil for the
+          # first proposal of a workflow.
+          feedback: String.t() | nil
         }
 
   @type review_opts :: %{optional(:max_lines) => pos_integer(), optional(:raw) => boolean()}
@@ -65,6 +72,9 @@ defmodule Current.Inspector do
           project_dir: Path.t() | nil,
           raw_output_blob_id: Current.Id.t() | nil,
           validation_error: Current.Error.ValidationError.t() | nil,
+          current_proposal_id: Current.Id.t(),
+          revisions_remaining: non_neg_integer(),
+          feedback: String.t() | nil,
           artifacts: %{Current.Id.t() => Excerpt.t()},
           raw_output: Excerpt.t() | nil,
           limits: %{max_lines: pos_integer(), max_total_lines: pos_integer()}
@@ -101,16 +111,28 @@ defmodule Current.Inspector do
   @doc "A proposal, with where it came from and what became of it."
   @spec proposal(String.t()) :: {:ok, proposal_view()} | {:error, lookup_error()}
   def proposal(id) do
-    with {:ok, workflow} <- resolve_proposal_workflow(id),
-         {:ok, proposal} <- ProposalStore.get(workflow.proposal.id) do
+    with {:ok, {workflow, %Proposal{id: proposal_id}}} <- resolve_proposal_workflow(id),
+         {:ok, proposal} <- ProposalStore.get(proposal_id) do
       events = EventStore.list_by_workflow_id(workflow.id)
-
-      proposal_id = proposal.id
 
       produced =
         Enum.find(events, &match?(%Event.ProposalProduced{proposal: %{id: ^proposal_id}}, &1))
 
-      failed = Enum.find(events, &match?(%Event.ProposalValidationFailed{}, &1))
+      failed =
+        Enum.find(
+          events,
+          &match?(%Event.ProposalValidationFailed{proposal: %{id: ^proposal_id}}, &1)
+        )
+
+      feedback =
+        Enum.find_value(events, fn
+          %Event.ProposalRevisionRequested{proposal_id: id, feedback: feedback}
+          when id == proposal.revises ->
+            feedback
+
+          _ ->
+            nil
+        end)
 
       project_dir =
         case TaskStore.get(workflow.task_id) do
@@ -126,7 +148,10 @@ defmodule Current.Inspector do
          mode: workflow.mode,
          project_dir: project_dir,
          raw_output_blob_id: produced && produced.raw_output_blob_id,
-         validation_error: failed && failed.error
+         validation_error: failed && failed.error,
+         current_proposal_id: Workflow.current_proposal(workflow).id,
+         revisions_remaining: max(workflow.max_revisions - Workflow.revisions_used(workflow), 0),
+         feedback: feedback
        }}
     end
   end
@@ -194,8 +219,8 @@ defmodule Current.Inspector do
            %{proposal_id: Current.Id.t(), workflow_id: Current.Id.t(), mode: Current.Mode.t()}}
           | {:error, lookup_error()}
   def resolve_proposal(id) do
-    with {:ok, workflow} <- resolve_proposal_workflow(id) do
-      {:ok, %{proposal_id: workflow.proposal.id, workflow_id: workflow.id, mode: workflow.mode}}
+    with {:ok, {workflow, proposal}} <- resolve_proposal_workflow(id) do
+      {:ok, %{proposal_id: proposal.id, workflow_id: workflow.id, mode: workflow.mode}}
     end
   end
 
@@ -218,10 +243,15 @@ defmodule Current.Inspector do
 
   defp resolve_proposal_workflow(id) do
     with {:ok, prefix} <- normalize(id) do
-      WorkflowStore.all()
-      |> Enum.filter(&match?(%{proposal: %Proposal{}}, &1))
-      |> Enum.filter(&String.starts_with?(&1.proposal.id, prefix))
-      |> unique(& &1.proposal.id)
+      # Any proposal of any workflow, not only the latest: a reviewer may
+      # name a superseded one, and it is the reducer that refuses it.
+      for(
+        workflow <- WorkflowStore.all(),
+        %Proposal{} = proposal <- workflow.proposals,
+        String.starts_with?(proposal.id, prefix),
+        do: {workflow, proposal}
+      )
+      |> unique(fn {_workflow, proposal} -> proposal.id end)
     end
   end
 

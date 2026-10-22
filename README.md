@@ -64,9 +64,12 @@ runtime:
    edit matches exactly, claims cite earlier intents they can be checked
    against;
 3. **waits for a decision.** A proposal is reviewed as a unit
-   (`current review`, or `--json` for a machine reader) and approved or
-   rejected. The reviewer can be a person or another agent: approval is
-   an API call, recorded as its own event with the reviewer's metadata;
+   (`current review`, or `--json` for a machine reader) and approved,
+   rejected, or sent back with feedback. The reviewer can be a person or
+   another agent: each decision is an API call, recorded as its own event
+   with the reviewer's metadata. A workflow can hold several proposals, and
+   a decision must name the latest. Sending one back produces a
+   replacement, up to a bound (10 revisions by default);
 4. **applies** it, in a separate step, with a small trusted interpreter
    that re-checks every path immediately before touching it and records
    every result;
@@ -90,6 +93,9 @@ TaskCreated                  the request: prompt, model, project, submitted_at
 └─ WorkflowCreated
    └─ ProposalProduced       intents, what the model read first, its raw reply
       └─ ProposalValidated
+         ├─ ProposalRevisionRequested   who asked for what change; loops back to
+         │  └─ ProposalProductionStarted → ProposalProduced (revision 1, revises
+         │     the one above) → ProposalValidated → ... up to the bound
          └─ ProposalApproved     who, when, with what message
             └─ EffectApplicationStarted
                ├─ EffectApplied      an edit: file before and after
@@ -108,6 +114,7 @@ model:
 | What did the model look at before deciding? | Each observation, with its reason and the exact bytes it was shown |
 | What did the model actually say? | Its raw reply, stored byte for byte |
 | Who authorized it, and when? | `ProposalApproved` and its metadata |
+| What did the reviewer ask to change, and what came of it? | `ProposalRevisionRequested` and the next proposal's `revision` and `revises` |
 | What exactly changed? | Each effect's result: file before and after, command output |
 | Did it do what the agent claimed? | Each claim's verification and evidence |
 | What *didn't* happen, and why? | Rejections, validation failures, failed effects, each with a reason |
@@ -211,7 +218,7 @@ to agent workflows. Each provides one of the properties above.
 | Pattern | In Current | Gives you |
 |---|---|---|
 | **Event sourcing** | Every step is a typed, past-tense, versioned event. The log is the only source of truth | Provenance, replay |
-| **CQRS** | Commands (`submit`, `approve`, `apply`) go through `Current.API` and become proposed events. Queries read projections (`WorkflowStore`, `ProposalStore`, `TaskStore`) built from committed events | Reads never mutate; writes are only events |
+| **CQRS** | Commands (`submit`, `approve`, `revise`, `apply`) go through `Current.API` and become proposed events. Queries read projections (`WorkflowStore`, `ProposalStore`, `TaskStore`) built from committed events | Reads never mutate; writes are only events |
 | **Pure reducer** | `WorkflowReducer.apply_event/2`: state × event → state, or refusal | Deterministic state; one definition of what is allowed |
 | **Immutability** | Events are never edited or deleted; corrections are new events. Artifacts never change | A history worth verifying |
 | **Content addressing** | Artifacts are named by the SHA-256 of their bytes | Deduplication, and content that checks itself |
@@ -241,7 +248,9 @@ table is refused:
 |---|---|
 | Nothing applies without approval | `EffectApplicationStarted` is accepted only from `:approved` |
 | A plan can never be applied | `ProposalApproved` is accepted only for `mode: :apply` |
-| One decision per proposal | approval and rejection are accepted only from `:waiting_for_approval` |
+| One decision per proposal | approval, rejection and a revision request are accepted only from `:waiting_for_approval` |
+| Only the latest proposal can be decided | approval, rejection, a revision request and `EffectApplicationStarted` must name the workflow's most recent proposal, else `{:stale_proposal, given, current}` |
+| Revisions are bounded | a revision request is refused with `{:revision_limit_reached, max}` once `max_revisions` (recorded on `WorkflowCreated`, default 10) are used |
 | Terminal means terminal | nothing moves a `completed`, `planned`, `rejected`, `failed` or `abandoned` workflow |
 
 The same function is used at every layer, so the layers can't disagree.
@@ -308,6 +317,7 @@ review. Nothing has touched the project.
 
 ```sh
 ./current review <proposal-id>                    # every edit, file and command (or --json)
+./current revise <proposal-id> -m "keep X, change Y"  # send it back; follows the replacement
 ./current approve <proposal-id> -m "looks right"  # recorded; nothing is applied yet
 ./current apply <proposal-id>                     # apply, verify claims, follow to the end
 ```
@@ -339,6 +349,8 @@ flowchart TD
     validate -- "invalid" --> failed1(["failed"])
     validate -- "plan mode" --> planned(["planned"])
     validate -- "apply mode" --> review{"Review<br/>(person or agent)"}
+    review -- "revise (feedback)" --> revision["Revision requested"]
+    revision -- "new proposal, up to 10 times" --> reply
     review -- "reject" --> rejected(["rejected"])
     review -- "approve, then apply" --> apply["Runtime applies intents in order"]
     apply --> verify{"Claims hold?"}
@@ -389,6 +401,8 @@ created → planning → validating → waiting_for_approval
    plan mode:   → planned
    apply mode:  → approved → applying → assembling_result → completed
                 → rejected
+                → revision_requested → planning → validating → waiting_for_approval
+                  (bounded; each pass adds a proposal to the workflow)
 any stage:      → failed      (production, validation or an effect failed)
                 → abandoned   (no further automatic progress is possible)
 ```
@@ -431,6 +445,7 @@ any stage:      → failed      (production, validation or an effect failed)
 | `current review <proposal-id> [--json] [--max-lines <n>] [--raw]` | A proposal with its edits, files and commands. `--json` emits `current.review/v1`. |
 | `current approve <proposal-id> [-m <message>]` | Record approval. Nothing is applied. |
 | `current reject <proposal-id> [-m <message>]` | Turn a proposal down; the workflow ends. |
+| `current revise <proposal-id> -m <feedback>` | Send a proposal back. The agent produces a replacement; follows the workflow until it waits for review again. Must name the latest proposal. |
 | `current apply <proposal-id>` | Apply an approved proposal, verify its claims, follow it to the end. |
 | `current events <workflow-or-task-id>` | The chain: a workflow's events, in log order. |
 | `current proposal <proposal-id>` | A proposal in full: intents, claims, observations, artifacts. |
@@ -459,6 +474,7 @@ routes.
 | `GET /v1/proposals/:id/review` | The `current.review/v1` document (`?max_lines=&raw=true`) |
 | `POST /v1/proposals/:id/approve` | Record approval: `{"message", "reviewed_by"}` |
 | `POST /v1/proposals/:id/reject` | Turn the proposal down |
+| `POST /v1/proposals/:id/revise` | Send it back: `{"feedback", "reviewed_by"}`. `409 stale_proposal` if a newer proposal exists (`details.current_proposal_id`); `409 revision_limit_reached` when none are left |
 | `POST /v1/proposals/:id/apply` | Start applying an approved proposal |
 | `GET /v1/artifacts/:id` | An artifact's exact bytes |
 | `GET /v1/models`, `GET /v1/health` | The model catalog; whether the runtime is up |
@@ -526,6 +542,7 @@ vulnerabilities privately.
 | | Status |
 |---|---|
 | Request, review, approve, reject, apply from the CLI or HTTP | ✅ |
+| Bounded revision loop: a reviewer sends a proposal back with feedback | ✅ |
 | Request, proposal, approval and effects linked in one log | ✅ |
 | What the model read, and its raw replies, recorded with the proposal | ✅ |
 | Verified claims: a false claim fails the workflow | ✅ |
@@ -591,4 +608,5 @@ keep loading.
 ## License
 
 MIT
+
 

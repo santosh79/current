@@ -326,7 +326,8 @@ defmodule Current.CLITest do
     end
 
     test "a connection lost mid-command is an error, not a crash" do
-      refused = {:failed_connect, [{:to_address, {~c"localhost", 4000}}, {:inet, [:inet], :econnrefused}]}
+      refused =
+        {:failed_connect, [{:to_address, {~c"localhost", 4000}}, {:inet, [:inet], :econnrefused}]}
 
       failing = fn ->
         {:ok,

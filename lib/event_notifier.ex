@@ -30,6 +30,7 @@ defmodule Current.EventNotifier do
                  :proposal_production_failed,
                  :proposal_approved,
                  :proposal_rejected,
+                 :proposal_revision_requested,
                  :effect_application_started,
                  :effect_applied,
                  :effect_failed,
@@ -134,6 +135,7 @@ defmodule Current.EventNotifier do
   defp event_type(%Event.ProposalProductionFailed{}), do: :proposal_production_failed
   defp event_type(%Event.ProposalApproved{}), do: :proposal_approved
   defp event_type(%Event.ProposalRejected{}), do: :proposal_rejected
+  defp event_type(%Event.ProposalRevisionRequested{}), do: :proposal_revision_requested
   defp event_type(%Event.EffectApplicationStarted{}), do: :effect_application_started
   defp event_type(%Event.EffectApplied{}), do: :effect_applied
   defp event_type(%Event.EffectFailed{}), do: :effect_failed

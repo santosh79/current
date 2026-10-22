@@ -19,14 +19,21 @@ defmodule Current.Request do
     :model,
     mode: Current.Mode.default(),
     # nil: the runtime's own bound on producing a proposal.
-    timeout_ms: nil
+    timeout_ms: nil,
+    # nil for a first proposal. On a revision: every proposal so far and
+    # every round of reviewer feedback, oldest first. Built by
+    # WorkflowOrchestrator from the log; never persisted on its own.
+    revision: nil
   ]
+
+  @type revision :: %{previous: [Current.Proposal.t()], feedback: [String.t()]}
 
   @type t :: %__MODULE__{
           input: String.t() | map(),
           context: map(),
           model: Current.ModelCatalog.model_name(),
           mode: Current.Mode.t(),
-          timeout_ms: pos_integer() | nil
+          timeout_ms: pos_integer() | nil,
+          revision: revision() | nil
         }
 end

@@ -193,7 +193,7 @@ defmodule Current.Event.SchemaTest do
         assert %{proposal: %Current.Proposal{observations: [], justification: "old"}} =
                  migrated = Schema.migrate(module, raw)
 
-        assert migrated.version == version + 1
+        assert migrated.version == module.schema_version()
       end
     end
 

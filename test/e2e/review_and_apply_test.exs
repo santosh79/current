@@ -42,7 +42,7 @@ defmodule Current.E2E.ReviewAndApplyTest do
 
       assert {:ok, workflow} = Current.get_workflow(task_id)
       assert workflow.status == :rejected
-      assert workflow.proposal.id == proposal.id
+      assert Current.Workflow.current_proposal(workflow).id == proposal.id
       assert workflow.result == nil
       assert workflow.completed_at == nil
 
@@ -92,7 +92,7 @@ defmodule Current.E2E.ReviewAndApplyTest do
       assert {:ok, workflow} = Current.get_workflow(task_id)
       assert workflow.id == workflow_id
       assert workflow.status == :completed
-      assert workflow.proposal.id == proposal.id
+      assert Current.Workflow.current_proposal(workflow).id == proposal.id
       assert workflow.result != nil
     end
 

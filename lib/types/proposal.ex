@@ -7,7 +7,9 @@ defmodule Current.Proposal do
     :justification,
     :claims,
     :dependencies,
-    observations: []
+    observations: [],
+    revision: 0,
+    revises: nil
   ]
 
   @type t :: %__MODULE__{
@@ -23,7 +25,13 @@ defmodule Current.Proposal do
           # nothing. Ids only, never contents. Embedded here the way
           # intents are. Empty for a proposal produced without looking at
           # anything.
-          observations: [Current.Observation.t()]
+          observations: [Current.Observation.t()],
+          # 0 for the first proposal of a workflow; n for the proposal
+          # produced after the n-th revision request. Stamped by the
+          # orchestrator, never by the model.
+          revision: non_neg_integer(),
+          # The id of the proposal this one replaces, or nil for the first.
+          revises: Current.Id.t() | nil
         }
 
   @doc """
@@ -56,6 +64,12 @@ defmodule Current.Proposal do
   carry a proposal call this from their `upcast/2`.
   """
   @spec upcast(map() | nil) :: map() | nil
-  def upcast(%{__struct__: __MODULE__} = proposal), do: Map.put_new(proposal, :observations, [])
+  def upcast(%{__struct__: __MODULE__} = proposal) do
+    proposal
+    |> Map.put_new(:observations, [])
+    |> Map.put_new(:revision, 0)
+    |> Map.put_new(:revises, nil)
+  end
+
   def upcast(other), do: other
 end

@@ -6,6 +6,7 @@ defmodule Current.CLI do
       current run <prompt> --model <model> [--dir <project-dir>] [--timeout-minutes <n>]
       current approve <proposal-id> [--message <message>]
       current reject <proposal-id> [--message <message>]
+      current revise <proposal-id> --message <feedback>
       current apply <proposal-id>
       current events <workflow-id>
       current proposal <proposal-id>
@@ -32,7 +33,11 @@ defmodule Current.CLI do
   proposal is authorized and returns; the workflow parks in `approved`
   and nothing is applied. `apply` starts applying an approved proposal
   and follows the workflow to its end. `reject` ends a proposal that is
-  waiting for approval.
+  waiting for approval. `revise` sends it back instead: the message is the
+  feedback, the agent produces a replacement, and `revise` follows the
+  workflow until that replacement is waiting for approval. Every decision
+  must name the workflow's most recent proposal, and a workflow allows a
+  bounded number of revisions.
 
   The CLI holds no runtime state, so it can be interrupted at
   any point; the workflow carries on, and `current events <task-id>`
@@ -128,6 +133,9 @@ defmodule Current.CLI do
       ["reject" | rest] ->
         parse_decision(:reject, @default_rejection_message, rest)
 
+      ["revise" | rest] ->
+        parse_revision(rest)
+
       ["apply" | rest] ->
         parse_apply(rest)
 
@@ -207,6 +215,29 @@ defmodule Current.CLI do
     end
   end
 
+  # revise: a proposal id and the feedback, which is required -- there is
+  # no sensible default for what to change.
+  defp parse_revision(args) do
+    case OptionParser.parse(args,
+           strict: [message: :string, help: :boolean],
+           aliases: [m: :message, h: :help]
+         ) do
+      {opts, argv, []} ->
+        feedback = opts |> Keyword.get(:message, "") |> String.trim()
+
+        cond do
+          opts[:help] -> :help
+          argv == [] -> {:error, "revise needs a proposal id"}
+          length(argv) > 1 -> {:error, "revise takes exactly one proposal id"}
+          feedback == "" -> {:error, "revise needs --message <feedback>"}
+          true -> {:revise, String.trim(hd(argv)), feedback}
+        end
+
+      {_opts, _argv, [{flag, _value} | _]} ->
+        {:error, "invalid option #{flag}"}
+    end
+  end
+
   defp parse_apply(args) do
     case OptionParser.parse(args, strict: [help: :boolean], aliases: [h: :help]) do
       {opts, argv, []} ->
@@ -271,6 +302,7 @@ defmodule Current.CLI do
       current run <prompt> --model <model> [--dir <project-dir>] [--timeout-minutes <n>]
       current approve <proposal-id> [--message <message>]
       current reject <proposal-id> [--message <message>]
+      current revise <proposal-id> --message <feedback>
       current apply <proposal-id>
       current events <workflow-id>
       current proposal <proposal-id>
@@ -284,6 +316,7 @@ defmodule Current.CLI do
       run       Like plan, but in apply mode: stops for approval. Nothing is executed yet.
       approve   Authorize a proposal from run. Nothing is applied yet.
       reject    Turn down a proposal from run.
+      revise    Send a proposal back with feedback, and follow the new one.
       apply     Apply an approved proposal, and follow it to the end.
       events    A workflow's canonical event history (a task id works too).
       proposal  A proposal in full: intents, claims, artifacts.
@@ -299,7 +332,7 @@ defmodule Current.CLI do
       --timeout-minutes
                      plan and run: how long the agent may take to produce its
                      proposal, 1 to 60 (default: the runtime's own bound)
-      -m, --message  Message recorded by approve or reject
+      -m, --message  Message recorded by approve or reject; the feedback for revise
       --json         review: machine-readable output (schema current.review/v1)
       --max-lines    review: lines shown per artifact (default: #{@default_review_max_lines})
       --raw          review: include the model's raw output
@@ -349,6 +382,21 @@ defmodule Current.CLI do
 
       {:error, reason} ->
         fail(review_error(:reject, id, reason, client))
+    end
+  end
+
+  defp dispatch({:revise, id, feedback}, client) do
+    with {:ok, health} <- Client.health(client),
+         {:ok, workflow_id} <- Client.revise(client, id, review_metadata(feedback)) do
+      IO.puts("✓ Revision requested for #{id}\n  feedback  #{feedback}\n")
+
+      follow(client, workflow_id, health,
+        done?: &halted?/1,
+        expect: "waiting_for_approval",
+        started?: true
+      )
+    else
+      {:error, reason} -> fail(review_error(:revise, id, reason, client))
     end
   end
 
@@ -467,10 +515,25 @@ defmodule Current.CLI do
 
   ## approve, reject, apply
 
-  defp review_metadata(message), do: %{message: message, reviewed_by: reviewer()}
+  # `message` is the approval note, or for revise the feedback itself.
+  defp review_metadata(message),
+    do: %{message: message, feedback: message, reviewed_by: reviewer()}
 
   defp review_error(command, id, {:api_error, %{code: "not_apply_mode"} = error}, _client),
     do: not_apply_mode(command, id, error.details["mode"])
+
+  defp review_error(_command, id, {:api_error, %{code: "stale_proposal"} = error}, _client),
+    do: stale_message(id, error)
+
+  defp review_error(
+         :revise,
+         id,
+         {:api_error, %{code: "revision_limit_reached"} = error},
+         _client
+       ),
+       do:
+         "proposal #{id} can't be revised: #{error.message}. " <>
+           "Approve or reject it instead:\n  current approve #{id}\n  current reject #{id}"
 
   defp review_error(command, id, {:api_error, %{code: "invalid_transition"} = error}, _client),
     do:
@@ -480,12 +543,16 @@ defmodule Current.CLI do
   defp review_error(_command, id, reason, client),
     do: error_message("proposal", id, reason, client)
 
+  defp apply_error(id, {:api_error, %{code: "stale_proposal"} = error}, _client),
+    do: stale_message(id, error)
+
   defp apply_error(id, {:api_error, %{code: "not_apply_mode"} = error}, _client),
     do: not_apply_mode(:apply, id, error.details["mode"])
 
   defp apply_error(
          id,
-         {:api_error, %{code: "invalid_transition", details: %{"status" => "waiting_for_approval"}}},
+         {:api_error,
+          %{code: "invalid_transition", details: %{"status" => "waiting_for_approval"}}},
          _client
        ) do
     "proposal #{id} hasn't been approved yet. Approve it first:\n" <>
@@ -493,7 +560,8 @@ defmodule Current.CLI do
   end
 
   defp apply_error(id, {:api_error, %{code: "invalid_transition"} = error}, _client),
-    do: "proposal #{id} can't be applied: its workflow is #{error.details["status"]}, not approved"
+    do:
+      "proposal #{id} can't be applied: its workflow is #{error.details["status"]}, not approved"
 
   defp apply_error(id, reason, client), do: error_message("proposal", id, reason, client)
 
@@ -502,8 +570,18 @@ defmodule Current.CLI do
       "only proposals from `current run` can be #{past(command)}"
   end
 
+  # The runtime's reducer refused the decision because a newer proposal
+  # exists; this only says so, and where the newer one is.
+  defp stale_message(id, error) do
+    current = error.details["current_proposal_id"]
+
+    "proposal #{id} was superseded by #{Render.short(current)}. " <>
+      "Review the latest one:\n  current review #{Render.short(current)}"
+  end
+
   defp past(:approve), do: "approved"
   defp past(:reject), do: "rejected"
+  defp past(:revise), do: "revised"
   defp past(:apply), do: "applied"
 
   # Who ran the CLI -- not the runtime's user, which is whoever started
@@ -576,7 +654,10 @@ defmodule Current.CLI do
   defp observe(view, state) do
     started? =
       state.started? or
-        Enum.any?(view["entries"], &match?(%{"event" => %{"type" => "ProposalProductionStarted"}}, &1))
+        Enum.any?(
+          view["entries"],
+          &match?(%{"event" => %{"type" => "ProposalProductionStarted"}}, &1)
+        )
 
     if started? and not state.started?, do: IO.puts("  … waiting for the model")
 
@@ -664,7 +745,10 @@ defmodule Current.CLI do
   defp transport_error?(:runtime_unavailable), do: true
   defp transport_error?({:http_failed, _}), do: true
   defp transport_error?({:bad_response, _}), do: true
-  defp transport_error?({:api_error, %{code: code}}), do: code in ["runtime_error", "internal_error"]
+
+  defp transport_error?({:api_error, %{code: code}}),
+    do: code in ["runtime_error", "internal_error"]
+
   defp transport_error?(_reason), do: false
 
   defp transport_error(:runtime_unavailable, url),
