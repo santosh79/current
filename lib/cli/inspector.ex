@@ -31,8 +31,13 @@ defmodule Current.Inspector do
   @min_prefix_hex 4
 
   @review_max_lines 200
+  # The most lines per artifact a caller may ask a review for. Bounds the
+  # work and the size of the answer (the whole review gets 10x this).
+  @review_lines_cap 2_000
   # The whole review's line budget, as a multiple of the per-artifact cap.
   @review_budget_factor 10
+
+  @max_id_bytes 71
 
   @type lookup_error :: :not_found | :prefix_too_short | {:ambiguous, [Current.Id.t()]}
 
@@ -165,12 +170,15 @@ defmodule Current.Inspector do
   Current.Excerpt for how a cut is reported. With `raw: true` the model's
   raw output is included too, after everything else.
   """
-  @spec review(String.t(), review_opts()) :: {:ok, review_view()} | {:error, lookup_error()}
+  @spec review(String.t(), review_opts()) ::
+          {:ok, review_view()} | {:error, lookup_error() | {:bad_request, String.t()}}
   def review(id, opts \\ %{}) do
     max_lines = Map.get(opts, :max_lines, @review_max_lines)
-    max_total_lines = max_lines * @review_budget_factor
+    max_total_lines = if is_integer(max_lines), do: max_lines * @review_budget_factor
 
-    with {:ok, view} <- proposal(id) do
+    # The range is checked before anything is looked up.
+    with :ok <- check_max_lines(max_lines),
+         {:ok, view} <- proposal(id) do
       raw_id = if Map.get(opts, :raw, false), do: view.raw_output_blob_id
 
       {excerpts, _budget_left} =
@@ -190,6 +198,15 @@ defmodule Current.Inspector do
        })}
     end
   end
+
+  @doc "The largest `max_lines` a review accepts (the smallest is 1)."
+  @spec max_review_lines() :: pos_integer()
+  def max_review_lines, do: @review_lines_cap
+
+  defp check_max_lines(n) when is_integer(n) and n >= 1 and n <= @review_lines_cap, do: :ok
+
+  defp check_max_lines(_other),
+    do: {:error, {:bad_request, "max_lines must be a whole number from 1 to #{@review_lines_cap}"}}
 
   defp proposal_artifact_ids(%Proposal{intents: intents}) do
     Enum.flat_map(intents, fn
@@ -254,6 +271,9 @@ defmodule Current.Inspector do
       |> unique(fn {_workflow, proposal} -> proposal.id end)
     end
   end
+
+  defp normalize(id) when is_binary(id) and byte_size(id) > @max_id_bytes,
+    do: {:error, :not_found}
 
   # A bare hex prefix is taken to mean "sha256:<hex>".
   defp normalize("sha256:" <> hex = id) do

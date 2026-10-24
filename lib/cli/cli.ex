@@ -503,7 +503,7 @@ defmodule Current.CLI do
         fail("unknown model #{model}\nList the available models with:  current models")
 
       {:error, {:api_error, %{code: code, message: message}}}
-      when code in ["invalid_timeout", "model_required", "bad_request"] ->
+      when code in ["invalid_timeout", "model_required", "bad_request", "too_large"] ->
         fail(message)
 
       {:error, reason} ->
@@ -539,6 +539,9 @@ defmodule Current.CLI do
     do:
       "proposal #{id} can't be #{past(command)}: " <>
         "its workflow is #{error.details["status"]}, not waiting for approval"
+
+  defp review_error(_command, _id, {:api_error, %{code: "too_large", message: message}}, _client),
+    do: message
 
   defp review_error(_command, id, reason, client),
     do: error_message("proposal", id, reason, client)

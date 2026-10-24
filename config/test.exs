@@ -8,4 +8,8 @@ config :current,
     Current.TestOpenAIModelCatalogClient,
     Current.TestAnthropicModelCatalogClient
   ],
+  # No `input_limits` here on purpose: the suite as a whole runs with the
+  # production defaults, so unrelated tests never trip over a tiny limit.
+  # The tests that probe limits set their own, for their own duration only
+  # (see input_limits_integration_test.exs and mcp_integration_test.exs).
   data_dir: Path.join(System.tmp_dir!(), "current_test_#{System.os_time(:millisecond)}")
