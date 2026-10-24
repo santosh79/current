@@ -78,7 +78,7 @@ defmodule Current.RevisionReducerTest do
   end
 
   # created -> planning -> validating -> waiting_for_approval, with one proposal
-  defp waiting(p1 \\ proposal("p1"), opts \\ []),
+  defp waiting(p1, opts \\ []),
     do: [created(opts), started(1), produced(p1), validated(p1)]
 
   describe "a workflow's proposals" do

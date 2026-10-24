@@ -65,13 +65,15 @@ defmodule Current do
           {:ok, Current.Id.t()}
           | {:error, :model_required}
           | {:error, {:unknown_model, String.t()}}
+          | {:error, Current.InputLimits.error()}
           | {:error,
              {:invalid_project_dir, Path.t(),
               :parent_segment | :not_a_directory | :too_many_links}}
           | {:error, term()}
   def submit_task(%Request{model: model} = req, caller_pid, project_dir \\ ".")
       when is_pid(caller_pid) and is_binary(project_dir) do
-    with :ok <- validate_model(model),
+    with :ok <- Current.InputLimits.check_all(prompt: req.input, model: model, dir: project_dir),
+         :ok <- validate_model(model),
          :ok <- validate_timeout(req.timeout_ms),
          :ok <- validate_project_dir(project_dir),
          {:ok, canonical} <- canonical_project_dir(project_dir) do
@@ -181,9 +183,11 @@ defmodule Current do
           :ok
           | {:error, :not_found}
           | {:error, {:invalid_transition, Workflow.status(), module()}}
+          | {:error, Current.InputLimits.error()}
           | {:error, term()}
-  def review_proposal(proposal_id, decision) do
-    with {:ok, proposal} <- ProposalStore.get(proposal_id),
+  def review_proposal(proposal_id, {_verb, metadata} = decision) do
+    with :ok <- Current.InputLimits.check_metadata(metadata),
+         {:ok, proposal} <- ProposalStore.get(proposal_id),
          {:ok, workflow} <- WorkflowStore.get(proposal.workflow_id),
          event = decision_event(proposal, decision),
          {:ok, _next} <- WorkflowReducer.apply_event(workflow, event) do
@@ -212,9 +216,12 @@ defmodule Current do
           | {:error, :not_found}
           | {:error, {:stale_proposal, Current.Id.t(), Current.Id.t()}}
           | {:error, {:revision_limit_reached, non_neg_integer()}}
+          | {:error, Current.InputLimits.error()}
           | {:error, term()}
   def request_revision(proposal_id, feedback, metadata) do
-    with {:ok, proposal} <- ProposalStore.get(proposal_id),
+    with :ok <- Current.InputLimits.check(:feedback, feedback),
+         :ok <- Current.InputLimits.check_metadata(metadata),
+         {:ok, proposal} <- ProposalStore.get(proposal_id),
          {:ok, workflow} <- WorkflowStore.get(proposal.workflow_id),
          event = %Event.ProposalRevisionRequested{
            id: Id.generate(),

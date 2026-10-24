@@ -34,9 +34,9 @@ defmodule Current.API do
           {:ok, Current.Id.t()} | {:error, {:unknown_model, String.t()}} | {:error, term()}
   def submit_task(%Request{} = request, project_dir) when is_binary(project_dir) do
     ActivityHub.api(:submit_task, [
-      "#{request.mode} #{inspect(request.input)}",
-      project_dir,
-      "model #{request.model}"
+      "#{request.mode} #{preview(request.input)}",
+      clip(project_dir),
+      "model #{clip(request.model)}"
     ])
 
     # submit_task/3 wants a listener pid. This call's process exits as
@@ -48,15 +48,87 @@ defmodule Current.API do
     ActivityHub.api_result(
       :submit_task,
       case result do
-        {:ok, "sha256:" <> hex} -> "accepted as task " <> binary_part(hex, 0, 12)
-        {:ok, task_id} -> "accepted as task #{task_id}"
-        {:error, {:unknown_model, unknown}} -> "✗ rejected: unknown model #{unknown}"
-        {:error, {:invalid_project_dir, path, reason}} -> "✗ rejected: #{path} (#{reason})"
-        {:error, reason} -> "✗ failed: #{inspect(reason)}"
+        {:ok, "sha256:" <> hex} ->
+          "accepted as task " <> binary_part(hex, 0, 12)
+
+        {:ok, task_id} ->
+          "accepted as task #{task_id}"
+
+        {:error, {:unknown_model, unknown}} ->
+          "✗ rejected: unknown model #{String.slice(unknown, 0, 100)}"
+
+        {:error, {:too_large, field, size, max}} ->
+          "✗ rejected: #{field} is #{size} bytes (limit #{max})"
+
+        {:error, {:invalid_project_dir, path, reason}} ->
+          "✗ rejected: #{path} (#{reason})"
+
+        {:error, reason} ->
+          "✗ failed: #{inspect(reason)}"
       end
     )
 
     result
+  end
+
+  @doc """
+  `submit_task/2`, run in a short-lived process of its own, for callers
+  whose process lives on (an MCP request, a long-lived connection).
+
+  `submit_task/2` registers its calling process as the task's listener,
+  and notifications for the task go to that pid. Run from a worker that
+  exits as soon as it has answered, they are dropped, and nothing from
+  the task ever reaches the caller's mailbox. Clients follow progress by
+  polling.
+
+  The worker is monitored, not linked, so its crash can't take the caller
+  down. It sends exactly one tagged result message. The caller accepts
+  either order of that message and the monitor's `:DOWN`, so it does not
+  depend on which arrives first.
+
+  Returns what `submit_task/2` returns, or `{:error, :submit_timeout}` if
+  there is no answer within `timeout_ms` (the worker is then killed), or
+  `{:error, {:submit_crashed, reason}}` if the worker died without one.
+  """
+  @spec submit_task_isolated(Request.t(), Path.t(), timeout()) ::
+          {:ok, Current.Id.t()}
+          | {:error, :submit_timeout}
+          | {:error, {:submit_crashed, term()}}
+          | {:error, term()}
+  def submit_task_isolated(%Request{} = request, project_dir, timeout_ms \\ 30_000)
+      when is_binary(project_dir) do
+    parent = self()
+    tag = make_ref()
+
+    {pid, monitor} =
+      spawn_monitor(fn -> send(parent, {tag, submit_task(request, project_dir)}) end)
+
+    receive do
+      {^tag, result} ->
+        Process.demonitor(monitor, [:flush])
+        result
+
+      {:DOWN, ^monitor, :process, ^pid, reason} ->
+        # The result may already be in the mailbox behind the :DOWN.
+        receive do
+          {^tag, result} -> result
+        after
+          0 -> {:error, {:submit_crashed, reason}}
+        end
+    after
+      timeout_ms ->
+        Process.exit(pid, :kill)
+        Process.demonitor(monitor, [:flush])
+
+        # It may have answered just as the timeout fired.
+        receive do
+          {^tag, _result} -> :ok
+        after
+          0 -> :ok
+        end
+
+        {:error, :submit_timeout}
+    end
   end
 
   @doc """
@@ -156,7 +228,7 @@ defmodule Current.API do
   # Resolves the proposal, requires an :apply workflow, runs `fun`, and
   # records the request and its outcome in the activity log.
   defp logged(function, proposal_id, ok_text, fun) do
-    ActivityHub.api(function, [proposal_id])
+    ActivityHub.api(function, [clip(proposal_id)])
 
     result =
       with {:ok, ref} <- Inspector.resolve_proposal(proposal_id),
@@ -184,7 +256,7 @@ defmodule Current.API do
   @spec workflow(String.t()) ::
           {:ok, Inspector.workflow_view()} | {:error, Inspector.lookup_error()}
   def workflow(id) do
-    ActivityHub.api(:workflow, [id])
+    ActivityHub.api(:workflow, [clip(id)])
     Inspector.workflow(id)
   end
 
@@ -192,7 +264,7 @@ defmodule Current.API do
   @spec proposal(String.t()) ::
           {:ok, Inspector.proposal_view()} | {:error, Inspector.lookup_error()}
   def proposal(id) do
-    ActivityHub.api(:proposal, [id])
+    ActivityHub.api(:proposal, [clip(id)])
     Inspector.proposal(id)
   end
 
@@ -203,14 +275,14 @@ defmodule Current.API do
   @spec review(String.t(), Inspector.review_opts()) ::
           {:ok, Inspector.review_view()} | {:error, Inspector.lookup_error()}
   def review(id, opts) when is_binary(id) and is_map(opts) do
-    ActivityHub.api(:review, [id])
+    ActivityHub.api(:review, [clip(id)])
     Inspector.review(id, opts)
   end
 
   @doc "An artifact's full id and exact bytes."
   @spec artifact(String.t()) :: {:ok, Current.Id.t(), binary()} | {:error, term()}
   def artifact(id) do
-    ActivityHub.api(:artifact, [id])
+    ActivityHub.api(:artifact, [clip(id)])
     Inspector.artifact(id)
   end
 
@@ -282,6 +354,25 @@ defmodule Current.API do
       {:ok, commit} -> commit.index
       :empty -> 0
     end
+  end
+
+  # Anything a caller supplies is cut before it is logged, so a huge id or
+  # path can't flood the activity log (the value itself is validated, and
+  # refused if need be, later by the runtime).
+  defp clip(value, max \\ 100)
+
+  defp clip(value, max) when is_binary(value) do
+    case String.split_at(value, max) do
+      {head, ""} -> head
+      {head, _rest} -> head <> "…"
+    end
+  end
+
+  defp clip(value, max), do: value |> inspect(limit: 5, printable_limit: max) |> clip(max)
+
+  defp preview(input) do
+    text = inspect(input, limit: 20, printable_limit: 200)
+    if String.length(text) > 200, do: String.slice(text, 0, 200) <> "…", else: text
   end
 
   defp version do

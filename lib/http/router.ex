@@ -68,11 +68,15 @@ defmodule Current.HTTP.Router do
 
   plug(:match)
 
+  # Transport checks for /mcp (Origin, MCP-Protocol-Version, Content-Type).
+  # Must run before the body is parsed; it ignores every other path.
+  plug(Current.HTTP.MCPGuard)
+
   plug(Plug.Parsers,
     parsers: [:json],
     pass: ["application/json"],
     json_decoder: JSON,
-    length: 1_000_000
+    length: 262_144
   )
 
   plug(:dispatch)
@@ -216,8 +220,52 @@ defmodule Current.HTTP.Router do
     json(conn, 200, API.health())
   end
 
+  ## MCP (Model Context Protocol, Streamable HTTP transport)
+
+  post "/mcp" do
+    case conn.body_params do
+      # Batches (and any other non-object body, which Plug.Parsers wraps
+      # under "_json") are not supported in protocol revision 2025-06-18.
+      %{"_json" => _} ->
+        send_json(conn, 400, mcp_invalid_request())
+
+      %{} = message when map_size(message) > 0 ->
+        case Current.MCP.handle(message) do
+          {:reply, reply} -> send_json(conn, 200, reply)
+          :accepted -> send_resp(conn, 202, "")
+          {:invalid, reply} -> send_json(conn, 400, reply)
+        end
+
+      _ ->
+        send_json(conn, 400, mcp_invalid_request())
+    end
+  end
+
+  # This server never opens a server-to-client stream or a session.
+  match "/mcp" do
+    conn
+    |> put_resp_header("allow", "POST")
+    |> send_resp(405, "")
+  end
+
   match _ do
     error(conn, 404, "not_found", "no such route")
+  end
+
+  @impl Plug.ErrorHandler
+  def handle_errors(conn, %{reason: %Plug.Parsers.RequestTooLargeError{}}),
+    do: error(conn, 413, "request_too_large", "the request body is too large")
+
+  def handle_errors(conn, %{reason: %Plug.Parsers.ParseError{}}) do
+    if conn.request_path == "/mcp" do
+      send_json(conn, 400, %{
+        jsonrpc: "2.0",
+        id: nil,
+        error: %{code: -32700, message: "Parse error"}
+      })
+    else
+      error(conn, 400, "bad_request", "the request body is not valid JSON")
+    end
   end
 
   # Anything that escapes a route is a bug here, not the caller's fault.
@@ -367,6 +415,14 @@ defmodule Current.HTTP.Router do
      %{status: status}}
   end
 
+  defp describe_error({:too_large, field, size, max}) do
+    {422, "too_large", "#{field} is #{size} bytes; the limit is #{max}",
+     %{field: field, size: size, max: max}}
+  end
+
   defp describe_error(other),
     do: {502, "runtime_error", inspect(other), nil}
+
+  defp mcp_invalid_request,
+    do: %{jsonrpc: "2.0", id: nil, error: %{code: -32600, message: "Invalid Request"}}
 end
