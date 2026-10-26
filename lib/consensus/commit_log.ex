@@ -68,7 +68,7 @@ defmodule Current.Consensus.Log do
   held in memory and replayed from the first segment. Bounding that needs
   snapshots/checkpoints, a separate change.
 
-  See `docs/commit_log.md` for why `:disk_log`'s `:wrap` and `:rotate` types
+  See `docs/commit_log_design_notes.md` for why `:disk_log`'s `:wrap` and `:rotate` types
   are not used, and for a caveat about `Commit.hash/1`.
   """
 

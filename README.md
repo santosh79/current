@@ -291,7 +291,7 @@ the record.
 
 **Requirements**
 
-- Elixir 1.18+ on Erlang/OTP 27+
+- Elixir 1.19+ on Erlang/OTP 27+
 - `bash` on your `PATH` (used when running commands)
 - An API key for OpenAI (`OPENAI_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), or both
 
