@@ -206,7 +206,8 @@ defmodule Current.Inspector do
   defp check_max_lines(n) when is_integer(n) and n >= 1 and n <= @review_lines_cap, do: :ok
 
   defp check_max_lines(_other),
-    do: {:error, {:bad_request, "max_lines must be a whole number from 1 to #{@review_lines_cap}"}}
+    do:
+      {:error, {:bad_request, "max_lines must be a whole number from 1 to #{@review_lines_cap}"}}
 
   defp proposal_artifact_ids(%Proposal{intents: intents}) do
     Enum.flat_map(intents, fn
