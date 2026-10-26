@@ -355,7 +355,10 @@ defmodule Current.LLMProposalBuilder do
       Request: #{inspect(input)}
       Context: #{inspect(context)}
       #{render_revision(req.revision, project_dir)}
-      You have not been shown any file contents yet.
+      You have not been shown any file contents yet. Before your next reply, plan
+      which files the change depends on: if you need to look at the project, ask
+      for the relevant files together in one context request rather than one at a
+      time, since the conversation is re-sent with every round.
 
       #{render_turn(@max_observe_rounds)}
       """
@@ -589,8 +592,32 @@ defmodule Current.LLMProposalBuilder do
       not take directories.
     - The runtime runs them and asks you again with the results added
       below. Nothing else happens: a context request changes nothing.
-    - Ask for everything you expect to need at once. The number of context
-      requests and the amount of text you can be shown are both limited.
+    - Be deliberate about context. Each context request is another model call
+      that re-sends the whole conversation so far, including every file already
+      shown, so the transcript grows with every round. (Provider prompt caching
+      may reduce what is actually billed, but the transcript still grows.) Plan
+      before you ask, and batch the context you can already tell is relevant
+      into one request. Aim to gather sufficient context in as few rounds as
+      practical; use additional rounds when correctness requires them.
+    - When you plan a request, think through what the change touches: the
+      files you will edit; the files that directly call or are called by them;
+      related tests; and config, types, schemas or docs the change must stay
+      consistent with. Include these together rather than discovering them one
+      round at a time.
+    - Use grep when the change alters an interface, renames something, or may
+      affect references you cannot see from the files already requested; list
+      the files where such references could appear. Do not grep for names the
+      change will not affect.
+    - Prefer read_file on paths you can already see in the layout over a glob
+      followed by reads. Use glob for files the layout does not list. Avoid
+      speculative reads of large files that are unlikely to matter; ask for
+      them in a later round only if the results show you need them.
+    - Ask again for what the results show you could not have known to ask for
+      (for example a file a result revealed), and never re-request something
+      you have already been shown. Do not stop investigating before you have
+      what you need to propose correct work.
+    - The number of context requests and the amount of text you can be shown
+      are both limited.
     - Only edit or rely on files whose contents you have been shown.
       Their contents appear below as <file path="...">...</file>.
     """
@@ -615,7 +642,9 @@ defmodule Current.LLMProposalBuilder do
 
   defp render_turn(rounds_left) do
     "You may make #{rounds_left} more context request(s). " <>
-      "Reply with a context request, or with the proposal if you have what you need."
+      "Reply with a context request, or with the proposal if you have what you need. " <>
+      "If you do ask again, ask for everything still missing in that one reply, " <>
+      "since the conversation is re-sent with every round."
   end
 
   ## --- edit_file rules ------------------------------------------------------
