@@ -266,25 +266,27 @@ defmodule Current.WorkflowReducer do
     end
   end
 
-  defp ensure_lineage(nil, %{revision: 0, revises: nil}), do: :ok
+  defp ensure_lineage(nil, %Current.Proposal{revision: 0, revises: nil}), do: :ok
 
-  defp ensure_lineage(nil, p) do
+  defp ensure_lineage(nil, %Current.Proposal{} = p) do
     {:error, {:invalid_proposal_lineage, %{new_revision: p.revision, new_revises: p.revises}}}
   end
 
-  defp ensure_lineage(tail, p) do
-    if p.id != tail.id and p.revises == tail.id and p.revision == tail.revision + 1 do
-      :ok
-    else
-      {:error,
-       {:invalid_proposal_lineage,
-        %{
-          tail_id: tail.id,
-          tail_revision: tail.revision,
-          new_id: p.id,
-          new_revision: p.revision,
-          new_revises: p.revises
-        }}}
+  defp ensure_lineage(%Current.Proposal{} = tail, %Current.Proposal{} = p) do
+    case p.id != tail.id and p.revises == tail.id and p.revision == tail.revision + 1 do
+      true ->
+        :ok
+
+      _ ->
+        {:error,
+         {:invalid_proposal_lineage,
+          %{
+            tail_id: tail.id,
+            tail_revision: tail.revision,
+            new_id: p.id,
+            new_revision: p.revision,
+            new_revises: p.revises
+          }}}
     end
   end
 
