@@ -43,7 +43,7 @@ defmodule Current.LLMIntegration.TLSHostnameTest do
       assert {:ok, value} = call(provider, operation)
 
       case operation do
-        :complete -> assert value == "hello"
+        :complete -> assert value == %{text: "hello", usage: nil}
         :list_models -> assert value == ["m1"]
       end
 

@@ -90,6 +90,8 @@ defmodule Current.LLMProposalBuilder do
           project: project,
           messages: initial_messages(req, project, project_dir),
           observations: [],
+          calls: 0,
+          cumulative_usage: nil,
           rounds_left: @max_observe_rounds,
           repairs_left: @max_repairs,
           budget: @context_budget_bytes
@@ -146,8 +148,23 @@ defmodule Current.LLMProposalBuilder do
            state.call_timeout_ms,
            state.request.model
          ) do
-      {:ok, raw} ->
-        handle_reply(raw, %{state | messages: append_message(state.messages, :assistant, raw)})
+      {:ok, %{text: raw, usage: usage}} ->
+        calls = state.calls + 1
+        cumulative_usage = add_usage(state.cumulative_usage, usage)
+
+        ActivityHub.llm_responded(
+          state.workflow_id,
+          calls,
+          usage,
+          cumulative_usage
+        )
+
+        handle_reply(raw, %{
+          state
+          | messages: append_message(state.messages, :assistant, raw),
+            calls: calls,
+            cumulative_usage: cumulative_usage
+        })
 
       {:error, :timeout} ->
         {:error,
@@ -507,6 +524,27 @@ defmodule Current.LLMProposalBuilder do
 
   defp append_message(messages, role, content) do
     messages ++ [%{role: role, content: content}]
+  end
+
+  defp add_usage(cumulative, nil), do: cumulative
+  defp add_usage(nil, usage), do: usage
+
+  defp add_usage(left, right) do
+    %{
+      input_tokens: left.input_tokens + right.input_tokens,
+      output_tokens: left.output_tokens + right.output_tokens,
+      total_tokens: left.total_tokens + right.total_tokens
+    }
+    |> add_optional_usage(left, right, :cache_creation_input_tokens)
+    |> add_optional_usage(left, right, :cache_read_input_tokens)
+  end
+
+  defp add_optional_usage(cumulative, left, right, key) do
+    if Map.has_key?(left, key) or Map.has_key?(right, key) do
+      Map.put(cumulative, key, Map.get(left, key, 0) + Map.get(right, key, 0))
+    else
+      cumulative
+    end
   end
 
   defp observation_message(texts, rounds_left) do

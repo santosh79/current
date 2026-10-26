@@ -31,6 +31,22 @@ defmodule Current.ActivityHubTest do
                     }}
   end
 
+  test "model response activity carries optional per-call and cumulative usage" do
+    wf = wf()
+    usage = %{input_tokens: 100, output_tokens: 20, total_tokens: 120}
+    cumulative = %{input_tokens: 250, output_tokens: 50, total_tokens: 300}
+
+    :ok = ActivityHub.llm_responded(wf, 2, usage, cumulative)
+    :ok = ActivityHub.llm_responded(wf, 3, nil, cumulative)
+
+    assert %{
+             items: [
+               %{type: :llm_response, call: 2, usage: ^usage, cumulative: ^cumulative},
+               %{type: :llm_response, call: 3, usage: nil, cumulative: ^cumulative}
+             ]
+           } = ActivityHub.activity(wf)
+  end
+
   test "a poller gets only what came after the sequence number it last saw" do
     wf = wf()
     request(wf, 1)

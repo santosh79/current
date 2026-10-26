@@ -23,7 +23,8 @@ defmodule Current.FakeLLMClient do
 
   @key {__MODULE__, :response}
 
-  @type response :: {:ok, String.t()} | {:error, term()} | :hang
+  @type response ::
+          {:ok, String.t() | Current.LLMClient.completion()} | {:error, term()} | :hang
 
   @spec set_response(response() | ([Current.LLMClient.message()] -> response())) :: :ok
   def set_response(response) do
@@ -43,5 +44,6 @@ defmodule Current.FakeLLMClient do
   end
 
   defp respond(:hang), do: Process.sleep(:infinity)
+  defp respond({:ok, text}) when is_binary(text), do: {:ok, %{text: text, usage: nil}}
   defp respond(response), do: response
 end

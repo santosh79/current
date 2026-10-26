@@ -246,6 +246,35 @@ defmodule Current.CLI.Render do
     ]
   end
 
+  def activity(%{
+        "type" => "llm_response",
+        "call" => call,
+        "usage" => %{} = usage,
+        "cumulative" => %{} = cumulative
+      }) do
+    [
+      "  … model response #{call}: #{usage["input_tokens"]} input · " <>
+        "#{usage["output_tokens"]} output · #{usage["total_tokens"]} tokens " <>
+        "(conversation #{cumulative["total_tokens"]} tokens)"
+    ]
+  end
+
+  def activity(%{
+        "type" => "llm_response",
+        "call" => call,
+        "usage" => nil,
+        "cumulative" => %{} = cumulative
+      }) do
+    [
+      "  … model response #{call}: token usage unavailable " <>
+        "(conversation #{cumulative["total_tokens"]} tokens)"
+    ]
+  end
+
+  def activity(%{"type" => "llm_response", "call" => call, "usage" => nil}) do
+    ["  … model response #{call}: token usage unavailable"]
+  end
+
   def activity(%{"type" => "settled", "entries" => entries}) do
     Enum.map(entries, fn
       %{"status" => "shown", "label" => label, "bytes" => bytes} ->

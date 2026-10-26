@@ -9,16 +9,17 @@ defmodule Current.ActivityHub do
       keeps the small amount of per-workflow bookkeeping the console needs:
       which task a workflow belongs to, when production started, when the
       task began;
-    * what a model is shown while it works out its proposal. Each round of
-      context requests is reported by Current.LLMProposalBuilder, tagged
-      with its workflow id, twice: when the model has asked
-      (`observe_requested/3`) and when the runtime has settled each
-      request as shown or refused (`observe_settled/3`).
+    * model conversation progress while it works out a proposal. Every
+      successful model response reports its optional per-call usage and the
+      conversation's cumulative known usage. Each context round is also
+      reported twice: when the model asks (`observe_requested/3`) and when
+      the runtime settles each request (`observe_settled/3`).
 
   It accepts subscribers (`subscribe/2`) and tells each of them when
   something changed, as a delta rather than the whole state:
 
       {:activity, workflow_id, %{type: :commit, ...}}
+      {:activity, workflow_id, %{type: :llm_response, call: 1, usage: ..., ...}}
       {:activity, workflow_id, %{type: :requested | :settled, round: 1, ...}}
       {:activity, nil,         %{type: :api | :api_result, ...}}
 
@@ -140,6 +141,17 @@ defmodule Current.ActivityHub do
     GenServer.cast(__MODULE__, {:observe, workflow_id, :settled, round, entries})
   end
 
+  @doc "Reports optional token usage for one model response and the conversation so far."
+  @spec llm_responded(
+          Current.Id.t(),
+          pos_integer(),
+          Current.LLMClient.usage() | nil,
+          Current.LLMClient.usage() | nil
+        ) :: :ok
+  def llm_responded(workflow_id, call, usage, cumulative) do
+    GenServer.cast(__MODULE__, {:llm_response, workflow_id, call, usage, cumulative})
+  end
+
   @doc "Records an API request. `detail` is a list of already-formatted lines."
   @spec api(atom(), [String.t()]) :: :ok
   def api(function, detail \\ []) do
@@ -248,6 +260,25 @@ defmodule Current.ActivityHub do
     workflow = Map.get(state.workflows, workflow_id, new_workflow())
     seq = workflow.seq + 1
     item = %{seq: seq, round: round, type: type, entries: entries}
+
+    workflow = %{workflow | seq: seq, items: Enum.take([item | workflow.items], @max_items)}
+    state = put_workflow(state, workflow_id, workflow)
+
+    notify(state, workflow_id, Map.put(item, :task_id, workflow.task_id))
+    {:noreply, state}
+  end
+
+  def handle_cast({:llm_response, workflow_id, call, usage, cumulative}, state) do
+    workflow = Map.get(state.workflows, workflow_id, new_workflow())
+    seq = workflow.seq + 1
+
+    item = %{
+      seq: seq,
+      type: :llm_response,
+      call: call,
+      usage: usage,
+      cumulative: cumulative
+    }
 
     workflow = %{workflow | seq: seq, items: Enum.take([item | workflow.items], @max_items)}
     state = put_workflow(state, workflow_id, workflow)

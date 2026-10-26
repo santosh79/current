@@ -127,7 +127,12 @@ defmodule Current.E2E.LLMProposalTest do
         :counters.add(calls, 1, 1)
         n = :counters.get(calls, 1)
         send(test_pid, {:messages, n, messages})
-        {:ok, Enum.at(replies, n - 1, List.last(replies))}
+        reply = Enum.at(replies, n - 1, List.last(replies))
+
+        case reply do
+          {text, usage} -> {:ok, %{text: text, usage: usage}}
+          text -> {:ok, text}
+        end
       end)
     end
 
@@ -169,6 +174,38 @@ defmodule Current.E2E.LLMProposalTest do
       await(:workflow_completed, workflow_id)
       assert {:ok, :planned} = Current.get_status(task_id)
       refute_received {:messages, 3, _}
+    end
+
+    test "usage accumulates through repair and observation rounds while missing usage is skipped",
+         %{project: project} do
+      first_usage = %{input_tokens: 100, output_tokens: 10, total_tokens: 110}
+      third_usage = %{input_tokens: 300, output_tokens: 30, total_tokens: 330}
+
+      script([
+        {"not json", first_usage},
+        {@observe_signup, nil},
+        {@proposal, third_usage}
+      ])
+
+      workflow_id = submit!([mode: :plan], project) |> await_workflow_created()
+
+      assert List.last(messages!(2)).content =~ "Your previous reply could not be used"
+      messages!(3)
+
+      await(:workflow_completed, workflow_id)
+      assert %{items: activity} = Current.ActivityHub.activity(workflow_id)
+
+      assert [first, unavailable, third] =
+               Enum.filter(activity, &(&1.type == :llm_response))
+
+      assert %{call: 1, usage: ^first_usage, cumulative: ^first_usage} = first
+      assert %{call: 2, usage: nil, cumulative: ^first_usage} = unavailable
+
+      assert %{
+               call: 3,
+               usage: ^third_usage,
+               cumulative: %{input_tokens: 400, output_tokens: 40, total_tokens: 440}
+             } = third
     end
 
     test "is told, before anything else, that it replies with one of two shapes",
@@ -345,7 +382,7 @@ defmodule Current.E2E.LLMProposalTest do
 
     error = production_error(workflow_id)
     assert error.stage == :internal
-    assert error.reason =~ "FunctionClauseError"
+    assert error.reason =~ "CaseClauseError"
     assert error.reason =~ " at "
 
     # Recorded as a failure -- not an orchestrator crash that gets retried.

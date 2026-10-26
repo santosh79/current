@@ -38,6 +38,42 @@ defmodule Current.CLI.RenderTest do
     }
   end
 
+  test "live activity shows per-response and conversation token usage" do
+    counted = %{
+      "type" => "llm_response",
+      "call" => 1,
+      "usage" => %{"input_tokens" => 120, "output_tokens" => 30, "total_tokens" => 150},
+      "cumulative" => %{
+        "input_tokens" => 120,
+        "output_tokens" => 30,
+        "total_tokens" => 150
+      }
+    }
+
+    unavailable = %{
+      "type" => "llm_response",
+      "call" => 2,
+      "usage" => nil,
+      "cumulative" => counted["cumulative"]
+    }
+
+    assert Render.activity(counted) == [
+             "  … model response 1: 120 input · 30 output · 150 tokens " <>
+               "(conversation 150 tokens)"
+           ]
+
+    assert Render.activity(unavailable) == [
+             "  … model response 2: token usage unavailable (conversation 150 tokens)"
+           ]
+
+    assert Render.activity(%{
+             "type" => "llm_response",
+             "call" => 1,
+             "usage" => nil,
+             "cumulative" => nil
+           }) == ["  … model response 1: token usage unavailable"]
+  end
+
   test "a grep claim shows the observed match count against the condition" do
     grep = %Intent.Grep{id: "g", proposal_id: "p", pattern: "minLength", paths: ["lib/auth.ts"]}
 

@@ -22,7 +22,7 @@ defmodule Current.LLMClient.OpenAI do
     with {:ok, api_key} <- api_key(),
          {:ok, body} <- encode_request(messages, model),
          {:ok, response} <- request(api_key, body, timeout_ms) do
-      extract_text(response)
+      decode_response(response)
     end
   end
 
@@ -82,11 +82,12 @@ defmodule Current.LLMClient.OpenAI do
       {:error, {:request_encode_failed, Exception.message(error)}}
   end
 
-  defp extract_text(body) do
+  @doc false
+  def decode_response(body) do
     with {:ok, response} <- JSON.decode(body),
          {:ok, output} <- fetch_output(response),
          text when text != "" <- output_text(output) do
-      {:ok, text}
+      {:ok, %{text: text, usage: normalize_usage(response["usage"])}}
     else
       {:error, reason} ->
         {:error, reason}
@@ -95,6 +96,18 @@ defmodule Current.LLMClient.OpenAI do
         {:error, :no_output_text}
     end
   end
+
+  defp normalize_usage(%{
+         "input_tokens" => input,
+         "output_tokens" => output,
+         "total_tokens" => total
+       })
+       when is_integer(input) and input >= 0 and is_integer(output) and output >= 0 and
+              is_integer(total) and total >= 0 do
+    %{input_tokens: input, output_tokens: output, total_tokens: total}
+  end
+
+  defp normalize_usage(_usage), do: nil
 
   defp fetch_output(%{"output" => output}) when is_list(output) do
     {:ok, output}

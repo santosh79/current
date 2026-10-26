@@ -40,14 +40,16 @@ defmodule Current.E2E.ActivityTest do
 
     assert %{
              epoch: epoch,
-             last_seq: 2,
+             last_seq: 4,
              items: [
+               %{type: :llm_response, call: 1, seq: 1},
                %{type: :requested, round: 1, entries: [%{label: "read_file lib/a.ex"}]},
-               %{type: :settled, round: 1, entries: [%{status: :shown, bytes: bytes}]}
+               %{type: :settled, round: 1, entries: [%{status: :shown, bytes: bytes}]},
+               %{type: :llm_response, call: 2, seq: 4}
              ]
            } = Current.API.activity(workflow_id)
 
     assert bytes > 0
-    assert %{items: [], last_seq: 2} = Current.API.activity(workflow_id, epoch, 2)
+    assert %{items: [], last_seq: 4} = Current.API.activity(workflow_id, epoch, 4)
   end
 end

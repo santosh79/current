@@ -27,7 +27,7 @@ defmodule Current.LLMClient.Anthropic do
     with {:ok, api_key} <- api_key(),
          {:ok, body} <- encode_request(messages, model),
          {:ok, response} <- request(api_key, body, timeout_ms) do
-      extract_text(response)
+      decode_response(response)
     end
   end
 
@@ -99,17 +99,55 @@ defmodule Current.LLMClient.Anthropic do
       {:error, {:request_encode_failed, Exception.message(error)}}
   end
 
-  defp extract_text(body) do
+  @doc false
+  def decode_response(body) do
     with {:ok, response} <- JSON.decode(body),
          {:ok, content} <- fetch_content(response),
          text when text != "" <- content_text(content) do
-      {:ok, text}
+      {:ok, %{text: text, usage: normalize_usage(response["usage"])}}
     else
       {:error, reason} ->
         {:error, reason}
 
       "" ->
         {:error, :no_output_text}
+    end
+  end
+
+  defp normalize_usage(%{"input_tokens" => input, "output_tokens" => output} = usage)
+       when is_integer(input) and input >= 0 and is_integer(output) and output >= 0 do
+    with {:ok, cache_creation} <- optional_count(usage, "cache_creation_input_tokens"),
+         {:ok, cache_read} <- optional_count(usage, "cache_read_input_tokens") do
+      aggregate_input = input + cache_creation + cache_read
+
+      %{
+        input_tokens: aggregate_input,
+        output_tokens: output,
+        total_tokens: aggregate_input + output
+      }
+      |> put_optional_count(usage, "cache_creation_input_tokens", cache_creation)
+      |> put_optional_count(usage, "cache_read_input_tokens", cache_read)
+    else
+      :error -> nil
+    end
+  end
+
+  defp normalize_usage(_usage), do: nil
+
+  defp optional_count(usage, key) do
+    case Map.fetch(usage, key) do
+      :error -> {:ok, 0}
+      {:ok, count} when is_integer(count) and count >= 0 -> {:ok, count}
+      {:ok, _invalid} -> :error
+    end
+  end
+
+  defp put_optional_count(normalized, source, source_key, count) do
+    if Map.has_key?(source, source_key) do
+      normalized_key = String.to_existing_atom(source_key)
+      Map.put(normalized, normalized_key, count)
+    else
+      normalized
     end
   end
 
