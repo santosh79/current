@@ -1,16 +1,14 @@
 defmodule Current.LLMClient.Anthropic do
   @behaviour Current.LLMClient
 
-  alias Current.LLMClient.Messages
+  alias Current.LLMClient.{HTTP, Messages}
 
-  @endpoint "https://api.anthropic.com/v1/messages"
-  @models_endpoint "https://api.anthropic.com/v1/models"
+  @base_url "https://api.anthropic.com/v1"
 
   @api_version "2023-06-01"
 
   # Required by the Messages API. Proposals carry full diffs inline.
   @max_tokens 16_000
-  @connect_timeout_ms 10_000
 
   @impl true
   def provider(), do: "anthropic"
@@ -33,7 +31,7 @@ defmodule Current.LLMClient.Anthropic do
     end
   end
 
-  # Read per call: the key is the only "state" this client has.
+  # Read per call, like the configured base URL.
   defp api_key do
     case System.get_env("ANTHROPIC_API_KEY") do
       key when key in [nil, ""] -> {:error, :missing_anthropic_api_key}
@@ -47,26 +45,8 @@ defmodule Current.LLMClient.Anthropic do
       {~c"anthropic-version", String.to_charlist(@api_version)}
     ]
 
-    case :httpc.request(
-           :get,
-           {String.to_charlist(@models_endpoint), headers},
-           [
-             connect_timeout: min(@connect_timeout_ms, timeout_ms),
-             timeout: timeout_ms
-           ],
-           body_format: :binary
-         ) do
-      {:ok, {{_http_version, status, _reason}, _headers, body}} when status in 200..299 ->
-        {:ok, body}
-
-      {:ok, {{_http_version, status, _reason}, _headers, body}} ->
-        {:error, {:http_error, status, body}}
-
-      {:error, :timeout} ->
-        {:error, :timeout}
-
-      {:error, reason} ->
-        {:error, {:http_error, reason}}
+    with {:ok, endpoint} <- HTTP.endpoint(__MODULE__, @base_url, "/models") do
+      HTTP.request(:get, {endpoint, headers}, timeout_ms)
     end
   end
 
@@ -96,32 +76,8 @@ defmodule Current.LLMClient.Anthropic do
       {~c"anthropic-version", String.to_charlist(@api_version)}
     ]
 
-    case :httpc.request(
-           :post,
-           {
-             String.to_charlist(@endpoint),
-             headers,
-             ~c"application/json",
-             body
-           },
-           [
-             connect_timeout: min(@connect_timeout_ms, timeout_ms),
-             timeout: timeout_ms
-           ],
-           body_format: :binary
-         ) do
-      {:ok, {{_version, status, _reason}, _headers, body}}
-      when status in 200..299 ->
-        {:ok, body}
-
-      {:ok, {{_version, status, _reason}, _headers, body}} ->
-        {:error, {:http_error, status, body}}
-
-      {:error, :timeout} ->
-        {:error, :timeout}
-
-      {:error, reason} ->
-        {:error, {:http_error, reason}}
+    with {:ok, endpoint} <- HTTP.endpoint(__MODULE__, @base_url, "/messages") do
+      HTTP.request(:post, {endpoint, headers, ~c"application/json", body}, timeout_ms)
     end
   end
 

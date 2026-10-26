@@ -1,11 +1,9 @@
 defmodule Current.LLMClient.OpenAI do
   @behaviour Current.LLMClient
 
-  alias Current.LLMClient.Messages
+  alias Current.LLMClient.{HTTP, Messages}
 
-  @connect_timeout_ms 10_000
-  @models_endpoint "https://api.openai.com/v1/models"
-  @endpoint "https://api.openai.com/v1/responses"
+  @base_url "https://api.openai.com/v1"
 
   @impl true
   def provider(), do: "openai"
@@ -28,7 +26,7 @@ defmodule Current.LLMClient.OpenAI do
     end
   end
 
-  # Read per call: the key is the only "state" this client has.
+  # Read per call, like the configured base URL.
   defp api_key do
     case System.get_env("OPENAI_API_KEY") do
       key when key in [nil, ""] -> {:error, :missing_openai_api_key}
@@ -53,26 +51,8 @@ defmodule Current.LLMClient.OpenAI do
       {~c"authorization", ~c"Bearer " ++ String.to_charlist(api_key)}
     ]
 
-    case :httpc.request(
-           :get,
-           {String.to_charlist(@models_endpoint), headers},
-           [
-             connect_timeout: min(@connect_timeout_ms, timeout_ms),
-             timeout: timeout_ms
-           ],
-           body_format: :binary
-         ) do
-      {:ok, {{_version, status, _reason}, _headers, body}} when status in 200..299 ->
-        {:ok, body}
-
-      {:ok, {{_version, status, _reason}, _headers, body}} ->
-        {:error, {:http_error, status, body}}
-
-      {:error, :timeout} ->
-        {:error, :timeout}
-
-      {:error, reason} ->
-        {:error, {:http_error, reason}}
+    with {:ok, endpoint} <- HTTP.endpoint(__MODULE__, @base_url, "/models") do
+      HTTP.request(:get, {endpoint, headers}, timeout_ms)
     end
   end
 
@@ -81,32 +61,8 @@ defmodule Current.LLMClient.OpenAI do
       {~c"authorization", ~c"Bearer " ++ String.to_charlist(api_key)}
     ]
 
-    case :httpc.request(
-           :post,
-           {
-             String.to_charlist(@endpoint),
-             headers,
-             ~c"application/json",
-             body
-           },
-           [
-             connect_timeout: min(@connect_timeout_ms, timeout_ms),
-             timeout: timeout_ms
-           ],
-           body_format: :binary
-         ) do
-      {:ok, {{_version, status, _reason}, _headers, body}}
-      when status in 200..299 ->
-        {:ok, body}
-
-      {:ok, {{_version, status, _reason}, _headers, body}} ->
-        {:error, {:http_error, status, body}}
-
-      {:error, :timeout} ->
-        {:error, :timeout}
-
-      {:error, reason} ->
-        {:error, {:http_error, reason}}
+    with {:ok, endpoint} <- HTTP.endpoint(__MODULE__, @base_url, "/responses") do
+      HTTP.request(:post, {endpoint, headers, ~c"application/json", body}, timeout_ms)
     end
   end
 

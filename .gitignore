@@ -28,7 +28,8 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 current-*.tar
 
-# ignore the concatenated docs file if need be
+# Local review artifacts and concatenated documentation.
+/diff.txt
 combined.md
 
 combined_code.txt
@@ -42,5 +43,7 @@ combined_code_and_tests.txt
 /examples/
 
 /current
+
+/model_feedback/
 
 .env

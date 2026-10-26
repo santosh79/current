@@ -394,17 +394,44 @@ process group) and an output cap first; then log snapshots.
 
 ### T12. Talking to the model provider
 
-Requests go to fixed HTTPS endpoints using Erlang's `:httpc`. No TLS
-options are passed explicitly, so certificate verification depends on the
-OTP version's defaults. **Confirm** that a request to a host with an invalid
-certificate fails, and pass `ssl: [verify: :verify_peer, cacerts:
-:public_key.cacerts_get()]` explicitly either way.
+OpenAI and Anthropic requests use Erlang's `:httpc` through
+`Current.LLMClient.HTTP`. All four operations (completion and model listing
+for both providers) explicitly pass `ssl:` options with `verify: :verify_peer`,
+OS CA certificates from `:public_key.cacerts_get/0`, HTTPS hostname matching,
+and TLS 1.2/1.3 only. Redirects are not followed automatically. A missing or
+empty OS CA store returns `{:error, :no_ca_certificates}` rather than raising
+or falling back to unverified TLS; install the OS `ca-certificates` package
+in minimal containers.
+
+Endpoints default to the real provider APIs. Operators may override the
+base URL (including `/v1`) per provider, for example:
+
+```elixir
+config :current, Current.LLMClient.OpenAI,
+  base_url: "https://api.openai.com/v1"
+
+config :current, Current.LLMClient.Anthropic,
+  base_url: "https://api.anthropic.com/v1"
+```
+
+Overrides are read per call, must use HTTPS, and may not contain embedded
+credentials, a query or a fragment. Treat this configuration as trusted:
+the configured host receives prompts and API keys. There is no configuration
+switch to disable certificate verification.
+
+Offline tests in `test/llm_integration/tls_test.exs` use a loopback TLS
+listener with a freshly generated private CA and assert an `unknown_ca` TLS
+alert for all four provider operations. A verification-disabled positive
+control in the test alone checks that the listener actually serves HTTP.
+`http_test.exs` covers the shared TLS options, CA-loading errors and URL
+validation. These tests require no real API keys or external network.
 
 API keys are read from the environment for each call and sent only in
 request headers. Error bodies from the provider may be recorded with a
 failed workflow.
 
-**Status: verify.**
+**Status: mitigated.** Certificate trust still depends on the operator's OS
+CA store and trusted endpoint configuration.
 
 ---
 
@@ -471,7 +498,7 @@ failed workflow.
 
 | Priority | Change | Addresses |
 |---|---|---|
-| 1 | Explicit TLS verification for provider calls, and a test that a bad certificate is refused | T12 |
+| 1 (implemented) | Shared explicit TLS verification for provider calls; offline bad-certificate refusal tests for both providers and operations | T12 |
 | 2 | Command timeout (kill the process group) and output cap | T11 |
 | 3 | Minimal environment for commands | T3, T5 |
 | 4 | Command allowlist, enforced at validation | T3 |
@@ -515,4 +542,4 @@ cheapest way to keep the claim true.
 | Hash chain verified on start; bad commit refused | `Current.Consensus.Log.put/2`, `init/1`; `Commit.hash/1` | Flip a byte in a closed segment; startup must fail naming it |
 | Artifacts are content-addressed but not re-verified on read | `Current.BlobStore.put/1`, `read/1` | |
 | Reviewer identity is the client's `$USER` | `Current.CLI.reviewer/0` | |
-| No explicit TLS options on provider calls | `LLMClient.OpenAI` and `LLMClient.Anthropic` `:httpc.request/4` calls | Point an endpoint at a host with a bad certificate |
+| Provider calls explicitly verify certificates and HTTPS hostnames, using TLS 1.2/1.3 and OS CAs; CA-loading failures return an error | `Current.LLMClient.HTTP.request/3` and `ssl_opts/1`, used by OpenAI and Anthropic for completion and model listing | `test/llm_integration/tls_test.exs` checks untrusted-CA refusal for all four operations; `http_test.exs` checks policy and missing CA stores |
