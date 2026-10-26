@@ -41,7 +41,7 @@ pure reducers to agent workflows (see [Architecture](#architecture)).
 [Verifiability](#verifiability-a-hash-chained-history) ·
 [Architecture](#architecture) · [Quickstart](#quickstart) ·
 [How it works](#how-it-works) · [Intents](#intents) · [CLI](#cli-reference) ·
-[HTTP API](#http-api) · [Configuration](#configuration) ·
+[HTTP API](#http-api) · [MCP](#mcp) · [Configuration](#configuration) ·
 [Security](#security) · [Status](#what-exists-today) · [Roadmap](#roadmap)
 
 ---
@@ -180,7 +180,7 @@ commit 1              commit 2                commit 3
 │ previous: nil  │◀───│ previous: H(c1)  │◀───│ previous: H(c2)  │◀── head
 │ events: [...]  │    │ events: [...]    │    │ events: [...]    │
 └────────────────┘    └──────────────────┘    └──────────────────┘
-                 H(c) = SHA-256 of the serialized commit
+                 H(c) = SHA-256 of term_to_binary(commit, [:deterministic])
 ```
 
 Changing any byte of any past commit changes its hash and breaks every
@@ -198,6 +198,12 @@ committed to as well.
   A gap, a broken link or corrupt bytes stop the runtime from starting,
   naming the file. It refuses to serve a history it can't vouch for.
 - **Closed segments are immutable**, and opened read-only.
+
+Commit hashes currently use `:erlang.term_to_binary/2` with the
+`:deterministic` option. This makes term encoding deterministic within the
+supported Erlang term format, but does not guarantee byte-for-byte identical
+encoding across OTP versions. Cross-version verification needs a stable,
+versioned canonical encoding (see the [roadmap](#roadmap)).
 
 **What this proves today:** integrity. The history the runtime replays is
 exactly the history it wrote, unbroken and in order. **What it doesn't
@@ -484,6 +490,29 @@ API does no authentication (see [Security](#security)).
 
 ---
 
+## MCP
+
+Current also exposes a Model Context Protocol (MCP) server at `POST /mcp`,
+using Streamable HTTP and protocol version `2025-06-18`. It exposes tools
+for submitting tasks, inspecting workflows and proposals, reviewing and
+retrieving artifacts, approving, rejecting, requesting revisions, applying
+proposals, listing models, and checking runtime health.
+
+The MCP endpoint uses the same `Current.API` and runtime invariants as the
+CLI and HTTP API. Tasks return immediately with a task id; clients poll
+`get_workflow` for progress. It is stateless and tools-only: no sessions,
+resources, prompts, server-initiated streams, or batch requests. `GET /mcp`
+is not supported.
+
+**MCP does not authenticate callers.** Anyone who can reach the endpoint can
+submit, approve, and apply proposals. Keep it on loopback or behind a trusted
+gateway that enforces access control. The transport checks `Origin`,
+`MCP-Protocol-Version`, and `Content-Type`; these are not substitutes for
+authentication. See [Security](#security) and the
+[threat model](docs/threat_model.md).
+
+---
+
 ## Configuration
 
 ### Environment
@@ -552,13 +581,13 @@ vulnerabilities privately.
 | Content-addressed artifacts for every input and output | ✅ |
 | Versioned events with upcasting | ✅ |
 | OpenAI and Anthropic models, chosen per task | ✅ |
+| MCP tools over stateless Streamable HTTP (`POST /mcp`) | ✅ |
 | `current export` / `current replay`: re-execute on another machine and diff | planned |
 | `current verify`: check the chain and every artifact, print the head hash | planned |
 | Signed or externally anchored log heads | planned |
 | Approval policy hook / authenticated approvers | planned (layered on top) |
 | Command allowlist, timeout and output cap | planned |
 | Atomic apply, `simulate` | planned |
-| MCP server | planned |
 
 ---
 
@@ -575,14 +604,13 @@ vulnerabilities privately.
   requester), where an ACL layer plugs in
 - command policy (allowlist), and a timeout and output cap on commands
 - atomic apply, and `simulate` in a throwaway copy
-- an MCP server, so other agents can drive and review through Current
 
 **Later**
 
 - signed log heads, and publishing head hashes externally
-- a stable canonical encoding for commit hashes (today they hash
-  `term_to_binary`, which isn't guaranteed identical across OTP versions;
-  this matters for verifying on another machine)
+- a stable, versioned canonical encoding for commit hashes (today they use
+  `:erlang.term_to_binary([:deterministic])`, which does not guarantee
+  identical bytes across OTP versions)
 - log snapshots, so startup doesn't replay everything
 - sandboxed interpreters
 - a replicated log behind the existing consensus interface
@@ -608,5 +636,7 @@ keep loading.
 ## License
 
 MIT
+
+
 
 
