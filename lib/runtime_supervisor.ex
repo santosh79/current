@@ -22,8 +22,6 @@ defmodule Current.RuntimeSupervisor do
 
   @impl true
   def init(_opts) do
-    config = Application.get_env(:current, :http, [])
-
     children =
       [
         Supervisor.child_spec(
@@ -52,13 +50,7 @@ defmodule Current.RuntimeSupervisor do
         },
         Current.ModelCatalog,
         Current.TaskDispatcher
-      ]
-
-    children =
-      case Keyword.get(config, :enabled, true) do
-        true -> children ++ Current.HTTP.Server.children()
-        _ -> children
-      end
+      ] ++ Current.HTTP.Server.children()
 
     Supervisor.init(
       children,

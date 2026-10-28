@@ -1,23 +1,13 @@
 import Config
 
+# Code wiring stays in Elixir. Operator settings are loaded from current.yaml
+# and CURRENT_* environment variables by config/runtime.exs.
 config :current,
   proposal_builder: Current.LLMProposalBuilder,
   effect_applicator: Current.EffectApplicator,
-  llm_proposal_timeout_ms: 240_000,
-  # How many times a reviewer may send a workflow's proposal back. Read once,
-  # when a workflow is created, and recorded on its WorkflowCreated event.
-  max_revisions: 10,
-  data_dir: "./_data",
-  http: [port: 4000, ip: {127, 0, 0, 1}],
-
-  # Upper bounds, in bytes, on free-form client input. See Current.InputLimits.
-  input_limits: [
-    prompt: 32_768,
-    feedback: 16_384,
-    message: 4_096,
-    reviewed_by: 256,
-    model: 256,
-    dir: 4_096
+  model_catalog_clients: [
+    Current.LLMClient.OpenAI,
+    Current.LLMClient.Anthropic
   ]
 
 # whatever env-independent config you have, then:
