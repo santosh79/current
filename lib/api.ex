@@ -343,6 +343,7 @@ defmodule Current.API do
       wal_head: wal_head(),
       wal_path: Current.Consensus.Log.path(),
       proposal_builder: Application.get_env(:current, :proposal_builder),
+      allowed_commands: Application.get_env(:current, :allowed_commands, []),
       # One model call, and one task's whole proposal (several calls).
       llm_proposal_timeout_ms: Application.get_env(:current, :llm_proposal_timeout_ms),
       llm_task_timeout_ms: Current.LLMProposalBuilder.task_timeout_ms()

@@ -308,6 +308,25 @@ defmodule Current.CLITest do
       assert output =~ "runtime ready"
       assert output =~ "WAL head"
       assert output =~ "builder   Current.FakeProposalBuilder"
+
+      commands =
+        Application.fetch_env!(:current, :allowed_commands)
+        |> Enum.join(", ")
+
+      assert output =~ "commands  #{commands}"
+    end
+
+    test "status renders an explicit command allowlist" do
+      health = %{
+        "version" => "test",
+        "wal_head" => 0,
+        "proposal_builder" => nil,
+        "allowed_commands" => ["mix", "git", "rg"]
+      }
+
+      output = Current.CLI.Render.status(health, "http://localhost:4000")
+
+      assert output =~ "commands  mix, git, rg"
     end
 
     test "models lists the catalog, one per line" do

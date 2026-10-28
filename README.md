@@ -10,7 +10,7 @@ once agent-written code ships:
 - **Why was this change made?** Which request asked for it?
 - **Who authorized it?**
 - **Can someone else check it?** Take the record somewhere else, replay it,
-  and get the same answer?
+and get the same answer?
 
 Most agents can't answer these, because the model calls tools from inside
 its reasoning loop. Deciding and doing are one event, and the only record
@@ -59,23 +59,23 @@ A proposal does nothing on its own. Between it and your project, the
 runtime:
 
 1. **decodes** the model's reply, which is untrusted bytes, into a closed
-   set of intent types. Anything outside it is rejected, not interpreted;
+set of intent types. Anything outside it is rejected, not interpreted;
 2. **validates** it: paths confined to the project, files exist, every
-   edit matches exactly, claims cite earlier intents they can be checked
-   against;
+edit matches exactly, claims cite earlier intents they can be checked
+against;
 3. **waits for a decision.** A proposal is reviewed as a unit
-   (`current review`, or `--json` for a machine reader) and approved,
-   rejected, or sent back with feedback. The reviewer can be a person or
-   another agent: each decision is an API call, recorded as its own event
-   with the reviewer's metadata. A workflow can hold several proposals, and
-   a decision must name the latest. Sending one back produces a
-   replacement, up to a bound (10 revisions by default);
+(`current review`, or `--json` for a machine reader) and approved,
+rejected, or sent back with feedback. The reviewer can be a person or
+another agent: each decision is an API call, recorded as its own event
+with the reviewer's metadata. A workflow can hold several proposals, and
+a decision must name the latest. Sending one back produces a
+replacement, up to a bound (10 revisions by default);
 4. **applies** it, in a separate step, with a small trusted interpreter
-   that re-checks every path immediately before touching it and records
-   every result;
+that re-checks every path immediately before touching it and records
+every result;
 5. **checks the outcome itself.** Claims are evaluated against recorded
-   results, and a claim that doesn't hold fails the workflow. The agent
-   doesn't grade its own work.
+results, and a claim that doesn't hold fails the workflow. The agent
+doesn't grade its own work.
 
 The model also never reads your project directly. It sees the layout
 (names and sizes), and every file it asks to see goes through path
@@ -91,17 +91,17 @@ before taking the next, every change sits at the end of an explicit chain:
 ```text
 TaskCreated                  the request: prompt, model, project, submitted_at
 └─ WorkflowCreated
-   └─ ProposalProduced       intents, what the model read first, its raw reply
-      └─ ProposalValidated
-         ├─ ProposalRevisionRequested   who asked for what change; loops back to
-         │  └─ ProposalProductionStarted → ProposalProduced (revision 1, revises
-         │     the one above) → ProposalValidated → ... up to the bound
-         └─ ProposalApproved     who, when, with what message
-            └─ EffectApplicationStarted
-               ├─ EffectApplied      an edit: file before and after
-               ├─ EffectApplied      a command: exit code, stdout, stderr
-               ├─ EffectApplied      a claim: verified, and against what
-               └─ WorkflowCompleted
+└─ ProposalProduced       intents, what the model read first, its raw reply
+└─ ProposalValidated
+├─ ProposalRevisionRequested   who asked for what change; loops back to
+│  └─ ProposalProductionStarted → ProposalProduced (revision 1, revises
+│     the one above) → ProposalValidated → ... up to the bound
+└─ ProposalApproved     who, when, with what message
+└─ EffectApplicationStarted
+├─ EffectApplied      an edit: file before and after
+├─ EffectApplied      a command: exit code, stdout, stderr
+├─ EffectApplied      a claim: verified, and against what
+└─ WorkflowCompleted
 ```
 
 So for any change you can answer, from the record alone and without the
@@ -180,7 +180,7 @@ commit 1              commit 2                commit 3
 │ previous: nil  │◀───│ previous: H(c1)  │◀───│ previous: H(c2)  │◀── head
 │ events: [...]  │    │ events: [...]    │    │ events: [...]    │
 └────────────────┘    └──────────────────┘    └──────────────────┘
-                 H(c) = SHA-256 of term_to_binary(commit, [:deterministic])
+H(c) = SHA-256 of term_to_binary(commit, [:deterministic])
 ```
 
 Changing any byte of any past commit changes its hash and breaks every
@@ -190,13 +190,13 @@ output and model replies by their SHA-256 artifact ids, so those are
 committed to as well.
 
 - **Only valid successors are written.** A commit must have the next index
-  and the head's hash as `previous_hash`, or it is refused and nothing is
-  written.
+and the head's hash as `previous_hash`, or it is refused and nothing is
+written.
 - **Durable before acknowledged.** A commit is fsynced before anyone hears
-  of it.
+of it.
 - **Verified on every start.** Every link is re-checked, across segments.
-  A gap, a broken link or corrupt bytes stop the runtime from starting,
-  naming the file. It refuses to serve a history it can't vouch for.
+A gap, a broken link or corrupt bytes stop the runtime from starting,
+naming the file. It refuses to serve a history it can't vouch for.
 - **Closed segments are immutable**, and opened read-only.
 
 Commit hashes currently use `:erlang.term_to_binary/2` with the
@@ -240,7 +240,7 @@ At the center is one pure function:
 
 ```elixir
 WorkflowReducer.apply_event(workflow | nil, event)
-  :: {:ok, workflow} | {:error, {:invalid_transition, status, event_type}}
+:: {:ok, workflow} | {:error, {:invalid_transition, status, event_type}}
 
 WorkflowReducer.replay(events)   # a fold of apply_event over the log
 ```
@@ -318,7 +318,7 @@ review. Nothing has touched the project.
 
 ```sh
 ./current run "add input validation to the signup form" \
-  --model anthropic:claude-opus-5-5 --dir path/to/project
+--model anthropic:claude-opus-5-5 --dir path/to/project
 ```
 
 **4. Review, approve, apply.** Each is a separate, recorded step.
@@ -348,23 +348,23 @@ digits.
 
 ```mermaid
 flowchart TD
-    task["Request: prompt, project, model"] --> layout["Model sees the project layout"]
-    layout --> reply{"Model replies"}
-    reply -- "observe" --> read["Runtime reads files<br/>(read-only, filtered, recorded)"]
-    read -- "up to 8 rounds" --> reply
-    reply -- "proposal" --> recorded[("Decoded and recorded")]
-    recorded --> validate{"Validate"}
-    validate -- "invalid" --> failed1(["failed"])
-    validate -- "plan mode" --> planned(["planned"])
-    validate -- "apply mode" --> review{"Review<br/>(person or agent)"}
-    review -- "revise (feedback)" --> revision["Revision requested"]
-    revision -- "new proposal, up to 10 times" --> reply
-    review -- "reject" --> rejected(["rejected"])
-    review -- "approve, then apply" --> apply["Runtime applies intents in order"]
-    apply --> verify{"Claims hold?"}
-    verify -- "yes" --> completed(["completed"])
-    apply -- "effect fails" --> failed2(["failed"])
-    verify -- "no" --> failed2
+task["Request: prompt, project, model"] --> layout["Model sees the project layout"]
+layout --> reply{"Model replies"}
+reply -- "observe" --> read["Runtime reads files<br/>(read-only, filtered, recorded)"]
+read -- "up to 8 rounds" --> reply
+reply -- "proposal" --> recorded[("Decoded and recorded")]
+recorded --> validate{"Validate"}
+validate -- "invalid" --> failed1(["failed"])
+validate -- "plan mode" --> planned(["planned"])
+validate -- "apply mode" --> review{"Review<br/>(person or agent)"}
+review -- "revise (feedback)" --> revision["Revision requested"]
+revision -- "new proposal, up to 10 times" --> reply
+review -- "reject" --> rejected(["rejected"])
+review -- "approve, then apply" --> apply["Runtime applies intents in order"]
+apply --> verify{"Claims hold?"}
+verify -- "yes" --> completed(["completed"])
+apply -- "effect fails" --> failed2(["failed"])
+verify -- "no" --> failed2
 ```
 
 Every step is an event. Rounded boxes are where a workflow ends.
@@ -372,20 +372,20 @@ Every step is an event. Rounded boxes are where a workflow ends.
 ### Producing a proposal
 
 1. A **task** is submitted with a prompt, a project directory and a model.
-   The directory is resolved once to its real path and recorded.
+The directory is resolved once to its real path and recorded.
 2. The model is given the project's **layout**: paths and sizes, no
-   contents. Dependencies, build output, VCS directories and `.env*` files
-   are left out.
+contents. Dependencies, build output, VCS directories and `.env*` files
+are left out.
 3. The model may reply with an **observe** request: up to 20 `read_file`,
-   `glob` or `grep` intents, each with a reason. The runtime runs them
-   read-only, under path confinement and the read policy, and asks again
-   with the results. Up to 8 rounds, 400 KB of results in total, 200 KB
-   per file.
+`glob` or `grep` intents, each with a reason. The runtime runs them
+read-only, under path confinement and the read policy, and asks again
+with the results. Up to 8 rounds, 400 KB of results in total, 200 KB
+per file.
 4. The model replies with a **proposal**. Its exact reply is stored as an
-   artifact, whatever it contains.
+artifact, whatever it contains.
 5. The proposal is **decoded** into typed intents
-   ([wire contract](docs/wire_schema.md)), every path is made absolute
-   against the project, and it is **validated**.
+([wire contract](docs/wire_schema.md)), every path is made absolute
+against the project, and it is **validated**.
 
 Validation answers "is this well-formed and in bounds right now?", not
 "will it apply cleanly?". The project can change before apply, and those
@@ -406,13 +406,13 @@ close it (T2 in the [threat model](docs/threat_model.md)).
 
 ```text
 created → planning → validating → waiting_for_approval
-   plan mode:   → planned
-   apply mode:  → approved → applying → assembling_result → completed
-                → rejected
-                → revision_requested → planning → validating → waiting_for_approval
-                  (bounded; each pass adds a proposal to the workflow)
+plan mode:   → planned
+apply mode:  → approved → applying → assembling_result → completed
+→ rejected
+→ revision_requested → planning → validating → waiting_for_approval
+(bounded; each pass adds a proposal to the workflow)
 any stage:      → failed      (production, validation or an effect failed)
-                → abandoned   (no further automatic progress is possible)
+→ abandoned   (no further automatic progress is possible)
 ```
 
 ### Three primitives
@@ -552,6 +552,7 @@ and setting. Empty-string `CURRENT_*` values are treated as unset. See
 | `wal.segment_bytes` | `CURRENT_COMMIT_LOG_SEGMENT_BYTES` | `67108864` |
 | `mcp.allowed_origins` | `CURRENT_MCP_ALLOWED_ORIGINS` (comma-separated) | `[]` |
 | `mcp.allow_loopback_origins` | `CURRENT_MCP_ALLOW_LOOPBACK_ORIGINS` | `true` |
+| `allowed_commands` | `CURRENT_ALLOWED_COMMANDS` (comma-separated) | `[]` |
 | `input_limits.prompt` | `CURRENT_INPUT_LIMIT_PROMPT` | `32768` |
 | `input_limits.feedback` | `CURRENT_INPUT_LIMIT_FEEDBACK` | `16384` |
 | `input_limits.message` | `CURRENT_INPUT_LIMIT_MESSAGE` | `4096` |
@@ -559,6 +560,8 @@ and setting. Empty-string `CURRENT_*` values are treated as unset. See
 | `input_limits.model` | `CURRENT_INPUT_LIMIT_MODEL` | `256` |
 | `input_limits.dir` | `CURRENT_INPUT_LIMIT_DIR` | `4096` |
 | `input_limits.metadata` | `CURRENT_INPUT_LIMIT_METADATA` | `8192` |
+
+Commands are denied by default. Set allowed_commands to an explicit list of executable names (for example, [mix, git, rg]) to permit them. An empty list disables run_command execution. The allowlist restricts executable names, not their arguments or behavior; it is not a sandbox.
 
 Provider base URLs must use HTTPS. MCP allowed origins must be exact origins
 of the form `http(s)://host[:port]`, without paths. The workflow runner's base
@@ -582,20 +585,22 @@ Current controls *when* an agent's proposal takes effect and records
 everything about it. It does not limit *what* an approved proposal can do.
 
 - **Nothing an agent proposes runs without approval** and a separate
-  `apply`, enforced by the reducer at commit time.
+`apply`, enforced by the reducer at commit time.
 - **Paths are confined** to the project, checked lexically at validation
-  and again, following symlinks, just before each effect.
+and again, following symlinks, just before each effect.
 - **What the model sees is filtered** by name (dependencies, build output,
-  VCS directories, `.env*`). Other secrets in the project are *not*
-  recognised.
-- **`run_command` is not sandboxed.** It runs as you, with your
-  environment, network and no time limit. Approving a command is
-  approving arbitrary code.
+VCS directories, `.env*`). Other secrets in the project are *not*
+recognised.
+- **`run_command` is restricted by an executable allowlist, not sandboxed.**
+Commands are denied by default. Allowed executables run with the
+runtime’s privileges and environment, including filesystem and network access.
+Arguments are not restricted, so allowing interpreters or shells can
+permit arbitrary code execution.
 - **The HTTP API is unauthenticated.** It listens on 127.0.0.1. Restrict
-  who can reach it with a gateway, proxy or network policy; anyone who can
-  reach it can approve and apply.
+who can reach it with a gateway, proxy or network policy; anyone who can
+reach it can approve and apply.
 - **The log is tamper-evident to the runtime, not yet to an attacker.**
-  See [Verifiability](#verifiability-a-hash-chained-history).
+See [Verifiability](#verifiability-a-hash-chained-history).
 
 Full analysis: [docs/threat_model.md](docs/threat_model.md). Please report
 vulnerabilities privately.
@@ -622,7 +627,8 @@ vulnerabilities privately.
 | `current verify`: check the chain and every artifact, print the head hash | planned |
 | Signed or externally anchored log heads | planned |
 | Approval policy hook / authenticated approvers | planned (layered on top) |
-| Command allowlist, timeout and output cap | planned |
+| Command executable allowlist (deny by default) | ✅ |
+| Command timeout and output cap | planned |
 | Atomic apply, `simulate` | planned |
 
 ---
@@ -632,21 +638,21 @@ vulnerabilities privately.
 **Next**
 
 - `current export` and `current replay`: bundle a workflow's events and
-  artifacts, re-apply on another machine against the same starting tree,
-  and diff every artifact hash
+artifacts, re-apply on another machine against the same starting tree,
+and diff every artifact hash
 - `current verify`: re-check the chain and every artifact against its
-  name, and print the head hash
+name, and print the head hash
 - an approval policy hook (N approvers, an approver other than the
-  requester), where an ACL layer plugs in
-- command policy (allowlist), and a timeout and output cap on commands
+requester), where an ACL layer plugs in
+- command timeout and output cap
 - atomic apply, and `simulate` in a throwaway copy
 
 **Later**
 
 - signed log heads, and publishing head hashes externally
 - a stable, versioned canonical encoding for commit hashes (today they use
-  `:erlang.term_to_binary([:deterministic])`, which does not guarantee
-  identical bytes across OTP versions)
+`:erlang.term_to_binary([:deterministic])`, which does not guarantee
+identical bytes across OTP versions)
 - log snapshots, so startup doesn't replay everything
 - sandboxed interpreters
 - a replicated log behind the existing consensus interface

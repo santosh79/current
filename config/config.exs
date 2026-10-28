@@ -4,6 +4,7 @@ import Config
 # and CURRENT_* environment variables by config/runtime.exs.
 config :current,
   proposal_builder: Current.LLMProposalBuilder,
+  allowed_commands: [],
   effect_applicator: Current.EffectApplicator,
   model_catalog_clients: [
     Current.LLMClient.OpenAI,

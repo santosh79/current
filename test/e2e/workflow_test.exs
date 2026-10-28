@@ -144,6 +144,34 @@ defmodule Current.E2E.WorkflowTest do
       assert workflow.result == nil
     end
 
+    test "a command not on the allowlist cannot be executed" do
+      use_proposal_builder(Current.RunCommandProposalBuilder)
+
+      previous = Application.fetch_env!(:current, :allowed_commands)
+      Application.put_env(:current, :allowed_commands, [])
+
+      on_exit(fn ->
+        Application.put_env(:current, :allowed_commands, previous)
+      end)
+
+      {_task_id, workflow_id, proposal} = submit_and_await_valid_proposal()
+
+      assert [%Intent.RunCommand{cmd: "sh"}] = proposal.intents
+
+      approve_and_apply(proposal)
+      await_finished(workflow_id)
+
+      assert Enum.any?(events(workflow_id), fn
+               %Event.EffectFailed{reason: reason} ->
+                 inspect(reason) =~ "command not allowed"
+
+               _ ->
+                 false
+             end)
+
+      refute Enum.any?(events(workflow_id), &is_struct(&1, Event.EffectApplied))
+    end
+
     test "a proposal builder that returns an error fails the workflow, with its reason" do
       use_proposal_builder(Current.ErrorReturningProposalBuilder)
 

@@ -3,6 +3,9 @@
 
 data_dir: ./_data
 
+# Commands are denied unless explicitly allowed. This is not a sandbox. Please read README.md to set these
+allowed_commands: []
+
 http:
   ip: "127.0.0.1"
   port: 4000
