@@ -16,10 +16,51 @@ defmodule Current.ConfigLoaderTest do
     config = ConfigLoader.load(path, %{})
 
     assert config[:data_dir] == "./_data"
+    assert config[:allowed_commands] == []
     assert config[:http] == [ip: {127, 0, 0, 1}, port: 4000]
     assert config[:llm_proposal_timeout_ms] == 240_000
     assert config[:llm_task_timeout_ms] == 600_000
     assert config[:enabled_providers] == ["openai", "anthropic"]
+  end
+
+  test "loads command allowlist from YAML and lets environment override it", %{path: path} do
+    File.write!(path, "allowed_commands: [mix, git]\n")
+
+    assert ConfigLoader.load(path, %{})[:allowed_commands] == ["mix", "git"]
+
+    config = ConfigLoader.load(path, %{"CURRENT_ALLOWED_COMMANDS" => "rg, mix, rg"})
+    assert config[:allowed_commands] == ["rg", "mix"]
+  end
+
+  test "an explicit empty allowlist stays empty", %{path: path} do
+    File.write!(path, "allowed_commands: []\n")
+    assert ConfigLoader.load(path, %{})[:allowed_commands] == []
+  end
+
+  test "rejects invalid command allowlists", %{path: path} do
+    for yaml <- [
+          "allowed_commands: [mix, 12]\n",
+          "allowed_commands: mix\n",
+          "allowed_commands: ['']\n"
+        ] do
+      File.write!(path, yaml)
+
+      assert_raise ArgumentError, ~r/configuration file .*: invalid allowed_commands/, fn ->
+        ConfigLoader.load(path, %{})
+      end
+    end
+
+    # Reset to valid YAML before testing the environment override.
+
+    File.write!(path, "allowed_commands: [mix, git]\n")
+
+    assert_raise ArgumentError,
+                 ~r/CURRENT_ALLOWED_COMMANDS: invalid allowed_commands/,
+                 fn ->
+                   ConfigLoader.load(path, %{
+                     "CURRENT_ALLOWED_COMMANDS" => "mix, ,git"
+                   })
+                 end
   end
 
   test "raises when an explicit file is absent", %{path: path} do

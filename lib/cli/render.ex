@@ -295,6 +295,7 @@ defmodule Current.CLI.Render do
       "runtime #{health["status"]}",
       "  WAL head  #{health["wal_head"]}",
       "  builder   #{module_name(health["proposal_builder"])}",
+      "  commands  #{allowed_commands(health["allowed_commands"])}",
       if(health["llm_proposal_timeout_ms"],
         do: "  timeout   #{div(health["llm_proposal_timeout_ms"], 1000)}s per model call"
       ),
@@ -304,6 +305,10 @@ defmodule Current.CLI.Render do
     ]
     |> lines()
   end
+
+  defp allowed_commands([]), do: "none (denied by default)"
+  defp allowed_commands(commands) when is_list(commands), do: Enum.join(commands, ", ")
+  defp allowed_commands(nil), do: "not reported"
 
   # The API gives a module as its atom's name: "Elixir.Current.Foo".
   defp module_name(nil), do: "(not configured)"

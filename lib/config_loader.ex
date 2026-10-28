@@ -20,6 +20,7 @@ defmodule Current.ConfigLoader do
     {[:llm, :providers], @providers, :providers, "CURRENT_LLM_PROVIDERS"},
     {[:llm, :openai, :base_url], nil, :optional_https_url, "CURRENT_OPENAI_BASE_URL"},
     {[:llm, :anthropic, :base_url], nil, :optional_https_url, "CURRENT_ANTHROPIC_BASE_URL"},
+    {[:allowed_commands], [], :commands, "CURRENT_ALLOWED_COMMANDS"},
     {[:workflow, :max_revisions], 10, :non_negative_integer, "CURRENT_MAX_REVISIONS"},
     {[:workflow, :runner_max_attempts], 5, :positive_integer,
      "CURRENT_WORKFLOW_RUNNER_MAX_ATTEMPTS"},
@@ -128,6 +129,13 @@ defmodule Current.ConfigLoader do
     end)
   end
 
+  defp parse_env!(value, :commands, source, path) when is_binary(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> parse!(:commands, source, path)
+  end
+
   defp parse_env!(value, type, source, path) when type in [:providers, :origins] do
     value
     |> String.split(",", trim: true)
@@ -214,6 +222,17 @@ defmodule Current.ConfigLoader do
   defp parse!(value, :providers, source, path),
     do: invalid!(source, path, "expected a provider list, got #{inspect(value)}")
 
+  defp parse!(value, :commands, source, path) when is_list(value) do
+    if Enum.all?(value, &(is_binary(&1) and String.trim(&1) != "" and &1 == String.trim(&1))) do
+      Enum.uniq(value)
+    else
+      invalid!(source, path, "expected a list of non-empty command strings")
+    end
+  end
+
+  defp parse!(value, :commands, source, path),
+    do: invalid!(source, path, "expected a command list, got #{inspect(value)}")
+
   defp parse!(value, :origins, source, path) when is_list(value) do
     if Enum.all?(value, &valid_origin?/1) do
       Enum.uniq(value)
@@ -285,6 +304,7 @@ defmodule Current.ConfigLoader do
   defp to_app_env(config) do
     app = [
       data_dir: config.data_dir,
+      allowed_commands: config.allowed_commands,
       http: [ip: config.http.ip, port: config.http.port],
       llm_proposal_timeout_ms: config.llm.call_timeout_ms,
       llm_task_timeout_ms: config.llm.task_timeout_ms,

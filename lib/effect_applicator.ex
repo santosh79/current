@@ -153,6 +153,19 @@ defmodule Current.EffectApplicator do
   defp do_apply(%Current.Intent.RunCommand{} = intent, _prior_results, project_dir) do
     cmd = intent.cmd
     args = intent.args
+
+    if command_allowed?(cmd) do
+      apply_command(cmd, args, project_dir)
+    else
+      {:error, "command not allowed: #{inspect(cmd)}"}
+    end
+  end
+
+  defp command_allowed?(cmd) do
+    cmd in Application.get_env(:current, :allowed_commands, [])
+  end
+
+  defp apply_command(cmd, args, project_dir) do
     stdout_path = temp_path("stdout")
     stderr_path = temp_path("stderr")
 
