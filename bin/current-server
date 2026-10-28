@@ -9,6 +9,38 @@
 # Ctrl-C stops the runtime gracefully (the WAL is closed cleanly),
 # instead of opening Erlang's BREAK menu.
 set -e
+
+# Resolve --config from the caller's working directory before moving to the
+# project root. This keeps relative paths stable regardless of this script's
+# own location.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config)
+      if [ "$#" -lt 2 ]; then
+        echo "current-server: --config needs a path" >&2
+        exit 2
+      fi
+
+      case "$2" in
+        /*) CURRENT_CONFIG=$2 ;;
+        *) CURRENT_CONFIG="$(pwd)/$2" ;;
+      esac
+
+      export CURRENT_CONFIG
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: bin/current-server [--config PATH]"
+      exit 0
+      ;;
+    *)
+      echo "current-server: unknown option: $1" >&2
+      echo "Usage: bin/current-server [--config PATH]" >&2
+      exit 2
+      ;;
+  esac
+done
+
 cd "$(dirname "$0")/.."
 
 # +Bi: the VM ignores Ctrl-C itself; this script turns it into a SIGTERM,

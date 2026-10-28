@@ -1,0 +1,40 @@
+# Copy to current.yaml, pass --config PATH to bin/current-server, or set
+# CURRENT_CONFIG. Environment variables named in README.md override this file.
+
+data_dir: ./_data
+
+http:
+  ip: "127.0.0.1"
+  port: 4000
+
+llm:
+  call_timeout_ms: 240000
+  task_timeout_ms: 600000
+  providers: [openai, anthropic]
+  # Base URLs must use HTTPS. API keys remain environment-only.
+  openai:
+    base_url: "https://api.openai.com/v1"
+  anthropic:
+    base_url: "https://api.anthropic.com/v1"
+
+workflow:
+  max_revisions: 10
+  runner_max_attempts: 5
+  runner_base_backoff_ms: 1000
+  runner_max_backoff_ms: 30000
+
+wal:
+  segment_bytes: 67108864
+
+input_limits:
+  prompt: 32768
+  feedback: 16384
+  message: 4096
+  reviewed_by: 256
+  model: 256
+  dir: 4096
+  metadata: 8192
+
+mcp:
+  allowed_origins: []
+  allow_loopback_origins: true

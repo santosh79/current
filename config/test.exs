@@ -3,6 +3,8 @@ import Config
 config :current,
   proposal_builder: Current.FakeProposalBuilder,
   effect_applicator: Current.EffectApplicator,
+  # runtime.exs never loads operator configuration in tests.
+  llm_proposal_timeout_ms: 240_000,
   http: [port: 6000, ip: {127, 0, 0, 1}],
   model_catalog_clients: [
     Current.TestOpenAIModelCatalogClient,

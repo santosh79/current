@@ -297,10 +297,12 @@ the record.
 
 **1. Start the runtime.** A long-running server with an HTTP API (on
 `127.0.0.1:4000` by default). It prints every request and every commit as
-it happens.
+it happens. Copy `current.example.yaml` to `current.yaml` to customize it,
+or pass another location explicitly.
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-... bin/current-server
+# or: bin/current-server --config /etc/current/current.yaml
 ```
 
 **2. Build the CLI** in another terminal. It is a client of the API.
@@ -515,28 +517,62 @@ authentication. See [Security](#security) and the
 
 ## Configuration
 
-### Environment
+Operator settings use this precedence:
 
-| Variable | Read by | Meaning |
+```text
+built-in defaults < current.yaml < CURRENT_* environment variables
+```
+
+The default file is `current.yaml` in the project directory. Set
+`CURRENT_CONFIG=/path/to/file` or start the server with
+`bin/current-server --config /path/to/file` to use another location. The
+implicit default file may be absent, in which case built-in defaults are used.
+An explicit path from `CURRENT_CONFIG` or `--config` must exist. Relative
+`--config` paths are resolved from the directory where the launcher was
+invoked, before it changes to the project directory.
+
+Unknown keys and invalid values stop startup with an error naming the source
+and setting. Empty-string `CURRENT_*` values are treated as unset. See
+`current.example.yaml` for a complete example.
+
+| YAML key | Environment override | Default |
 |---|---|---|
-| `OPENAI_API_KEY` | runtime | Enables `openai:*` models |
-| `ANTHROPIC_API_KEY` | runtime | Enables `anthropic:*` models |
-| `CURRENT_DATA_DIR` | runtime (prod) | Where the log and artifacts live (default `./_data`) |
-| `CURRENT_HTTP_PORT` | runtime | Port of the HTTP API (default `4000`) |
-| `CURRENT_HTTP_IP` | runtime | Address the HTTP API binds (default `127.0.0.1`) |
-| `CURRENT_URL` | CLI | Where the CLI finds the runtime (default `http://127.0.0.1:4000`) |
+| `data_dir` | `CURRENT_DATA_DIR` | `./_data` |
+| `http.ip` | `CURRENT_HTTP_IP` | `127.0.0.1` |
+| `http.port` | `CURRENT_HTTP_PORT` | `4000` |
+| `llm.call_timeout_ms` | `CURRENT_LLM_CALL_TIMEOUT_MS` | `240000` |
+| `llm.task_timeout_ms` | `CURRENT_LLM_TASK_TIMEOUT_MS` | `600000` |
+| `llm.providers` | `CURRENT_LLM_PROVIDERS` (comma-separated) | `openai,anthropic` |
+| `llm.openai.base_url` | `CURRENT_OPENAI_BASE_URL` | OpenAI public API |
+| `llm.anthropic.base_url` | `CURRENT_ANTHROPIC_BASE_URL` | Anthropic public API |
+| `workflow.max_revisions` | `CURRENT_MAX_REVISIONS` | `10` |
+| `workflow.runner_max_attempts` | `CURRENT_WORKFLOW_RUNNER_MAX_ATTEMPTS` | `5` |
+| `workflow.runner_base_backoff_ms` | `CURRENT_WORKFLOW_RUNNER_BASE_BACKOFF_MS` | `1000` |
+| `workflow.runner_max_backoff_ms` | `CURRENT_WORKFLOW_RUNNER_MAX_BACKOFF_MS` | `30000` |
+| `wal.segment_bytes` | `CURRENT_COMMIT_LOG_SEGMENT_BYTES` | `67108864` |
+| `mcp.allowed_origins` | `CURRENT_MCP_ALLOWED_ORIGINS` (comma-separated) | `[]` |
+| `mcp.allow_loopback_origins` | `CURRENT_MCP_ALLOW_LOOPBACK_ORIGINS` | `true` |
+| `input_limits.prompt` | `CURRENT_INPUT_LIMIT_PROMPT` | `32768` |
+| `input_limits.feedback` | `CURRENT_INPUT_LIMIT_FEEDBACK` | `16384` |
+| `input_limits.message` | `CURRENT_INPUT_LIMIT_MESSAGE` | `4096` |
+| `input_limits.reviewed_by` | `CURRENT_INPUT_LIMIT_REVIEWED_BY` | `256` |
+| `input_limits.model` | `CURRENT_INPUT_LIMIT_MODEL` | `256` |
+| `input_limits.dir` | `CURRENT_INPUT_LIMIT_DIR` | `4096` |
+| `input_limits.metadata` | `CURRENT_INPUT_LIMIT_METADATA` | `8192` |
 
-### Application config (`config/*.exs`)
+Provider base URLs must use HTTPS. MCP allowed origins must be exact origins
+of the form `http(s)://host[:port]`, without paths. The workflow runner's base
+backoff may not exceed its maximum backoff.
 
-| Key | Default | Meaning |
-|---|---|---|
-| `data_dir` | `"./_data"` | Log in `consensus/`, artifacts in `artifacts/` |
-| `llm_proposal_timeout_ms` | `240_000` | Bound on one model call |
-| `llm_task_timeout_ms` | `600_000` | Default bound on producing one proposal |
-| `commit_log_segment_bytes` | 64 MiB | Log segment size before rolling over |
-| `proposal_builder` | `Current.LLMProposalBuilder` | What produces proposals |
-| `effect_applicator` | `Current.EffectApplicator` | What applies intents |
-| `model_catalog_clients` | OpenAI, Anthropic | Providers asked for models |
+`OPENAI_API_KEY` and `ANTHROPIC_API_KEY` remain environment-only secrets.
+`CURRENT_URL` configures where the CLI finds the runtime and defaults to
+`http://127.0.0.1:4000`.
+
+Dependency-injection wiring remains in `config/*.exs`: `proposal_builder`,
+`effect_applicator`, and `model_catalog_clients` are module-valued code
+configuration, not operator settings. Runtime operator configuration is never
+loaded in the test environment, so test wiring and temporary paths remain
+isolated even if `CURRENT_CONFIG` is inherited by `mix test`.
 
 ---
 

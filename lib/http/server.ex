@@ -13,14 +13,9 @@ defmodule Current.HTTP.Server do
   on the machine can still call it. If you bind to a non-loopback address,
   a warning is logged.
 
-  Configuration (`config :current, :http, ...` or environment):
+  Configure the listener under `http` in `current.yaml`, or with
+  `CURRENT_HTTP_PORT`, and `CURRENT_HTTP_IP`.
 
-      CURRENT_HTTP_PORT   port (default 4000)
-      CURRENT_HTTP_IP     address to bind (default 127.0.0.1)
-
-  Set `config :current, http: [enabled: false]` to turn the API off. It is
-  the runtime's only control plane (the `current` CLI is a client of it), so
-  with it off nothing can submit, review or apply anything.
   """
 
   require Logger
@@ -29,8 +24,8 @@ defmodule Current.HTTP.Server do
   @spec children() :: [Supervisor.child_spec()]
   def children do
     config = Application.get_env(:current, :http, [])
-    port = port(config)
-    ip = ip(config)
+    port = Keyword.get(config, :port, 4000)
+    ip = Keyword.get(config, :ip, {127, 0, 0, 1})
 
     if ip != {127, 0, 0, 1} and ip != {0, 0, 0, 0, 0, 0, 0, 1} do
       Logger.warning(
@@ -41,23 +36,5 @@ defmodule Current.HTTP.Server do
 
     Logger.info("HTTP API listening on #{:inet.ntoa(ip)}:#{port}")
     [{Bandit, plug: Current.HTTP.Router, scheme: :http, ip: ip, port: port}]
-  end
-
-  defp port(config) do
-    case System.get_env("CURRENT_HTTP_PORT") do
-      value when value in [nil, ""] -> Keyword.get(config, :port, 4000)
-      value -> String.to_integer(value)
-    end
-  end
-
-  defp ip(config) do
-    case System.get_env("CURRENT_HTTP_IP") do
-      value when value in [nil, ""] ->
-        Keyword.get(config, :ip, {127, 0, 0, 1})
-
-      value ->
-        {:ok, ip} = value |> String.to_charlist() |> :inet.parse_address()
-        ip
-    end
   end
 end

@@ -35,10 +35,16 @@ defmodule Current.ModelCatalog do
   end
 
   def llm_clients do
-    Application.get_env(:current, :model_catalog_clients, [
-      Current.LLMClient.OpenAI,
-      Current.LLMClient.Anthropic
-    ])
+    clients =
+      Application.get_env(:current, :model_catalog_clients, [
+        Current.LLMClient.OpenAI,
+        Current.LLMClient.Anthropic
+      ])
+
+    case Application.get_env(:current, :enabled_providers) do
+      nil -> clients
+      enabled -> Enum.filter(clients, &(&1.provider() in enabled))
+    end
   end
 
   def all(pid) do
