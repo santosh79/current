@@ -9,6 +9,8 @@ config :current,
   max_revisions: 10,
   data_dir: "./_data",
   http: [port: 4000, ip: {127, 0, 0, 1}],
+  # Executables run_command may run. Denied by default; not a sandbox.
+  allowed_commands: [],
 
   # Upper bounds, in bytes, on free-form client input. See Current.InputLimits.
   input_limits: [

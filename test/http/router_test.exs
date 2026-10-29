@@ -24,6 +24,7 @@ defmodule Current.HTTP.RouterTest do
       body = call(:get, "/v1/health") |> decoded()
       assert body["status"] == "ready"
       assert is_integer(body["wal_head"])
+      assert body["allowed_commands"] == Application.get_env(:current, :allowed_commands, [])
     end
 
     test "models" do

@@ -153,33 +153,11 @@ defmodule Current.EffectApplicator do
   defp do_apply(%Current.Intent.RunCommand{} = intent, _prior_results, project_dir) do
     cmd = intent.cmd
     args = intent.args
-    stdout_path = temp_path("stdout")
-    stderr_path = temp_path("stderr")
 
-    try do
-      case run_command_with_redirect(cmd, args, stdout_path, stderr_path, project_dir) do
-        {:ok, exit_code} ->
-          stdout = File.read!(stdout_path)
-          stderr = File.read!(stderr_path)
-
-          with {:ok, stdout_artifact_id} <- Current.BlobStore.put(stdout),
-               {:ok, stderr_artifact_id} <- Current.BlobStore.put(stderr) do
-            {:ok,
-             %Current.EffectResult.Command{
-               exit_code: exit_code,
-               stdout_artifact_id: stdout_artifact_id,
-               stderr_artifact_id: stderr_artifact_id,
-               stdout_bytes: byte_size(stdout),
-               stderr_bytes: byte_size(stderr)
-             }}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    after
-      File.rm(stdout_path)
-      File.rm(stderr_path)
+    if command_allowed?(cmd) do
+      apply_command(cmd, args, project_dir)
+    else
+      {:error, "command not allowed: #{inspect(cmd)}"}
     end
   end
 
@@ -269,6 +247,41 @@ defmodule Current.EffectApplicator do
 
   defp do_apply(%{__struct__: mod} = _intent, _prior_results, _project_dir),
     do: {:error, "unsupported intent type: #{mod}"}
+
+  defp command_allowed?(cmd) do
+    cmd in Application.get_env(:current, :allowed_commands, [])
+  end
+
+  defp apply_command(cmd, args, project_dir) do
+    stdout_path = temp_path("stdout")
+    stderr_path = temp_path("stderr")
+
+    try do
+      case run_command_with_redirect(cmd, args, stdout_path, stderr_path, project_dir) do
+        {:ok, exit_code} ->
+          stdout = File.read!(stdout_path)
+          stderr = File.read!(stderr_path)
+
+          with {:ok, stdout_artifact_id} <- Current.BlobStore.put(stdout),
+               {:ok, stderr_artifact_id} <- Current.BlobStore.put(stderr) do
+            {:ok,
+             %Current.EffectResult.Command{
+               exit_code: exit_code,
+               stdout_artifact_id: stdout_artifact_id,
+               stderr_artifact_id: stderr_artifact_id,
+               stdout_bytes: byte_size(stdout),
+               stderr_bytes: byte_size(stderr)
+             }}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    after
+      File.rm(stdout_path)
+      File.rm(stderr_path)
+    end
+  end
 
   defp run_command_with_redirect(cmd, args, stdout_path, stderr_path, project_dir) do
     executable = System.find_executable(command_path(cmd, project_dir))

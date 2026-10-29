@@ -295,6 +295,7 @@ defmodule Current.CLI.Render do
       "runtime #{health["status"]}",
       "  WAL head  #{health["wal_head"]}",
       "  builder   #{module_name(health["proposal_builder"])}",
+      "  commands  #{allowed_commands(health["allowed_commands"])}",
       if(health["llm_proposal_timeout_ms"],
         do: "  timeout   #{div(health["llm_proposal_timeout_ms"], 1000)}s per model call"
       ),
@@ -309,6 +310,10 @@ defmodule Current.CLI.Render do
   defp module_name(nil), do: "(not configured)"
   defp module_name(name) when is_binary(name), do: String.replace_prefix(name, "Elixir.", "")
   defp module_name(other), do: to_string(other)
+
+  defp allowed_commands([]), do: "none (denied by default)"
+  defp allowed_commands(commands) when is_list(commands), do: Enum.join(commands, ", ")
+  defp allowed_commands(nil), do: "not reported"
 
   ## current events
 

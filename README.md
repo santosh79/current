@@ -531,6 +531,7 @@ authentication. See [Security](#security) and the
 | Key | Default | Meaning |
 |---|---|---|
 | `data_dir` | `"./_data"` | Log in `consensus/`, artifacts in `artifacts/` |
+| `allowed_commands` | `[]` | Executables `run_command` may run; empty denies all. Not a sandbox |
 | `llm_proposal_timeout_ms` | `240_000` | Bound on one model call |
 | `llm_task_timeout_ms` | `600_000` | Default bound on producing one proposal |
 | `commit_log_segment_bytes` | 64 MiB | Log segment size before rolling over |
@@ -552,9 +553,11 @@ everything about it. It does not limit *what* an approved proposal can do.
 - **What the model sees is filtered** by name (dependencies, build output,
   VCS directories, `.env*`). Other secrets in the project are *not*
   recognised.
-- **`run_command` is not sandboxed.** It runs as you, with your
-  environment, network and no time limit. Approving a command is
-  approving arbitrary code.
+- **`run_command` is restricted by an executable allowlist, not sandboxed.**
+  Commands are denied by default. Allowed executables run with the runtime's
+  privileges and environment, including filesystem and network access.
+  Arguments are not restricted, so allowing interpreters or shells can permit
+  arbitrary code execution.
 - **The HTTP API is unauthenticated.** It listens on 127.0.0.1. Restrict
   who can reach it with a gateway, proxy or network policy; anyone who can
   reach it can approve and apply.
@@ -586,7 +589,8 @@ vulnerabilities privately.
 | `current verify`: check the chain and every artifact, print the head hash | planned |
 | Signed or externally anchored log heads | planned |
 | Approval policy hook / authenticated approvers | planned (layered on top) |
-| Command allowlist, timeout and output cap | planned |
+| Command executable allowlist (deny by default) | ✅ |
+| Command timeout and output cap | planned |
 | Atomic apply, `simulate` | planned |
 
 ---
@@ -602,7 +606,7 @@ vulnerabilities privately.
   name, and print the head hash
 - an approval policy hook (N approvers, an approver other than the
   requester), where an ACL layer plugs in
-- command policy (allowlist), and a timeout and output cap on commands
+- command timeout and output cap
 - atomic apply, and `simulate` in a throwaway copy
 
 **Later**
