@@ -227,6 +227,30 @@ defmodule Current.E2E.LLMProposalTest do
       assert user =~ "lib/signup.ex (24 bytes)"
     end
 
+    test "is told the exact commands run_command may use", %{project: project} do
+      put_env(:allowed_commands, ["mix", "bin/check"])
+      script([@proposal])
+
+      submit!([mode: :plan], project) |> await_workflow_created()
+      [%{role: :system, content: system}, %{role: :user}] = messages!(1)
+
+      assert system =~ ~s(The allowed `cmd` values are exactly: ["mix","bin/check"].)
+      assert system =~ "Only propose a run_command intent whose `cmd` exactly matches"
+      assert system =~ "does not restrict command arguments"
+    end
+
+    test "is told not to propose run_command when no commands are allowed",
+         %{project: project} do
+      put_env(:allowed_commands, [])
+      script([@proposal])
+
+      submit!([mode: :plan], project) |> await_workflow_created()
+      [%{role: :system, content: system}, %{role: :user}] = messages!(1)
+
+      assert system =~ "No commands are allowed by this runtime"
+      assert system =~ "Do not propose run_command intents"
+    end
+
     test "its proposal carries what it looked at and why, leading to what it was shown",
          %{project: project} do
       script([@observe_signup, @proposal])

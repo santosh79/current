@@ -341,6 +341,8 @@ defmodule Current.LLMProposalBuilder do
 
       #{Current.ProposalWireSchema.raw()}
 
+      #{run_command_rules()}
+
       #{edit_file_rules()}
 
       #{observe_rules()}
@@ -645,6 +647,31 @@ defmodule Current.LLMProposalBuilder do
       "Reply with a context request, or with the proposal if you have what you need. " <>
       "If you do ask again, ask for everything still missing in that one reply, " <>
       "since the conversation is re-sent with every round."
+  end
+
+  ## --- run_command rules ----------------------------------------------------
+
+  defp run_command_rules do
+    case Application.get_env(:current, :allowed_commands, []) do
+      [] ->
+        """
+        RunCommand policy:
+
+        No commands are allowed by this runtime.
+        Do not propose run_command intents; they would be refused when the proposal is applied.
+        """
+
+      allowed_commands ->
+        """
+        RunCommand policy:
+
+        The allowed `cmd` values are exactly: #{JSON.encode!(allowed_commands)}.
+        Only propose a run_command intent whose `cmd` exactly matches one of
+        those strings. Any other command will be refused when the proposal is
+        applied. This executable allowlist is not a sandbox.
+        It does not restrict command arguments.
+        """
+    end
   end
 
   ## --- edit_file rules ------------------------------------------------------
