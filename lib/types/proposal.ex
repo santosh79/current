@@ -50,9 +50,12 @@ defmodule Current.Proposal do
           {:error, :not_found} -> nil
         end
 
-      Current.Task.request_details(task_id)
-      |> Map.put(:proposal, proposal)
-      |> Map.put(:workflow_id, proposal.workflow_id)
+      metadata =
+        Current.Task.request_details(task_id)
+        |> Map.put(:workflow_id, proposal.workflow_id)
+
+      proposal
+      |> Map.put(:metadata, metadata)
     end)
   end
 
