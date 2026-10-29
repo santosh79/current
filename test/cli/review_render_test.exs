@@ -213,6 +213,20 @@ defmodule Current.CLI.ReviewRenderTest do
       assert md =~ "Apply with: `current apply sha256:aaaaaaaaaaaa`"
       refute md =~ "Approve with"
     end
+
+    test "a document without mutable workflow status renders its stable mode" do
+      document =
+        review([])
+        |> ReviewJSON.to_map()
+        |> update_in(["workflow"], &Map.delete(&1, "status"))
+        |> Map.drop(["current_proposal_id", "revisions_remaining"])
+
+      md = ReviewMarkdown.render(document)
+
+      assert md =~ "- **Mode:** apply"
+      refute md =~ "- **Status:**"
+      refute md =~ "Approve with"
+    end
   end
 
   describe "ReviewJSON" do

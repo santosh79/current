@@ -54,6 +54,28 @@ defmodule Current.ProposalStore do
     end)
   end
 
+  @doc """
+  Returns produced proposal ids strictly after `position`, in commit order.
+
+  The cursor is an EventStore log position rather than a timestamp or proposal
+  id. Proposal timestamps are assigned before commit, so concurrent workflows
+  can commit out of timestamp order or share a timestamp, while proposal ids
+  are unordered hashes. The log position is the only total commit order.
+  """
+  @spec produced_after(non_neg_integer(), pos_integer()) ::
+          [{pos_integer(), Current.Id.t()}]
+  def produced_after(position, limit \\ 100)
+      when is_integer(position) and position >= 0 and is_integer(limit) and limit > 0 do
+    :ok = sync()
+
+    @table
+    |> :ets.select([
+      {{{:position, :"$1"}, :"$2"}, [{:>, :"$1", position}], [{{:"$1", :"$2"}}]}
+    ])
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.take(limit)
+  end
+
   @spec sync() :: :ok
   def sync do
     GenServer.call(
@@ -252,7 +274,7 @@ defmodule Current.ProposalStore do
          },
          state
        ) do
-    project_event(event)
+    project_event(event, position)
 
     %{
       state
@@ -263,7 +285,8 @@ defmodule Current.ProposalStore do
   defp project_event(
          %Event.ProposalProduced{
            proposal: %Proposal{} = proposal
-         } = event
+         } = event,
+         position
        ) do
     true =
       :ets.insert(
@@ -284,10 +307,20 @@ defmodule Current.ProposalStore do
         }
       )
 
+    # A stable cursor for consumers that need canonical commit order.
+    true =
+      :ets.insert(
+        @table,
+        {
+          {:position, position},
+          proposal.id
+        }
+      )
+
     :ok
   end
 
-  defp project_event(_event) do
+  defp project_event(_event, _position) do
     :ok
   end
 

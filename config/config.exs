@@ -8,6 +8,7 @@ config :current,
   # when a workflow is created, and recorded on its WorkflowCreated event.
   max_revisions: 10,
   data_dir: "./_data",
+  generate_proposal_files: false,
   http: [port: 4000, ip: {127, 0, 0, 1}],
   # Executables run_command may run. Denied by default; not a sandbox.
   allowed_commands: [],

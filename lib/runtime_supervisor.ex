@@ -45,7 +45,8 @@ defmodule Current.RuntimeSupervisor do
         Current.Consensus.Supervisor,
         Current.TaskStore,
         Current.ProposalStore,
-        Current.WorkflowStore,
+        Current.WorkflowStore
+      ] ++ proposal_files_children() ++ [
         {
           DynamicSupervisor,
           name: Current.WorkflowSupervisor, strategy: :one_for_one
@@ -65,5 +66,19 @@ defmodule Current.RuntimeSupervisor do
       strategy: :one_for_one,
       auto_shutdown: :any_significant
     )
+  end
+
+  defp proposal_files_children do
+    if Application.get_env(:current, :generate_proposal_files, false) do
+      [
+        Supervisor.child_spec(
+          Current.ProposalFiles.Supervisor,
+          restart: :temporary,
+          significant: false
+        )
+      ]
+    else
+      []
+    end
   end
 end

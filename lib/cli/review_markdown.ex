@@ -26,7 +26,10 @@ defmodule Current.CLI.ReviewMarkdown do
       "- **Proposal:** `#{proposal["id"]}`",
       "- **Workflow:** `#{workflow["id"]}`",
       if(root, do: "- **Project:** `#{root}`"),
-      "- **Status:** #{workflow["status"]} (#{workflow["mode"]} mode)",
+      if(workflow["status"],
+        do: "- **Status:** #{workflow["status"]} (#{workflow["mode"]} mode)",
+        else: "- **Mode:** #{workflow["mode"]}"
+      ),
       if((proposal["revision"] || 0) > 0,
         do:
           "- **Revision:** #{proposal["revision"]} (replaces `#{Render.short(proposal["revises"])}`)"
