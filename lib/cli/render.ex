@@ -294,8 +294,8 @@ defmodule Current.CLI.Render do
       "Current #{health["version"]} · #{url}",
       "runtime #{health["status"]}",
       "  WAL head  #{health["wal_head"]}",
-      "  builder   #{module_name(health["proposal_builder"])}",
-      "  commands  #{allowed_commands(health["allowed_commands"])}",
+      "  builder           #{module_name(health["proposal_builder"])}",
+      "  allowed_commands  #{allowed_commands(health["allowed_commands"])}",
       if(health["llm_proposal_timeout_ms"],
         do: "  timeout   #{div(health["llm_proposal_timeout_ms"], 1000)}s per model call"
       ),
