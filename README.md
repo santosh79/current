@@ -292,21 +292,49 @@ the record.
 **Requirements**
 
 - Elixir 1.19+ on Erlang/OTP 27+
+- `git`
 - `bash` on your `PATH` (used when running commands)
-- An API key for OpenAI (`OPENAI_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`), or both
+- An API key for OpenAI or Anthropic, or both, exported as `OPENAI_API_KEY`
+  or `ANTHROPIC_API_KEY`. The runtime won't start without at least one.
 
-**1. Start the runtime.** A long-running server with an HTTP API (on
+**1. Get the code** and check out a release. Releases are git tags;
+`git tag --list` shows them all.
+
+```sh
+git clone https://github.com/<you>/current.git
+cd current
+git checkout v0.1.0      # a detached HEAD at that release; `git switch main` to go back
+```
+
+**2. Install dependencies and compile.**
+
+```sh
+mix deps.get
+mix compile
+```
+
+**3. Start the runtime.** A long-running server with an HTTP API (on
 `127.0.0.1:4000` by default). It prints every request and every commit as
 it happens.
 
 ```sh
-ANTHROPIC_API_KEY=sk-ant-... bin/current-server
+bin/current-server
 ```
 
-**2. Build the CLI** in another terminal. It is a client of the API.
+To poke at the runtime from Elixir instead, start it in IEx:
+
+```sh
+iex -S mix
+```
+
+This starts the same runtime and HTTP API with a shell attached, but it
+doesn't print requests and commits.
+
+**4. Build the CLI** in another terminal. It is a client of the API.
 
 ```sh
 make client
+./current help
 ./current status
 ./current models     # the models your API keys give you
 ```
@@ -316,17 +344,24 @@ review. Nothing has touched the project.
 
 ```sh
 ./current run "add input validation to the signup form" \
-  --model anthropic:claude-opus-5-5 --dir path/to/project
+  --model anthropic:claude-opus-5-5 --dir path/to/project --timeout-minutes 5
 ```
 
-**4. Review, approve, apply.** Each is a separate, recorded step.
+**4. Review, then approve, revise or reject.** Each decision is a separate,
+recorded step.
 
 ```sh
-./current review <proposal-id>                    # every edit, file and command (or --json)
-./current revise <proposal-id> -m "keep X, change Y"  # send it back; follows the replacement
+./current review <proposal-id>                    # every edit, file and command, as Markdown
 ./current approve <proposal-id> -m "looks right"  # recorded; nothing is applied yet
-./current apply <proposal-id>                     # apply, verify claims, follow to the end
+./current revise <proposal-id> -m "keep X, change Y"  # send it back and follow the new proposal
+./current reject <proposal-id> -m "wrong approach"    # turn it down
+./current apply <proposal-id>                     # apply, verify its claims, follow to the end
 ```
+
+Approving, rejecting and applying only work on proposals from `current run`.
+A proposal from `current plan` is for review only. `-m` is optional for
+`approve` and `reject` but required for `revise`. Ids can be shortened to a
+unique prefix of at least 4 hex digits, as `review` prints them.
 
 **5. Trace it.**
 
