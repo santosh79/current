@@ -531,7 +531,7 @@ authentication. See [Security](#security) and the
 | Key | Default | Meaning |
 |---|---|---|
 | `data_dir` | `"./_data"` | Log in `consensus/`, artifacts in `artifacts/` |
-| `allowed_commands` | `[]` | Executables `run_command` may run; empty denies all. Not a sandbox |
+| `allowed_commands` | `[]` | Executables `run_command` may run; empty denies all. The configured list is included in the model prompt. Not a sandbox |
 | `llm_proposal_timeout_ms` | `240_000` | Bound on one model call |
 | `llm_task_timeout_ms` | `600_000` | Default bound on producing one proposal |
 | `commit_log_segment_bytes` | 64 MiB | Log segment size before rolling over |
