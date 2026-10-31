@@ -268,9 +268,14 @@ keep the artifact id, with the content gone).
 ### T6. An unauthorized caller controls the runtime
 
 Current's control plane is an HTTP API. It does not authenticate callers or
-implement identity-based access control, and it does not try to defend
-against web pages or other clients: whoever can send it a request is treated
-as its operator. It listens on 127.0.0.1 by default.
+implement identity-based access control: whoever can send it an accepted
+request is treated as its operator. It listens on 127.0.0.1 by default.
+Every route validates `Host` against loopback authorities on the configured
+port plus an explicit allowlist, and rejects browser `Origin` values other
+than allowed loopback or configured origins. These checks prevent a malicious
+web page from using DNS rebinding to turn its hostname into 127.0.0.1 and
+drive the local runtime; requests without `Origin`, such as scripts and
+desktop clients, are allowed.
 
 What a caller with access to the port can do:
 
@@ -288,10 +293,12 @@ proposal that hasn't reached the required state can't be applied. It does
 not check that the caller approving a proposal is an authorized person, and
 `reviewed_by` is supplied by the client and is not an authenticated identity.
 
-**Status: open by design.** Restricting who can reach the API is the
-deployment's job: loopback binding, network policy, a reverse proxy or
-gateway, a tailnet. Remote or multi-user use needs that layer to
-authenticate callers and limit which routes each may use, notably
+**Status: partly mitigated.** Host and Origin validation mitigates browser
+DNS rebinding, but is not authentication and does not restrict local
+processes, other users, or permitted non-browser clients. Restricting who can
+reach the API is the deployment's job: loopback binding, network policy, a
+reverse proxy or gateway, a tailnet. Remote or multi-user use needs that
+layer to authenticate callers and limit which routes each may use, notably
 `POST /v1/tasks`, `POST /v1/proposals/:id/approve` and
 `POST /v1/proposals/:id/apply`.
 
@@ -460,10 +467,12 @@ CA store and trusted endpoint configuration.
 
 - Keep the HTTP API bound to 127.0.0.1 (the default), and don't expose it
   directly to an untrusted network. On a machine with other users, remember
-  that they can reach 127.0.0.1 as well.
+  that they can reach 127.0.0.1 as well. Host and Origin checks stop browser
+  DNS rebinding, not local programs.
 - For remote access, put Current behind a reverse proxy or gateway that
-  authenticates callers and controls which routes each may use, and keep the
-  runtime reachable only from that gateway.
+  authenticates callers and controls which routes each may use, keep the
+  runtime reachable only from that gateway, and add the externally forwarded
+  Host authority to `config :current, :http, allowed_hosts: [...]`.
 - Restrict `POST /v1/tasks`, `POST /v1/proposals/:id/approve` and
   `POST /v1/proposals/:id/apply` to authorized callers. Together they can
   cause arbitrary code to run with the runtime's privileges.
@@ -543,3 +552,4 @@ cheapest way to keep the claim true.
 | Artifacts are content-addressed but not re-verified on read | `Current.BlobStore.put/1`, `read/1` | |
 | Reviewer identity is the client's `$USER` | `Current.CLI.reviewer/0` | |
 | Provider calls explicitly verify certificates and HTTPS hostnames, using TLS 1.2/1.3 and OS CAs; CA-loading failures return an error | `Current.LLMClient.HTTP.request/3` and `ssl_opts/1`, used by OpenAI and Anthropic for completion and model listing | `test/llm_integration/tls_test.exs` checks untrusted-CA refusal for all four operations; `http_test.exs` checks policy and missing CA stores |
+| Every HTTP route rejects unapproved Host authorities and browser Origins before reading the body | `Current.HTTP.RequestGuard`, before `Plug.Parsers` in `Current.HTTP.Router` | `test/http/request_guard_test.exs` covers loopback ports, configured hosts, missing/repeated headers, foreign origins, and both response formats |
