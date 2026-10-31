@@ -157,7 +157,7 @@ record. `current events` prints it.
 ### 1. Get the code and build
 
 ```sh
-git clone https://github.com/<you>/current.git
+git clone https://github.com/santosh79/current.git
 cd current
 mix deps.get
 mix compile
