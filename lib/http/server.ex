@@ -18,6 +18,15 @@ defmodule Current.HTTP.Server do
       CURRENT_HTTP_PORT   port (default 4000)
       CURRENT_HTTP_IP     address to bind (default 127.0.0.1)
 
+  Every route refuses a request whose `Host` header is not loopback on this
+  port (or listed in `allowed_hosts`) or whose `Origin` is not allowed, to
+  defeat DNS rebinding. If you reach the API under another name, for example
+  through a proxy, add it:
+
+      config :current, :http, allowed_hosts: ["current.internal.example.com"]
+
+  See `Current.HTTP.RequestGuard`.
+
   Set `config :current, http: [enabled: false]` to turn the API off. It is
   the runtime's only control plane (the `current` CLI is a client of it), so
   with it off nothing can submit, review or apply anything.
@@ -42,6 +51,10 @@ defmodule Current.HTTP.Server do
     Logger.info("HTTP API listening on #{:inet.ntoa(ip)}:#{port}")
     [{Bandit, plug: Current.HTTP.Router, scheme: :http, ip: ip, port: port}]
   end
+
+  @doc "The port the API listens on (environment first, then config)."
+  @spec port() :: :inet.port_number()
+  def port, do: port(Application.get_env(:current, :http, []))
 
   defp port(config) do
     case System.get_env("CURRENT_HTTP_PORT") do

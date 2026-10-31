@@ -18,7 +18,10 @@ defmodule Current.HTTP.Router do
       GET  /v1/health                      health
 
   There is no authentication. Control who can reach the port with your own
-  gateway or network rules; see `Current.HTTP.Server`.
+  gateway or network rules; see `Current.HTTP.Server`. Every route does,
+  however, refuse requests whose `Host` or `Origin` header is not allowed
+  (`403`), which is what stops a web page from reaching the runtime by DNS
+  rebinding; see `Current.HTTP.RequestGuard`.
 
   Responses are JSON, encoded by `Current.HTTP.Encode`, except `review`
   (the versioned `current.review/v1` document, exactly what
@@ -67,6 +70,10 @@ defmodule Current.HTTP.Router do
   @default_review_max_lines 200
 
   plug(:match)
+
+  # DNS-rebinding defence for every route: Host and Origin checks.
+  # Must run before the body is parsed.
+  plug(Current.HTTP.RequestGuard)
 
   # Transport checks for /mcp (Origin, MCP-Protocol-Version, Content-Type).
   # Must run before the body is parsed; it ignores every other path.

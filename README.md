@@ -521,7 +521,10 @@ routes.
 | `GET /v1/models`, `GET /v1/health` | The model catalog; whether the runtime is up |
 
 Errors are `{"error": {"code", "message"}}` with a matching status. The
-API does no authentication (see [Security](#security)).
+API does no authentication (see [Security](#security)). Every route checks
+`Host` and, when present, `Origin` before reading the body. Loopback Host
+values must use the configured runtime port; deployments behind another
+hostname must add its exact authority to `http[:allowed_hosts]`.
 
 ---
 
@@ -541,9 +544,9 @@ is not supported.
 
 **MCP does not authenticate callers.** Anyone who can reach the endpoint can
 submit, approve, and apply proposals. Keep it on loopback or behind a trusted
-gateway that enforces access control. The transport checks `Origin`,
-`MCP-Protocol-Version`, and `Content-Type`; these are not substitutes for
-authentication. See [Security](#security) and the
+gateway that enforces access control. Like every route, it checks `Host` and
+`Origin`; it additionally checks `MCP-Protocol-Version` and `Content-Type`.
+These are not substitutes for authentication. See [Security](#security) and the
 [threat model](docs/threat_model.md).
 
 ---
@@ -572,6 +575,9 @@ authentication. See [Security](#security) and the
 | `commit_log_segment_bytes` | 64 MiB | Log segment size before rolling over |
 | `proposal_builder` | `Current.LLMProposalBuilder` | What produces proposals |
 | `effect_applicator` | `Current.EffectApplicator` | What applies intents |
+| `http[:allowed_hosts]` | `[]` | Exact Host authorities allowed in addition to loopback hosts on the configured port, for example `current.internal:443` |
+| `mcp[:allowed_origins]` | `[]` | Exact browser origins allowed on every route in addition to loopback origins |
+| `mcp[:allow_loopback_origins]` | `true` | Whether browser origins on `localhost`, `127.0.0.1`, and `[::1]` are accepted |
 | `model_catalog_clients` | OpenAI, Anthropic | Providers asked for models |
 
 ---
@@ -593,9 +599,11 @@ everything about it. It does not limit *what* an approved proposal can do.
   privileges and environment, including filesystem and network access.
   Arguments are not restricted, so allowing interpreters or shells can permit
   arbitrary code execution.
-- **The HTTP API is unauthenticated.** It listens on 127.0.0.1. Restrict
-  who can reach it with a gateway, proxy or network policy; anyone who can
-  reach it can approve and apply.
+- **The HTTP API is unauthenticated.** It listens on 127.0.0.1. Every route
+  validates `Host` and browser `Origin` to prevent DNS rebinding, but these
+  checks do not authenticate non-browser clients. Restrict who can reach it
+  with a gateway, proxy or network policy; anyone who can reach it can
+  approve and apply.
 - **The log is tamper-evident to the runtime, not yet to an attacker.**
   See [Verifiability](#verifiability-a-hash-chained-history).
 
