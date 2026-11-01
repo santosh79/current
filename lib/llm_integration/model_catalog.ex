@@ -37,7 +37,8 @@ defmodule Current.ModelCatalog do
   def llm_clients do
     Application.get_env(:current, :model_catalog_clients, [
       Current.LLMClient.OpenAI,
-      Current.LLMClient.Anthropic
+      Current.LLMClient.Anthropic,
+      Current.LLMClient.OpenAICompatible
     ])
   end
 
