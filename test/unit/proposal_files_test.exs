@@ -10,9 +10,8 @@ defmodule Current.ProposalFilesTest do
       assert ProposalFiles.slug("Add input validation to signup") ==
                "add-input-validation-to-signup"
 
-      assert ProposalFiles.slug(
-               "this is a very long prompt that stops at a word boundary safely"
-             ) == "this-is-a-very-long-prompt-that-stops-at"
+      assert ProposalFiles.slug("this is a very long prompt that stops at a word boundary safely") ==
+               "this-is-a-very-long-prompt-that-stops-at"
 
       assert String.length(
                ProposalFiles.slug(

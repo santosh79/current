@@ -155,8 +155,12 @@ defmodule Current.ProposalFiles do
       prefix = String.slice(value, 0, @max_slug_length)
 
       cond do
-        String.at(value, @max_slug_length) == "-" -> prefix
-        String.ends_with?(prefix, "-") -> String.trim_trailing(prefix, "-")
+        String.at(value, @max_slug_length) == "-" ->
+          prefix
+
+        String.ends_with?(prefix, "-") ->
+          String.trim_trailing(prefix, "-")
+
         String.contains?(prefix, "-") ->
           prefix
           |> String.split("-")

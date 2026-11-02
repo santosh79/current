@@ -110,7 +110,10 @@ defmodule Current.HTTP.RequestGuardTest do
 
     test "the refusal is the usual JSON error on /v1" do
       conn = call(:get, "/v1/health", [{"host", "evil.example.com"}])
-      assert %{"error" => %{"code" => "forbidden", "message" => message}} = JSON.decode!(conn.resp_body)
+
+      assert %{"error" => %{"code" => "forbidden", "message" => message}} =
+               JSON.decode!(conn.resp_body)
+
       assert message =~ "host"
     end
 

@@ -152,7 +152,8 @@ record. `current events` prints it.
 - Elixir 1.19 on Erlang/OTP (`mise.toml` pins OTP 28.5 and Elixir 1.19.5;
   run `mise install` if you use [mise](https://mise.jdx.dev/))
 - `git`, `make`, and `bash`
-- An OpenAI or Anthropic API key
+- An OpenAI or Anthropic API key, or a self-hosted OpenAI-compatible model
+  server (see [Using self-hosted models](docs/self_hosted_models.md))
 
 ### 1. Get the code and build
 
@@ -554,7 +555,7 @@ the record.
 | `current events <workflow-or-task-id>` | The chain: a workflow's events, in log order. |
 | `current proposal <proposal-id>` | A proposal in full: intents, claims, observations, artifacts. |
 | `current artifact <artifact-id>` | An artifact's exact bytes, for piping. |
-| `current models` | Models discovered from the configured providers. |
+| `current models [--refresh]` | List cached models; explicitly refresh discovery when requested. |
 | `current status` | Whether the runtime is up, and how it is configured. |
 
 `--model` is required; use a name `current models` prints.
@@ -622,6 +623,9 @@ These are not substitutes for authentication. See [Security](#security) and the
 |---|---|---|
 | `OPENAI_API_KEY` | runtime | Enables `openai:*` models |
 | `ANTHROPIC_API_KEY` | runtime | Enables `anthropic:*` models |
+| `CURRENT_LOCAL_LLM_BASE_URL` | runtime | Enables `local:*` models from one OpenAI-compatible endpoint, e.g. `http://127.0.0.1:11434/v1` |
+| `CURRENT_LOCAL_LLM_API_KEY` | runtime | Optional bearer token for that endpoint |
+| `CURRENT_LOCAL_LLM_*` | runtime | Response format, token and timeout limits, extra request fields; see [Using self-hosted models](docs/self_hosted_models.md) |
 | `CURRENT_DATA_DIR` | runtime (prod) | Where the log and artifacts live (default `./_data`) |
 | `CURRENT_ALLOWED_COMMANDS` | runtime (prod) | Comma-separated exact `cmd` values allowed for `run_command`; unset keeps the configured default |
 | `CURRENT_HTTP_PORT` | runtime | Port of the HTTP API (default `4000`) |
@@ -629,7 +633,8 @@ These are not substitutes for authentication. See [Security](#security) and the
 | `CURRENT_URL` | CLI | Where the CLI finds the runtime (default `http://127.0.0.1:4000`) |
 
 The runtime starts without an API key, but its model catalog is empty until
-one is set.
+one is set or a self-hosted endpoint is configured. To run proposals on your
+own models, see [Using self-hosted models](docs/self_hosted_models.md).
 
 ### Application config (`config/*.exs`)
 
@@ -645,7 +650,7 @@ one is set.
 | `http[:allowed_hosts]` | `[]` | Exact Host authorities allowed in addition to loopback hosts on the configured port, for example `current.internal:443` |
 | `mcp[:allowed_origins]` | `[]` | Exact browser origins allowed on every route in addition to loopback origins |
 | `mcp[:allow_loopback_origins]` | `true` | Whether browser origins on `localhost`, `127.0.0.1`, and `[::1]` are accepted |
-| `model_catalog_clients` | OpenAI, Anthropic | Providers asked for models |
+| `model_catalog_clients` | OpenAI, Anthropic, local OpenAI-compatible | Providers asked for models |
 
 ---
 
@@ -699,7 +704,7 @@ vulnerabilities privately.
 | State and rejections rebuilt deterministically from the log | ✅ |
 | Content-addressed artifacts for every input and output | ✅ |
 | Versioned events with upcasting | ✅ |
-| OpenAI and Anthropic models, chosen per task | ✅ |
+| OpenAI, Anthropic, and self-hosted OpenAI-compatible models, chosen per task | ✅ |
 | MCP tools over stateless Streamable HTTP (`POST /mcp`) | ✅ |
 | Command executable allowlist (deny by default) | ✅ |
 | `current export` / `current replay`: re-execute on another machine and diff | planned |

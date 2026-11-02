@@ -80,25 +80,35 @@ defmodule Current.LLMProposalBuilder do
           | {:error, ProposalProductionError.t()}
   def build(%Request{model: model} = req, workflow_id, client, timeout_ms, project_dir)
       when is_binary(model) and is_integer(timeout_ms) and timeout_ms > 0 do
-    within_task_timeout(req, fn ->
-      with {:ok, project} <- project_layout(project_dir) do
-        converse(%{
-          request: req,
-          workflow_id: workflow_id,
-          client: client,
-          call_timeout_ms: timeout_ms,
-          project: project,
-          messages: initial_messages(req, project, project_dir),
-          observations: [],
-          calls: 0,
-          cumulative_usage: nil,
-          rounds_left: @max_observe_rounds,
-          repairs_left: @max_repairs,
-          budget: @context_budget_bytes
-        })
-      end
-    end)
+    with {:ok, {call_bound, task_bound}} <- model_timeouts(model, timeout_ms) do
+      within_task_timeout(req, task_bound, fn ->
+        with {:ok, project} <- project_layout(project_dir) do
+          converse(%{
+            request: req,
+            workflow_id: workflow_id,
+            client: client,
+            call_timeout_ms: call_bound,
+            project: project,
+            messages: initial_messages(req, project, project_dir),
+            observations: [],
+            calls: 0,
+            cumulative_usage: nil,
+            rounds_left: @max_observe_rounds,
+            repairs_left: @max_repairs,
+            budget: @context_budget_bytes
+          })
+        end
+      end)
+    else
+      {:error, reason} ->
+        {:error, %ProposalProductionError{stage: :connection, reason: reason}}
+    end
   end
+
+  defp model_timeouts("local:" <> _, call_ms),
+    do: Current.LLMClient.OpenAICompatible.timeouts(call_ms, task_timeout_ms())
+
+  defp model_timeouts(_model, call_ms), do: {:ok, {call_ms, task_timeout_ms()}}
 
   defp project_layout(nil) do
     {:error, %ProposalProductionError{stage: :project_context, reason: :no_project_dir}}
@@ -120,8 +130,8 @@ defmodule Current.LLMProposalBuilder do
   # doing when time runs out -- waiting on the model or walking a huge
   # directory for a glob. The per-call task below is linked to this one,
   # so killing this one takes an in-flight model call down with it.
-  defp within_task_timeout(%Request{timeout_ms: requested}, build) do
-    timeout_ms = requested || task_timeout_ms()
+  defp within_task_timeout(%Request{timeout_ms: requested}, default_timeout_ms, build) do
+    timeout_ms = requested || default_timeout_ms
     task = Task.async(fn -> contained(build) end)
 
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do

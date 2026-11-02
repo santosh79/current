@@ -317,17 +317,12 @@ defmodule Current.API do
     status()
   end
 
-  @doc """
-  Returns the provider-qualified model names currently present in the runtime's
-  model catalog.
-  """
-  @spec models() :: [String.t()]
-  def models do
+  @doc "Returns the current model snapshot, or explicitly refreshes it."
+  @spec models(boolean()) :: [String.t()]
+  def models(refresh \\ false) do
     ActivityHub.api(:models)
-
     {:ok, pid} = Current.ModelCatalog.find_supervisor_pid()
-
-    Current.ModelCatalog.all(pid)
+    if refresh, do: Current.ModelCatalog.refresh(pid), else: Current.ModelCatalog.all(pid)
   end
 
   @doc false

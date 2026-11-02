@@ -14,7 +14,7 @@ defmodule Current.HTTP.Router do
       POST /v1/proposals/:id/revise        request_revision
       POST /v1/proposals/:id/apply         apply_proposal
       GET  /v1/artifacts/:id               artifact   (raw bytes)
-      GET  /v1/models                      models
+      GET  /v1/models                      models (?refresh=true for explicit discovery)
       GET  /v1/health                      health
 
   There is no authentication. Control who can reach the port with your own
@@ -217,7 +217,9 @@ defmodule Current.HTTP.Router do
   ## Runtime
 
   get "/v1/models" do
-    case API.models() do
+    conn = fetch_query_params(conn)
+
+    case API.models(conn.query_params["refresh"] in ["1", "true"]) do
       models when is_list(models) -> json(conn, 200, %{models: models})
       {:error, reason} -> respond_error(conn, reason)
     end
