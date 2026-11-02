@@ -2,11 +2,11 @@ defmodule Current.FakeProposalBuilder do
   @behaviour Current.ProposalBuilder
 
   @impl true
-  @spec build(Request.t(), Current.Id.t(), module(), pos_integer(), Path.t() | nil) ::
+  @spec build(Request.t(), Current.Id.t(), String.t(), pos_integer(), Path.t() | nil) ::
           {:ok, Proposal.t()}
           | {:ok, Proposal.t(), Current.Id.t()}
           | {:error, ProposalProductionError.t()}
-  def build(%Current.Request{} = req, workflow_id, _module, _timeout_ms, _project_dir) do
+  def build(%Current.Request{} = req, workflow_id, _model, _timeout_ms, _project_dir) do
     proposal_id = Current.Id.generate()
 
     # Canonical, like the project_dir submit_task records for the tmp dir

@@ -74,17 +74,19 @@ defmodule Current.LLMProposalBuilder do
   def task_timeout_ms, do: Application.get_env(:current, :llm_task_timeout_ms, @task_timeout_ms)
 
   @impl true
-  @spec build(Request.t(), Current.Id.t(), module(), pos_integer(), Path.t() | nil) ::
+  @spec build(Request.t(), Current.Id.t(), String.t(), pos_integer(), Path.t() | nil) ::
           {:ok, Proposal.t()}
           | {:ok, Proposal.t(), Current.Id.t()}
           | {:error, ProposalProductionError.t()}
-  def build(%Request{model: model} = req, workflow_id, client, timeout_ms, project_dir)
+  def build(%Request{} = req, workflow_id, model, timeout_ms, project_dir)
       when is_binary(model) and is_integer(timeout_ms) and timeout_ms > 0 do
     within_task_timeout(req, fn ->
-      with {:ok, project} <- project_layout(project_dir) do
+      with {:ok, client} <- client_for(model),
+           {:ok, project} <- project_layout(project_dir) do
         converse(%{
           request: req,
           workflow_id: workflow_id,
+          model: model,
           client: client,
           call_timeout_ms: timeout_ms,
           project: project,
@@ -98,6 +100,22 @@ defmodule Current.LLMProposalBuilder do
         })
       end
     end)
+  end
+
+  # The client is the one whose provider is the model name's prefix.
+  defp client_for(model) do
+    with {:ok, provider, _model_id} <- split(model),
+         client when not is_nil(client) <-
+           Enum.find(Current.ModelCatalog.llm_clients(), &(&1.provider() == provider)) do
+      {:ok, client}
+    else
+      _ ->
+        {:error,
+         %ProposalProductionError{
+           stage: :connection,
+           reason: {:no_client_for_model, model}
+         }}
+    end
   end
 
   defp project_layout(nil) do
@@ -146,7 +164,7 @@ defmodule Current.LLMProposalBuilder do
            state.client,
            state.messages,
            state.call_timeout_ms,
-           state.request.model
+           state.model
          ) do
       {:ok, %{text: raw, usage: usage}} ->
         calls = state.calls + 1

@@ -72,8 +72,6 @@ defmodule Current.WorkflowOrchestrator do
         input: task.input,
         context: task.context,
         mode: task.mode,
-        # The model recorded on the task. start_proposal_production/1
-        # picks the client from it.
         model: task.model,
         # The task's own bound on producing a proposal (nil: the default),
         # which the proposal builder reads off the request.
@@ -416,7 +414,6 @@ defmodule Current.WorkflowOrchestrator do
 
   defp start_proposal_production(state) do
     builder = Application.fetch_env!(:current, :proposal_builder)
-    client = client_module(state.request)
     timeout_ms = Application.fetch_env!(:current, :llm_proposal_timeout_ms)
 
     orchestrator = self()
@@ -428,26 +425,16 @@ defmodule Current.WorkflowOrchestrator do
     pid =
       spawn_link(fn ->
         message =
-          case client do
-            {:ok, client_mod} ->
-              case builder.build(request, workflow_id, client_mod, timeout_ms, project_dir) do
-                {:ok, %Proposal{} = proposal} ->
-                  raw_output_blob_id = nil
-                  {:proposal_produced, proposal, raw_output_blob_id}
+          case builder.build(request, workflow_id, request.model, timeout_ms, project_dir) do
+            {:ok, %Proposal{} = proposal} ->
+              raw_output_blob_id = nil
+              {:proposal_produced, proposal, raw_output_blob_id}
 
-                {:ok, %Proposal{} = proposal, raw_output_blob_id} ->
-                  {:proposal_produced, proposal, raw_output_blob_id}
+            {:ok, %Proposal{} = proposal, raw_output_blob_id} ->
+              {:proposal_produced, proposal, raw_output_blob_id}
 
-                {:error, %ProposalProductionError{} = err} ->
-                  {:proposal_production_failed, err}
-              end
-
-            {:error, reason} ->
-              {:proposal_production_failed,
-               %ProposalProductionError{
-                 stage: :connection,
-                 reason: reason
-               }}
+            {:error, %ProposalProductionError{} = err} ->
+              {:proposal_production_failed, err}
           end
 
         send(orchestrator, message)
@@ -480,13 +467,6 @@ defmodule Current.WorkflowOrchestrator do
   # chain, so the lineage cannot be forged by model output.
   defp stamp_lineage(%Proposal{} = proposal, %{revision: revision, revises: revises}),
     do: %{proposal | revision: revision, revises: revises}
-
-  defp client_module(%Request{model: model}) do
-    case client_for(model) do
-      {:ok, client_mod} -> {:ok, client_mod}
-      :error -> {:error, {:no_client_for_model, model}}
-    end
-  end
 
   ## Effect application
 
@@ -710,25 +690,5 @@ defmodule Current.WorkflowOrchestrator do
     })
 
     :ok
-  end
-
-  defp client_for(model_name) when is_binary(model_name) do
-    with {:ok, provider, _model_id} <- split(model_name),
-         client when not is_nil(client) <-
-           Enum.find(Current.ModelCatalog.llm_clients(), &(&1.provider() == provider)) do
-      {:ok, client}
-    else
-      _ -> :error
-    end
-  end
-
-  defp split(model_name) when is_binary(model_name) do
-    case String.split(model_name, ":", parts: 2) do
-      [provider, model_id] when provider != "" and model_id != "" ->
-        {:ok, provider, model_id}
-
-      _ ->
-        :error
-    end
   end
 end
