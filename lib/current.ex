@@ -50,9 +50,9 @@ defmodule Current do
   recorded on TaskCreated; WorkflowOrchestrator picks the provider's
   client from it and the proposal builder asks that client for it.
 
-  The catalog is discovered at startup. To update it after adding or removing
-  a local model, run `current models --refresh`. Ordinary lookups do not
-  contact providers; models absent from the snapshot are rejected.
+  The catalog is discovered at startup. Ordinary lookups do not contact
+  providers; restart the runtime after adding or removing a local model.
+  Models absent from the snapshot are rejected.
 
   `req.timeout_ms` bounds how long producing the proposal may take. nil
   (the default) means the runtime's own bound; otherwise it is a number

@@ -317,12 +317,12 @@ defmodule Current.API do
     status()
   end
 
-  @doc "Returns the current model snapshot, or explicitly refreshes it."
-  @spec models(boolean()) :: [String.t()]
-  def models(refresh \\ false) do
+  @doc "Returns the current model snapshot."
+  @spec models() :: [String.t()]
+  def models do
     ActivityHub.api(:models)
     {:ok, pid} = Current.ModelCatalog.find_supervisor_pid()
-    if refresh, do: Current.ModelCatalog.refresh(pid), else: Current.ModelCatalog.all(pid)
+    Current.ModelCatalog.all(pid)
   end
 
   @doc false

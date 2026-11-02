@@ -44,8 +44,6 @@ Start Current with Ollama's OpenAI-compatible URL (include `/v1`):
 
 ```sh
 export CURRENT_LOCAL_LLM_BASE_URL=http://127.0.0.1:11434/v1
-export CURRENT_LOCAL_LLM_PROPOSAL_TIMEOUT_MS=600000
-export CURRENT_LOCAL_LLM_TASK_TIMEOUT_MS=1800000
 bin/current-server
 ```
 
@@ -69,60 +67,25 @@ Use the exact model id `current models` prints, for example
 `CURRENT_LOCAL_LLM_API_KEY`; it is sent as a Bearer token. A gateway such as
 LiteLLM can put several backends behind this one endpoint.
 
-## Discovery
+## Discovery and settings
 
-Current discovers models in the background once at startup. `current models`
-reads the current snapshot without making network requests. After starting a
-model server or adding/removing a model, explicitly refresh the catalog:
+Current discovers models once at startup. Restart Current after starting the
+model server or changing its models. `current models` reads the resulting
+snapshot without making network requests.
 
-```sh
-current models --refresh
-```
+The supported runtime settings are:
 
-Only successful provider discoveries replace that provider's models; temporary
-connection failures retain the previous snapshot. Unsetting
-`CURRENT_LOCAL_LLM_BASE_URL` and refreshing clears the `local:*` entries.
-The HTTP API also accepts `GET /v1/models?refresh=true` for an explicit refresh.
-
-## Output compatibility and limits
-
-All variables below start with `CURRENT_LOCAL_LLM_`:
-
-| Suffix | Default | Purpose |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `BASE_URL` | unset (off) | API root including `/v1` |
-| `API_KEY` | unset | Optional Bearer token |
-| `RESPONSE_FORMAT` | `auto` | `auto`, `json_schema`, `json`, or `none` |
-| `JSON_SCHEMA_STRICT` | `false` | `true` only if the server supports the whole schema strictly |
-| `MAX_TOKENS` | `16000` | Output-token limit per model call |
-| `PROPOSAL_TIMEOUT_MS` | runtime's per-call limit | Limit on one model call |
-| `TASK_TIMEOUT_MS` | runtime's per-task limit | Limit on the whole proposal conversation |
-| `EXTRA_FIELDS` | `{}` | JSON object merged into every request, for server-specific options |
-| `ALLOW_HTTP_HOSTNAMES` | unset | `true` permits unencrypted HTTP to a trusted hostname |
+| `CURRENT_LOCAL_LLM_BASE_URL` | unset (off) | API root including `/v1` |
+| `CURRENT_LOCAL_LLM_API_KEY` | unset | Optional Bearer token |
+| `CURRENT_LOCAL_LLM_MAX_TOKENS` | `16000` | Output-token limit per model call |
 
-An empty variable counts as unset. A malformed one, such as `MAX_TOKENS=0` or
-`RESPONSE_FORMAT=typo`, fails the call with the name of the setting before any
-request is sent.
-
-`auto` sends Current's canonical proposal schema first, as `json_schema`. If the
-server rejects that, it falls back to JSON-object mode and then to no
-response-format field. It does so only for HTTP 400 or 422 errors that name
-`response_format` or `json_schema`. Context-window errors, authentication
-failures, timeouts and unrelated errors are never retried. Every attempt may use
-all the time that is left of the call's limit, and a retry never extends it.
-The explicit modes do not negotiate. Each call probes from the first format;
-no response-format cache is maintained.
-
-`none` removes even a `response_format` supplied in `EXTRA_FIELDS`. The fields
-that belong to the protocol (model, messages, streaming, the output limit and
-the response format) cannot be overridden by it. A server that documents
-native options on its compatible endpoint can take them through it, for example
-`CURRENT_LOCAL_LLM_EXTRA_FIELDS='{"options":{"num_ctx":32768}}'`; check the
-server's documentation, because unsupported fields may be ignored or rejected.
-
-A task's explicit `--timeout-minutes` still overrides the whole-task limit. The
-CLI waits for as long as the runtime reports for a task; if you set a local
-default beyond that, pass `--timeout-minutes` too so the CLI keeps waiting.
+Empty values count as unset. Current sends ordinary non-streaming Chat
+Completions requests without a `response_format`; the proposal schema is already
+included in the prompt and malformed replies use the normal repair loop.
+Use the runtime-wide timeout configuration or `--timeout-minutes` for slow
+models.
 
 ## Model quality and context
 
@@ -134,25 +97,15 @@ are removed, and the usage reported by the server, including reasoning tokens,
 is recorded.
 
 Instruction-tuned coding models such as Qwen2.5-Coder-Instruct are reasonable
-starting points, not a guarantee of schema compliance. Small models often need
-schema-constrained decoding and narrow tasks. Try both kinds of reply, a request
-to see files and a proposal, with your server and model: support for strict
-schemas varies, because Current's schema has references, unions and
-conditionals.
+starting points, not a guarantee of schema compliance. Small models benefit from narrow tasks. Test both kinds of reply—a request to
+see files and a proposal—with your chosen server and model.
 
 ## Transport safety
 
-Hosted providers stay HTTPS-only. For `local`, plain HTTP is allowed by default
-only to a literal loopback, RFC 1918 or IPv6 unique-local address, or to
-`localhost`, which is pinned to `127.0.0.1`. IPv6 loopback is written `[::1]`.
-Public IP addresses need HTTPS.
-
-A Docker or LAN hostname (`http://ollama:11434/v1`,
-`http://host.docker.internal:11434/v1`) needs an explicit
-`CURRENT_LOCAL_LLM_ALLOW_HTTP_HOSTNAMES=true`. That trusts your DNS and sends
-prompts, including your source code, and any API key unencrypted; do not enable
-it on a network you do not trust. Redirects are never followed. Credentials,
-queries and fragments in the base URL are refused. For an internal HTTPS
-endpoint with a private CA, the `cacerts` application setting of
-`Current.LLMClient.HTTP` is supported without disabling certificate or hostname
-verification.
+Hosted providers stay HTTPS-only. The `local` provider also permits HTTP
+because its base URL is trusted operator configuration. HTTP sends prompts,
+source code and any API key in cleartext, so use it only on a network you trust.
+Redirects are not followed, and credentials, queries and fragments in the base
+URL are refused. Internal HTTPS endpoints may configure the `cacerts`
+application setting of `Current.LLMClient.HTTP` without disabling certificate
+or hostname verification.

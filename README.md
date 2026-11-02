@@ -555,7 +555,7 @@ the record.
 | `current events <workflow-or-task-id>` | The chain: a workflow's events, in log order. |
 | `current proposal <proposal-id>` | A proposal in full: intents, claims, observations, artifacts. |
 | `current artifact <artifact-id>` | An artifact's exact bytes, for piping. |
-| `current models [--refresh]` | List cached models; explicitly refresh discovery when requested. |
+| `current models` | Models discovered from the configured providers at startup. |
 | `current status` | Whether the runtime is up, and how it is configured. |
 
 `--model` is required; use a name `current models` prints.
@@ -625,7 +625,7 @@ These are not substitutes for authentication. See [Security](#security) and the
 | `ANTHROPIC_API_KEY` | runtime | Enables `anthropic:*` models |
 | `CURRENT_LOCAL_LLM_BASE_URL` | runtime | Enables `local:*` models from one OpenAI-compatible endpoint, e.g. `http://127.0.0.1:11434/v1` |
 | `CURRENT_LOCAL_LLM_API_KEY` | runtime | Optional bearer token for that endpoint |
-| `CURRENT_LOCAL_LLM_*` | runtime | Response format, token and timeout limits, extra request fields; see [Using self-hosted models](docs/self_hosted_models.md) |
+| `CURRENT_LOCAL_LLM_MAX_TOKENS` | runtime | Optional output-token limit for the self-hosted endpoint (default `16000`) |
 | `CURRENT_DATA_DIR` | runtime (prod) | Where the log and artifacts live (default `./_data`) |
 | `CURRENT_ALLOWED_COMMANDS` | runtime (prod) | Comma-separated exact `cmd` values allowed for `run_command`; unset keeps the configured default |
 | `CURRENT_HTTP_PORT` | runtime | Port of the HTTP API (default `4000`) |

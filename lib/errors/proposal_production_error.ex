@@ -31,9 +31,6 @@ defmodule Current.Error.ProposalProductionError do
       do:
         "model response was truncated at #{count} output tokens; increase the provider's output limit"
 
-  def message(%__MODULE__{stage: :connection, reason: {:invalid_local_llm_setting, setting}}),
-    do: "invalid self-hosted model setting CURRENT_LOCAL_LLM_#{setting}"
-
   def message(%__MODULE__{stage: :connection, reason: reason}),
     do: "could not connect to the model: #{inspect(reason)}"
 

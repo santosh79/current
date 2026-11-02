@@ -12,7 +12,7 @@ defmodule Current.CLI do
       current proposal <proposal-id>
       current review <proposal-id> [--json] [--max-lines <n>] [--raw]
       current artifact <artifact-id>
-      current models [--refresh]
+      current models
       current status
 
   Current is the runtime; `current` is merely a client of it. The CLI
@@ -117,9 +117,6 @@ defmodule Current.CLI do
 
       ["models"] ->
         :models
-
-      ["models", "--refresh"] ->
-        {:models, true}
 
       ["status"] ->
         :status
@@ -311,7 +308,7 @@ defmodule Current.CLI do
       current proposal <proposal-id>
       current review <proposal-id> [--json] [--max-lines <n>] [--raw]
       current artifact <artifact-id>
-      current models [--refresh]
+      current models
       current status
 
     Commands:
@@ -325,7 +322,7 @@ defmodule Current.CLI do
       proposal  A proposal in full: intents, claims, artifacts.
       review    A proposal with its diffs and file contents, as Markdown (or --json).
       artifact  An artifact's exact bytes, e.g. a proposed diff.
-      models    List cached models; --refresh queries the providers.
+      models    List models discovered from the configured providers at startup.
       status    Whether the runtime is up, and how it is configured.
 
     Options:
@@ -454,10 +451,8 @@ defmodule Current.CLI do
     end
   end
 
-  defp dispatch(:models, client), do: dispatch({:models, false}, client)
-
-  defp dispatch({:models, refresh}, client) do
-    case Client.models(client, refresh) do
+  defp dispatch(:models, client) do
+    case Client.models(client) do
       {:ok, models} -> print_models(models)
       {:error, reason} -> fail(transport_error(reason, client.url))
     end

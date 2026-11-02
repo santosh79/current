@@ -34,11 +34,10 @@ defmodule Current.CLITest do
     id
   end
 
-  test "models refresh is explicit" do
+  test "models takes no refresh mode" do
     assert CLI.parse(["models"]) == :models
-    assert CLI.parse(["models", "--refresh"]) == {:models, true}
+    assert {:error, _} = CLI.parse(["models", "--refresh"])
   end
-
   describe "parse/1" do
     test "plan defaults --dir to the current directory" do
       assert CLI.parse(["plan", "Add rate limiting", "--model", "openai:gpt-5.6"]) ==

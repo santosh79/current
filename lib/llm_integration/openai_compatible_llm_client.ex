@@ -7,10 +7,9 @@ defmodule Current.LLMClient.OpenAICompatible do
   `local:<model-id>`. Model ids are not rewritten, including ids containing
   colons (for example, Ollama tags).
 
-  Settings are read from `CURRENT_LOCAL_LLM_*` environment variables on every
-  call, so a server and its settings can change without rebuilding Current.
-  An unset or empty `CURRENT_LOCAL_LLM_BASE_URL` turns the provider off. See
-  docs/self_hosted_models.md for the full list.
+  The base URL, optional API key and output-token limit are read from
+  `CURRENT_LOCAL_LLM_*` environment variables on every call. An unset or empty
+  `CURRENT_LOCAL_LLM_BASE_URL` turns the provider off.
   """
   @behaviour Current.LLMClient
 
@@ -19,10 +18,6 @@ defmodule Current.LLMClient.OpenAICompatible do
   @env_prefix "CURRENT_LOCAL_LLM_"
   @max_tokens 16_000
 
-  # Fields that belong to the protocol Current speaks, not to the operator.
-  # Extra request fields can never set or replace them.
-  @protocol_fields ~w(response_format stream model messages max_tokens max_completion_tokens)
-
   @impl true
   def provider, do: "local"
 
@@ -30,7 +25,7 @@ defmodule Current.LLMClient.OpenAICompatible do
   def list_models(timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0 do
     with {:ok, base} <- base_url(),
          {:ok, endpoint} <- HTTP.endpoint(__MODULE__, base, "/models"),
-         {:ok, body} <- HTTP.request(:get, {endpoint, headers()}, timeout_ms, __MODULE__) do
+         {:ok, body} <- HTTP.request(:get, {endpoint, headers()}, timeout_ms) do
       decode_models(body)
     end
   end
@@ -38,21 +33,13 @@ defmodule Current.LLMClient.OpenAICompatible do
   @impl true
   def complete(messages, timeout_ms, model)
       when is_list(messages) and is_integer(timeout_ms) and timeout_ms > 0 and is_binary(model) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-
     with {:ok, base} <- base_url(),
          {:ok, endpoint} <- HTTP.endpoint(__MODULE__, base, "/chat/completions"),
-         {:ok, options} <- settings() do
-      attempt(messages, model, endpoint, options, modes(options.format), deadline)
-    end
-  end
-
-  @doc false
-  # Validate local timeout overrides before a task starts.
-  def timeouts(call_default, task_default) do
-    with {:ok, call_ms} <- positive_integer("PROPOSAL_TIMEOUT_MS", call_default),
-         {:ok, task_ms} <- positive_integer("TASK_TIMEOUT_MS", task_default) do
-      {:ok, {call_ms, task_ms}}
+         {:ok, max_tokens} <- positive_integer("MAX_TOKENS", @max_tokens),
+         {:ok, body} <- encode_body(messages, model, max_tokens),
+         request = {endpoint, headers(), ~c"application/json", body},
+         {:ok, response} <- HTTP.request(:post, request, timeout_ms) do
+      decode_response(response, max_tokens)
     end
   end
 
@@ -81,18 +68,6 @@ defmodule Current.LLMClient.OpenAICompatible do
     end
   end
 
-  defp settings do
-    with {:ok, max_tokens} <- positive_integer("MAX_TOKENS", @max_tokens),
-         {:ok, _} <- positive_integer("PROPOSAL_TIMEOUT_MS", 240_000),
-         {:ok, _} <- positive_integer("TASK_TIMEOUT_MS", 600_000),
-         {:ok, format} <-
-           choice("RESPONSE_FORMAT", "auto", ["auto", "json_schema", "json", "none"]),
-         {:ok, strict} <- choice("JSON_SCHEMA_STRICT", "false", ["true", "false"]),
-         {:ok, extra} <- extra_fields() do
-      {:ok, %{max_tokens: max_tokens, format: format, strict: strict == "true", extra: extra}}
-    end
-  end
-
   defp positive_integer(suffix, default) do
     case env(suffix) do
       nil ->
@@ -106,108 +81,19 @@ defmodule Current.LLMClient.OpenAICompatible do
     end
   end
 
-  defp choice(suffix, default, allowed) do
-    value = env(suffix) || default
-    if value in allowed, do: {:ok, value}, else: {:error, {:invalid_local_llm_setting, suffix}}
-  end
-
-  defp extra_fields do
-    case JSON.decode(env("EXTRA_FIELDS") || "{}") do
-      {:ok, extra} when is_map(extra) -> {:ok, extra}
-      _ -> {:error, {:invalid_local_llm_setting, "EXTRA_FIELDS"}}
-    end
-  end
-
   ## --- Completion ------------------------------------------------------------
 
-  # Try simpler response formats only when a server rejects the current one.
-  defp modes("auto"), do: ["json_schema", "json", "none"]
-  defp modes(format), do: [format]
-
-  # Every attempt may use all the time that is left: a rejected response
-  # format comes back quickly, so no time is held in reserve for fallbacks,
-  # and the caller's deadline is never extended by a retry.
-  defp attempt(messages, model, endpoint, options, [mode | rest], deadline) do
-    remaining = deadline - System.monotonic_time(:millisecond)
-
-    if remaining <= 0 do
-      {:error, :timeout}
-    else
-      with {:ok, body} <- encode_body(messages, model, options, mode) do
-        request = {endpoint, headers(), ~c"application/json", body}
-
-        case HTTP.request(:post, request, remaining, __MODULE__) do
-          {:ok, response} ->
-            decode_response(response, options.max_tokens)
-
-          {:error, _} = error ->
-            if rest != [] and format_error?(error) do
-              attempt(messages, model, endpoint, options, rest, deadline)
-            else
-              error
-            end
-        end
-      end
-    end
-  end
-
-  defp encode_body(messages, model, options, mode) do
-    {:ok, JSON.encode!(request_body(messages, model, options, mode))}
+  defp encode_body(messages, model, max_tokens) do
+    {:ok,
+     JSON.encode!(%{
+       "model" => model,
+       "messages" => Messages.encode(messages),
+       "max_tokens" => max_tokens,
+       "stream" => false
+     })}
   rescue
     error -> {:error, {:request_encode_failed, Exception.message(error)}}
   end
-
-  defp request_body(messages, model, options, mode) do
-    # Protocol-owned fields cannot be overridden by extra fields. In particular,
-    # `none` must really omit response_format, even if supplied in extra fields.
-    body =
-      options.extra
-      |> Map.drop(@protocol_fields)
-      |> Map.merge(%{
-        "model" => model,
-        "messages" => Messages.encode(messages),
-        "max_tokens" => options.max_tokens,
-        "stream" => false
-      })
-
-    case mode do
-      "none" ->
-        body
-
-      "json" ->
-        Map.put(body, "response_format", %{"type" => "json_object"})
-
-      "json_schema" ->
-        Map.put(body, "response_format", %{
-          "type" => "json_schema",
-          "json_schema" => %{
-            "name" => "current_reply",
-            "strict" => options.strict,
-            "schema" => JSON.decode!(Current.ProposalWireSchema.raw())
-          }
-        })
-    end
-  end
-
-  # Only a rejection that is about the response format falls back to a
-  # simpler one. Context-window overflows also come back as 400s, often
-  # mentioning the same field; retrying those could never help and would hide
-  # the real error.
-  defp format_error?({:error, {:http_error, status, body}})
-       when status in [400, 422] and is_binary(body) do
-    body = String.downcase(body)
-
-    String.contains?(body, ["response_format", "json_schema"]) and
-      not String.contains?(body, [
-        "context_length",
-        "context length",
-        "context window",
-        "too many tokens",
-        "maximum context"
-      ])
-  end
-
-  defp format_error?(_), do: false
 
   ## --- Decoding --------------------------------------------------------------
 

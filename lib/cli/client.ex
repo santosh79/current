@@ -157,10 +157,9 @@ defmodule Current.CLI.Client do
     end
   end
 
-  @spec models(t(), boolean()) :: {:ok, [String.t()]} | {:error, error()}
-  def models(client, refresh \\ false) do
-    path = if refresh, do: "/v1/models?refresh=true", else: "/v1/models"
-    with {:ok, %{"models" => models}} <- json(client, :get, path), do: {:ok, models}
+  @spec models(t()) :: {:ok, [String.t()]} | {:error, error()}
+  def models(client) do
+    with {:ok, %{"models" => models}} <- json(client, :get, "/v1/models"), do: {:ok, models}
   end
 
   @spec health(t()) :: {:ok, map()} | {:error, error()}
