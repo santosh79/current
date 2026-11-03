@@ -58,7 +58,9 @@ defmodule Current.ProposalFilesSupervisorTest do
 
   defp await_pid(name, attempts) do
     case Process.whereis(name) do
-      pid when is_pid(pid) -> pid
+      pid when is_pid(pid) ->
+        pid
+
       _ ->
         Process.sleep(10)
         await_pid(name, attempts - 1)
@@ -71,7 +73,9 @@ defmodule Current.ProposalFilesSupervisorTest do
 
   defp await_new_pid(name, old_pid, attempts) do
     case Process.whereis(name) do
-      pid when is_pid(pid) and pid != old_pid -> pid
+      pid when is_pid(pid) and pid != old_pid ->
+        pid
+
       _ ->
         Process.sleep(10)
         await_new_pid(name, old_pid, attempts - 1)

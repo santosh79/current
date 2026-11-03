@@ -46,14 +46,16 @@ defmodule Current.RuntimeSupervisor do
         Current.TaskStore,
         Current.ProposalStore,
         Current.WorkflowStore
-      ] ++ proposal_files_children() ++ [
-        {
-          DynamicSupervisor,
-          name: Current.WorkflowSupervisor, strategy: :one_for_one
-        },
-        Current.ModelCatalog,
-        Current.TaskDispatcher
-      ]
+      ] ++
+        proposal_files_children() ++
+        [
+          {
+            DynamicSupervisor,
+            name: Current.WorkflowSupervisor, strategy: :one_for_one
+          },
+          Current.ModelCatalog,
+          Current.TaskDispatcher
+        ]
 
     children =
       case Keyword.get(config, :enabled, true) do
