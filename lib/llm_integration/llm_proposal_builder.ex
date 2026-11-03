@@ -102,14 +102,15 @@ defmodule Current.LLMProposalBuilder do
     end)
   end
 
-  # The client is the one whose provider is the model name's prefix.
+  # The catalog knows which client listed the model.
   defp client_for(model) do
-    with {:ok, provider, _model_id} <- split(model),
-         client when not is_nil(client) <-
-           Enum.find(Current.ModelCatalog.llm_clients(), &(&1.provider() == provider)) do
-      {:ok, client}
-    else
-      _ ->
+    {:ok, pid} = Current.ModelCatalog.find_supervisor_pid()
+
+    case Current.ModelCatalog.resolve(pid, model) do
+      {:ok, client} ->
+        {:ok, client}
+
+      :error ->
         {:error,
          %ProposalProductionError{
            stage: :connection,
