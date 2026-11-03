@@ -244,27 +244,6 @@ runtime:
 5. **checks the outcome itself.** Claims are evaluated against recorded
    results, and a claim that doesn't hold fails the workflow.
 
-```mermaid
-flowchart TD
-    task["Request: prompt, project, model"] --> layout["Model sees the project layout"]
-    layout --> reply{"Model replies"}
-    reply -- "observe" --> read["Runtime reads files<br/>(read-only, filtered, recorded)"]
-    read -- "up to 8 rounds" --> reply
-    reply -- "proposal" --> recorded[("Decoded and recorded")]
-    recorded --> validate{"Validate"}
-    validate -- "invalid" --> failed1(["failed"])
-    validate -- "plan mode" --> planned(["planned"])
-    validate -- "apply mode" --> review{"Review<br/>(person or agent)"}
-    review -- "revise (feedback)" --> revision["Revision requested"]
-    revision -- "new proposal, up to 10 times" --> reply
-    review -- "reject" --> rejected(["rejected"])
-    review -- "approve, then apply" --> apply["Runtime applies intents in order"]
-    apply --> verify{"Claims hold?"}
-    verify -- "yes" --> completed(["completed"])
-    apply -- "effect fails" --> failed2(["failed"])
-    verify -- "no" --> failed2
-```
-
 Every step is an event. Rounded boxes are where a workflow ends.
 
 ### Producing a proposal
@@ -311,6 +290,7 @@ created → planning → validating → waiting_for_approval
                   (bounded; each pass adds a proposal to the workflow)
 any stage:      → failed      (production, validation or an effect failed)
                 → abandoned   (no further automatic progress is possible)
+planning:  the model sees the layout, may ask to read files, then returns a proposal
 ```
 
 ### Three primitives
