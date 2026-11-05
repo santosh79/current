@@ -4,11 +4,7 @@
 
 **Change control for AI agents**
 
-Users submit requests to Current. Current works with agents over their provider's API (the agent doesn't run on your machine and has no direct access to your system). Agents are limited to generating typed, reviewable proposals. The runtime validates each proposal before handing it to the user (or another agent) for review, approval and application.
-
-All lifecycle events of the workflow are captured in a tamper-evident, hash-chained commit log (write-ahead log), which enables verification and replay.
-
-**The agent proposes. The runtime acts. The record is the source of truth.**
+Agents propose changes. Current validates them, waits for your approval, applies them, and records every step in a tamper-evident log.
 
 [The Elevator Pitch](#the-elevator-pitch) · [See it in action](#see-it-in-action) ·
 [Quickstart](#quickstart) · [How it works](#how-it-works) ·
@@ -732,17 +728,7 @@ vulnerabilities privately.
 
 ## Contributing
 
-Contributions are welcome, especially in:
-
-- replay, export and verification tooling
-- approval policy and access control on top of the approval record
-- interpreters and sandboxing
-- the intent algebra and wire contract
-- event model, reducers and projections
-
-`mix test` runs the suite. If your change alters what an event stores,
-bump the event's version and add an `upcast` clause; recorded logs must
-keep loading.
+Current is a personal project, shared to show the design. Issues and pull requests may not get a response; feel free to fork.
 
 ---
 
