@@ -748,5 +748,5 @@ keep loading.
 
 ## License
 
-MIT
+[MIT License](LICENSE)
 
