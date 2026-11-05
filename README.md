@@ -19,7 +19,7 @@ Agents propose changes. Current validates them, waits for your approval, applies
 
 ## The Elevator Pitch
 
-**Why not just use Claude Code or Codex?** You can. But today the choice is all-or-nothing: give an agent direct access to your files, shell, and network, or don't use agents. Current is a third option.
+**Why not just use Claude Code or Codex?** You can. But there, the agent acts and you approve step by step as it goes. In Current, the agent can’t act at all. It hands over a complete proposal, and nothing happens until that proposal is approved and applied.
 
 - **Safety**: The agent is limited to doing just one thing -- *producing proposals*. It sees only the files it asks for that Current's read policy permits, and can only propose changes from nine typed intents. Nothing touches your project until you approve it, and only allowlisted commands can run.
 - **Verification**: You don’t take the agent’s word for it. You review the exact proposal, or have other agents review it, before anything happens, and Current checks the agent’s claims against what actually ran.
