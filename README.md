@@ -728,7 +728,7 @@ vulnerabilities privately.
 
 ## Contributing
 
-Current is a personal project, shared to show the design. Issues and pull requests may not get a response; feel free to fork.
+Current is an independent project, maintained in my spare time. Contributions and feedback are welcome, though response times may vary. You're also welcome to fork and experiment.
 
 ---
 
