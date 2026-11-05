@@ -1,49 +1,22 @@
 .DS_Store
-
 ./current
-
-# The directory Mix will write compiled artifacts to.
 /_build/
-
 /_data/
-
-# If you run "mix test --cover", coverage assets end up here.
 /cover/
-
-# The directory Mix downloads your dependencies sources to.
 /deps/
-
-# Where third-party dependencies like ExDoc output generated docs.
 /doc/
-
-# Temporary files, for example, from tests.
 /tmp/
-
-# If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
-
-# Also ignore archive artifacts (built via "mix archive.build").
 *.ez
-
-# Ignore package tarball (built via "mix hex.build").
 current-*.tar
-
-# Local review artifacts and concatenated documentation.
 /diff.txt
-combined.md
-
-combined_code.txt
-
-combined_tests.txt
-
-combined_code_and_tests.txt
-
+/combined.md
+/combined_docs.md
+/combined_code.txt
+/combined_tests.txt
+/combined_code_and_tests.txt
 /examples/nextjs-auth/node_modules/
-
 /examples/
-
 /current
-
 /model_feedback/
-
 .env

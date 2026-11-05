@@ -1,13 +1,13 @@
 DOCS_DIR := docs
 README := README.md
-OUTPUT := combined.md
+DOCS_OUTPUT := combined_docs.md
 CODE_AND_TESTS_OUTPUT := combined_code_and_tests.txt
 CODE_OUTPUT := combined_code.txt
 TESTS_OUTPUT := combined_tests.txt
 
-.PHONY: all clean code_and_tests code tests client
+.DEFAULT_GOAL := client
 
-all: $(OUTPUT)
+.PHONY: all clean code_and_tests code tests client
 
 client:
 
@@ -15,13 +15,7 @@ client:
 	@mix escript.build
 	@echo "Built ./current"
 
-code_and_tests: $(CODE_AND_TESTS_OUTPUT)
-
-code: $(CODE_OUTPUT)
-
-tests: $(TESTS_OUTPUT)
-
-$(TESTS_OUTPUT):
+tests:
 	@echo "Generating $(TESTS_OUTPUT)..."
 	@rm -f $(TESTS_OUTPUT)
 	@for file in $$(find test -type f -name '*_test.exs' | sort); do \
@@ -37,10 +31,10 @@ $(TESTS_OUTPUT):
 	done
 	@echo "Done."
 
-$(CODE_OUTPUT):
+code:
 	@echo "Generating $(CODE_OUTPUT)..."
 	@rm -f $(CODE_OUTPUT)
-	@for file in $$(find lib README.md config -type f -name '*.ex' -o -name '*.exs' -o -name '*.md' | sort); do \
+	@for file in $$(find lib README.md config -type f \( -name '*.ex' -o -name '*.exs' -o -name '*.md' \) | sort); do \
 		echo "# $$file" >> $(CODE_OUTPUT); \
 		echo "" >> $(CODE_OUTPUT); \
 		echo '```elixir' >> $(CODE_OUTPUT); \
@@ -53,10 +47,10 @@ $(CODE_OUTPUT):
 	done
 	@echo "Done."
 
-$(CODE_AND_TESTS_OUTPUT):
+code_and_tests:
 	@echo "Generating $(CODE_AND_TESTS_OUTPUT)..."
 	@rm -f $(CODE_AND_TESTS_OUTPUT)
-	@for file in $$(find lib test config README.md -type f -name '*.ex' -o -name '*.exs' -o -name '*.md' | sort); do \
+	@for file in $$(find lib test config README.md -type f \( -name '*.ex' -o -name '*.exs' -o -name '*.md' \) | sort); do \
 		echo "# $$file" >> $(CODE_AND_TESTS_OUTPUT); \
 		echo "" >> $(CODE_AND_TESTS_OUTPUT); \
 		echo '```elixir' >> $(CODE_AND_TESTS_OUTPUT); \
@@ -69,22 +63,22 @@ $(CODE_AND_TESTS_OUTPUT):
 	done
 	@echo "Done."
 
-$(OUTPUT):
-	@echo "Generating $(OUTPUT)..."
-	@rm -f $(OUTPUT)
-	@echo "# $(README)" >> $(OUTPUT)
-	@echo "" >> $(OUTPUT)
-	@cat $(README) >> $(OUTPUT)
-	@echo "\n\n---\n" >> $(OUTPUT)
+all:
+	@echo "Generating $(DOCS_OUTPUT)..."
+	@rm -f $(DOCS_OUTPUT)
+	@echo "# $(README)" >> $(DOCS_OUTPUT)
+	@echo "" >> $(DOCS_OUTPUT)
+	@cat $(README) >> $(DOCS_OUTPUT)
+	@echo "\n\n---\n" >> $(DOCS_OUTPUT)
 	@for file in $$(ls $(DOCS_DIR)/*.md | sort); do \
 		filename=$$(basename $$file); \
-		echo "# $$filename" >> $(OUTPUT); \
-		echo "" >> $(OUTPUT); \
-		cat $$file >> $(OUTPUT); \
-		echo "\n\n---\n" >> $(OUTPUT); \
+		echo "# $$filename" >> $(DOCS_OUTPUT); \
+		echo "" >> $(DOCS_OUTPUT); \
+		cat $$file >> $(DOCS_OUTPUT); \
+		echo "\n\n---\n" >> $(DOCS_OUTPUT); \
 	done
 	@echo "Done."
 
 clean:
-	rm -f $(OUTPUT) $(CODE_AND_TESTS_OUTPUT) $(CODE_OUTPUT) $(TESTS_OUTPUT)
+	rm -f $(DOCS_OUTPUT) $(CODE_AND_TESTS_OUTPUT) $(CODE_OUTPUT) $(TESTS_OUTPUT)
 
