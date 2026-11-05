@@ -1,5 +1,7 @@
 # Current
 
+[![Build Status](https://github.com/santosh79/current/actions/workflows/elixir.yml/badge.svg)](https://github.com/santosh79/current/actions/workflows/elixir.yml)
+
 **Change control for AI agents**
 
 Users submit requests to Current. Current works with agents over their provider's API (the agent doesn't run on your machine and has no direct access to your system). Agents are limited to generating typed, reviewable proposals. The runtime validates each proposal before handing it to the user (or another agent) for review, approval and application.
