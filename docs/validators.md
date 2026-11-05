@@ -61,9 +61,9 @@ Then the per-intent rules:
 |---|---|---|
 | `read_file` | `path` is a regular file | whether the file still exists when applied |
 | `write_file` | the contents artifact exists; rejects a path an earlier proposal intent left present | whether the path already exists on disk when applied |
-| `edit_file` | `path` exists; the `old` and `new` artifacts exist; `Current.Edit.replace/4` succeeds against the file as it is now | the same check again, against the file as it is then |
+| `edit_file` | `path` exists; the `old` and `new` artifacts exist; `Current.Edit.replace/4` succeeds against the file as earlier intents in the proposal have left it (see below) | the same check again, against the file as it is then |
 | `delete_file` | `path` is a non-empty string | a missing file counts as already deleted |
-| `run_command` | `cmd` is a non-empty string; `args` is a list of strings | whether the executable exists on `PATH` |
+| `run_command` | `cmd` is a non-empty string; `args` is a list of strings | whether `cmd` is in the `allowed_commands` allowlist, and whether the executable exists |
 | `grep` | every path is a regular file | whether the files still exist when applied |
 | `glob` | `pattern` is relative; `base_dir` is an existing directory on disk | |
 | `claim` | evidence is present; `source_intent_id` names an intent **earlier in the proposal**; the condition can be evaluated against that kind of intent | whether the result satisfies it |
@@ -87,9 +87,22 @@ is called both here and at apply time, so the two cannot disagree.
 | `old` found more than once, `replace_all` false | error: include more surrounding lines, or set `replace_all` |
 | `old` found more than once, `replace_all` true | ok, every occurrence replaced |
 
-Matching is byte for byte. If a proposal holds two edits to one file, each
-is checked against the file on disk, not against the result of the earlier
-edit.
+Matching is byte for byte.
+
+### File state across intents
+
+`EffectApplicator` applies intents in order, so each one sees the files as
+the earlier ones left them. `IntentValidator` mirrors that with an in-memory
+overlay of what the proposal itself has done to each path so far:
+`{:present, contents}` after a `write_file` or `edit_file`, `:absent` after a
+`delete_file`, and no entry for a path the proposal has not touched, in which
+case the file on disk is the truth. Nothing is written to disk.
+
+So if a proposal holds two edits to one file, the second is checked against
+the result of the first, not against the file on disk. The overlay is only as
+good as its model: a `run_command` can change files in ways validation
+cannot predict, so intents after one are checked against what the proposal's
+own file intents imply, not what the command did.
 
 ### Which claims can be evaluated
 
@@ -119,7 +132,9 @@ a path to escape the project but does not close it (see T2 in the
 
 Then each effect does its own checks: `write_file` fails if the file exists,
 `edit_file` re-reads the file and reruns `Current.Edit.replace/4`,
-`run_command` fails if the executable can't be found, and a `claim` is
+`run_command` fails if `cmd` is not in the configured `allowed_commands` list
+(empty by default, so every command is denied) or the executable can't be
+found, and a `claim` is
 evaluated against the results of the intents before it. A false claim fails
 the workflow, and so does any effect that returns `{:error, reason}`.
 

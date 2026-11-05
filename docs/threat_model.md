@@ -12,9 +12,11 @@ privately rather than in a public issue.
 ## Summary
 
 Current's promise is narrow, and it keeps it: **Current does not execute
-agent-proposed changes without explicit human authorization.** An agent can
-only propose, every proposal is recorded, and nothing is applied until a
-person approves it and then asks for it to be applied.
+agent-proposed changes without a committed approval followed by a separate
+apply request.** An agent can only propose, every proposal is recorded, and
+nothing is applied until an approval has been committed and a separate apply
+request has arrived. Current does not authenticate who sent either one (see
+T6), so whether a human was behind them depends on who can reach the API.
 
 That is a promise about *when* things run, not about *what* runs. Once
 authorized, a proposal can do anything its intents allow, and a
@@ -185,12 +187,19 @@ time.
 
 ### T3. An approved proposal runs harmful code
 
-This is the largest risk, and approval is the only control.
+This is the largest remaining risk. Approval and the executable allowlist constrain execution, but neither provides a sandbox.
 
-- `run_command` runs any executable on `PATH`, or any path relative to the
-  project, with any arguments. Arguments are passed without shell
-  interpretation (the runtime uses `bash` only to redirect output), but
-  nothing stops a proposal from running `bash` with `-c`.
+- `run_command` is default-deny. The proposal's `cmd` must exactly match an
+  entry of the `allowed_commands` allowlist (configuration, or
+  `CURRENT_ALLOWED_COMMANDS`), which is empty by default. `EffectApplicator`
+  enforces it at apply time; validation does not check it. A bare name is
+  resolved on `PATH`, and a relative path containing `/` is resolved from the
+  project. Arguments are passed without shell interpretation (the runtime
+  uses `bash` only to redirect output) but are otherwise unrestricted, so
+  allowing a shell, an interpreter, a package manager or any
+  script-dispatching executable (`bash -c`, `npm`, `mix`) permits arbitrary
+  code. The allowlist limits which executables can be named. It is not a
+  sandbox, and approved commands remain unsandboxed.
 - A proposal can `write_file` a script and then `run_command` it.
 - A proposal can `edit_file` something another tool executes:
   `mix.exs`, `package.json` scripts, a `Makefile`, CI configuration, or a
@@ -207,12 +216,13 @@ Today: every intent, with its full diff, file contents, command and
 arguments, is recorded and shown by `current review` before approval.
 Approval and application are separate steps.
 
-**Status: open.** This is inherent to running commands without a sandbox.
-Recommended, roughly in order of payoff:
+**Status: partly mitigated.** A default-deny executable allowlist is
+enforced when applying. What remains is inherent to running commands without
+a sandbox. Recommended, roughly in order of payoff:
 
-1. A command policy: an allowlist of executables (and argument patterns),
-   enforced by the validator, so `bash -c` or `curl` is refused before
-   anyone is asked.
+1. Extend the command policy: enforce the allowlist at validation as well, so
+   a disallowed command is refused before anyone is asked, and match argument
+   patterns, so an allowed `bash` cannot be run with `-c`.
 2. Run commands with a minimal environment (`env: [...]` with only `PATH`,
    `HOME`, `LANG`), so API keys are not inherited.
 3. Flag sensitive targets in review: `.git/`, build and CI files, anything
@@ -510,7 +520,7 @@ CA store and trusted endpoint configuration.
 | 1 (implemented) | Shared explicit TLS verification for provider calls; offline bad-certificate refusal tests for both providers and operations | T12 |
 | 2 | Command timeout (kill the process group) and output cap | T11 |
 | 3 | Minimal environment for commands | T3, T5 |
-| 4 | Command allowlist, enforced at validation | T3 |
+| 4 (partly implemented) | Command allowlist: executable allowlist enforced at apply time (implemented); enforcement at validation and argument patterns (outstanding) | T3 |
 | 5 | Data dir created `0700`; configurable read deny list; read policy on proposed reads | T4, T5 |
 | 6 | Review: commands and sensitive paths first; claims shown with what is checked; control characters stripped | T8 |
 | 7 | Atomic apply, and refuse apply if touched files changed | T2, T9, T10 |
@@ -543,6 +553,7 @@ cheapest way to keep the claim true.
 | Read policy does **not** apply to proposed intents | `IntentValidator` and `EffectApplicator` never call `ReadPolicy` | A proposal with `read_file .env` validates |
 | Commands get no shell interpretation of arguments | `EffectApplicator.run_command_with_redirect/5` (`exec "$1" "${@:4}"`, args passed positionally) | An argument containing `;` or `$(...)` is passed literally |
 | Commands inherit the environment, have no timeout | Same function: `System.cmd/3` without `env:` or a timeout | `run_command printenv`; `run_command sleep 1000000` |
+| `run_command` is default-deny: `cmd` must exactly match `allowed_commands`, checked when applying, not at validation | `EffectApplicator` (`allowed_commands` check); `config :current, allowed_commands`, `CURRENT_ALLOWED_COMMANDS` | Apply a proposal with `run_command` and an empty allowlist; it must fail |
 | Whole-proposal timeout, and per-task override | `LLMProposalBuilder.within_task_timeout/2`, `task_timeout_ms/0`; `Current.validate_timeout/1` (1 s to 1 h) | Tests in `llm_proposal_test.exs` and `submit_task_test.exs` |
 | `edit_file` exact-match only | `Current.Edit.replace/4`, called by `IntentValidator` and by `EffectApplicator.do_apply/3` (EditFile) | Change the file after approval so `old_string` no longer matches, or matches twice |
 | `write_file` refuses an existing file | `EffectApplicator.do_apply/3` (WriteFile) | |

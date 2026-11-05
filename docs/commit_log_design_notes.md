@@ -41,12 +41,14 @@ preexisting segment file, not against a concurrent writer, and is not atomic.
 
 ## `Commit.hash/1`
 
-`Commit.hash/1` hashes `:erlang.term_to_binary/1`. The OTP docs do not promise
-that encoding stays identical across releases. If a hash mismatch appears
-after an OTP upgrade, check for this before treating it as corruption.
-Pinning the encoding (`:deterministic`, an explicit `minor_version`) would
-change the hash of every commit already in an existing log, so it needs a
-decision on how to handle old logs.
+`Commit.hash/1` hashes `:erlang.term_to_binary(commit, [:deterministic])`. The
+`:deterministic` option makes the encoding of a term stable within a given
+Term format, but the OTP docs do not promise that the encoding stays
+identical across releases. If a hash mismatch appears after an OTP upgrade,
+check for this before treating it as corruption. Pinning the encoding further
+(an explicit `minor_version`, or a separate versioned canonical encoding)
+would change the hash of every commit already in an existing log, so it needs
+a decision on how to handle old logs.
 
 ## First segment must be number 1
 

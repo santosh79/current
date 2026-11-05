@@ -45,7 +45,7 @@ Current.BlobStore.put/1    -- raw bytes preserved for provenance, always,
 Current.ProposalDecoder    -- can these bytes become a Proposal.t(), or
         │                     a list of Observation.t()?
         │
-        ├── failure ──────► Current.ProposalProductionError{stage: :decode}
+        ├── failure ──────► Current.Error.ProposalProductionError{stage: :decode}
         │
         ├── context request ► Current.Observer makes each observation;
         │                     the model is asked again with the results

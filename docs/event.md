@@ -58,7 +58,7 @@ An event carries the intent and the result themselves. Their large contents are 
 | Event | Records | Fields (besides `id`, `timestamp`, `version`) |
 |---|---|---|
 | `TaskCreated` | A task was submitted | `task_id`, `input`, `context`, `mode`, `project_dir`, `model`, `timeout_ms`, `submitted_at` |
-| `WorkflowCreated` | A workflow began for a task | `workflow_id`, `task_id`, `mode` |
+| `WorkflowCreated` | A workflow began for a task | `workflow_id`, `task_id`, `mode`, `max_revisions` |
 | `ProposalProductionStarted` | The model was asked for a proposal | `workflow_id` |
 | `ModeInvalid` | The task's mode is not `:plan` or `:apply` | `workflow_id`, `mode` |
 | `ProposalProduced` | A proposal was decoded from the model's reply | `workflow_id`, `proposal`, `raw_output_blob_id` |
@@ -67,6 +67,7 @@ An event carries the intent and the result themselves. Their large contents are 
 | `ProposalValidationFailed` | The proposal failed validation | `workflow_id`, `proposal`, `error` |
 | `ProposalApproved` | A person approved the proposal | `workflow_id`, `proposal_id`, `metadata` |
 | `ProposalRejected` | A person rejected the proposal | `workflow_id`, `proposal_id`, `metadata` |
+| `ProposalRevisionRequested` | A reviewer sent the proposal back with feedback | `workflow_id`, `proposal_id`, `feedback`, `metadata` |
 | `EffectApplicationStarted` | Applying the intents began | `workflow_id` |
 | `EffectApplied` | One intent was applied | `workflow_id`, `intent`, `result` |
 | `EffectFailed` | One intent failed | `workflow_id`, `intent`, `reason` |
@@ -88,10 +89,15 @@ Events are written to the log as raw Erlang terms and read back as plain maps ta
 
 ```elixir
 defmodule Current.Event.ProposalProduced do
-  use Current.Event.Versioned, version: 3
+  use Current.Event.Versioned, version: 4
 
   def upcast(fields, 1), do: fields
+
+  # v3: Proposal gained :observations.
   def upcast(fields, 2), do: Map.update(fields, :proposal, nil, &Current.Proposal.upcast/1)
+
+  # v4: Proposal gained :revision and :revises.
+  def upcast(fields, 3), do: Map.update(fields, :proposal, nil, &Current.Proposal.upcast/1)
 end
 ```
 

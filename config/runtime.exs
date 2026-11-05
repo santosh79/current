@@ -1,25 +1,23 @@
 import Config
 
-case config_env() do
-  :prod ->
-    config :current, data_dir: System.get_env("CURRENT_DATA_DIR", "./_data")
+if config_env() == :prod do
+  config :current, data_dir: System.get_env("CURRENT_DATA_DIR", "./_data")
+end
 
-    case System.get_env("CURRENT_ALLOWED_COMMANDS", nil) do
-      nil ->
-        :ok
+# CURRENT_ALLOWED_COMMANDS overrides allowed_commands in every environment.
+# When unset, the value from config/*.exs is preserved.
+# An explicitly empty value disables all commands.
 
-      allowed_commands ->
-        aac =
-          allowed_commands
-          |> String.split(",", trim: true)
-          |> Enum.map(&String.trim/1)
-          |> Enum.filter(fn ss ->
-            String.length(ss) > 0
-          end)
-
-        config :current, allowed_commands: aac
-    end
-
-  _ ->
+case System.get_env("CURRENT_ALLOWED_COMMANDS") do
+  nil ->
     :ok
+
+  value ->
+    commands =
+      value
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    config :current, allowed_commands: commands
 end

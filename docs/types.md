@@ -83,8 +83,10 @@ into it. It is never written directly.
 defmodule Current.Workflow do
   @enforce_keys [:id, :task_id, :status, :created_at]
   defstruct [
-    :id, :task_id, :status, :proposal, :result, :events, :mode,
-    :started_at, :created_at, :completed_at, :updated_at, :error
+    :id, :task_id, :status, :result, :events, :mode,
+    :started_at, :created_at, :completed_at, :updated_at, :error,
+    proposals: [],
+    max_revisions: 10
   ]
 
   @type status ::
@@ -93,6 +95,7 @@ defmodule Current.Workflow do
           | :validating
           | :waiting_for_approval
           | :validation_failed
+          | :revision_requested
           | :approved
           | :applying
           | :assembling_result
@@ -108,7 +111,8 @@ defmodule Current.Workflow do
           id: Current.Id.t(),
           task_id: Current.Id.t(),
           status: status(),
-          proposal: Current.Proposal.t() | nil,
+          proposals: [Current.Proposal.t()],    # oldest first; the last is the current one
+          max_revisions: non_neg_integer(),     # recorded on WorkflowCreated, default 10
           result: Current.WorkflowResult.t() | nil,
           events: [Current.Event.t()],
           mode: Current.Mode.t(),
@@ -126,13 +130,21 @@ Terminal statuses are `:completed`, `:planned`, `:rejected`, `:failed` and
 `:proposal_production_failed` are not terminal: each is followed by a
 `WorkflowFailed` event that moves the workflow to `:failed`.
 
+`:revision_requested` is not terminal either: a reviewer has sent the proposal
+back, and the workflow goes on to produce a replacement proposal. Every
+proposal the workflow has produced is kept in `proposals`, oldest first.
+`Current.Workflow.current_proposal/1` returns the latest (every review
+decision must name it), and `Current.Workflow.revisions_used/1` derives how
+many revisions have been used from the list (`length(proposals) - 1`). There
+is no stored revision counter.
+
 ### Proposal
 
 ```elixir
 defmodule Current.Proposal do
   @enforce_keys [:id, :workflow_id, :intents]
   defstruct [:id, :workflow_id, :intents, :justification, :claims, :dependencies,
-             observations: []]
+             observations: [], revision: 0, revises: nil]
 
   @type t :: %__MODULE__{
           id: Current.Id.t(),
@@ -141,13 +153,16 @@ defmodule Current.Proposal do
           justification: String.t() | nil,
           claims: [String.t()] | nil,
           dependencies: [String.t()] | nil,
-          observations: [Current.Observation.t()]   # what the agent looked at first
+          observations: [Current.Observation.t()],  # what the agent looked at first
+          revision: non_neg_integer(),              # 0 for the first proposal, n after the n-th revision request
+          revises: Current.Id.t() | nil             # id of the proposal this one replaces; nil for the first
         }
 end
 ```
 
 `justification`, `claims` and `dependencies` belong to the proposal, not to
-individual intents.
+individual intents. `revision` and `revises` are stamped by the orchestrator,
+never by the model.
 
 ### Intent
 
@@ -263,7 +278,8 @@ each one's fields and for how versions and upcasts work.
 ```elixir
 TaskCreated · WorkflowCreated · ProposalProductionStarted · ModeInvalid ·
 ProposalProduced · ProposalProductionFailed · ProposalValidated ·
-ProposalValidationFailed · ProposalApproved · ProposalRejected ·
+ProposalValidationFailed · ProposalRevisionRequested · ProposalApproved ·
+ProposalRejected ·
 EffectApplicationStarted · EffectApplied · EffectFailed ·
 EffectApplicationComplete · WorkflowResultAssembled · WorkflowCompleted ·
 WorkflowFailed · WorkflowAbandoned
@@ -295,7 +311,7 @@ defmodule Current.Consensus.Commit do
   @enforce_keys [:index, :events, :previous_hash]
   defstruct [:index, :events, :previous_hash]
 
-  # hash/1 = SHA-256 of :erlang.term_to_binary(commit)
+  # hash/1 = SHA-256 of :erlang.term_to_binary(commit, [:deterministic])
 end
 ```
 

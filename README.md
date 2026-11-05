@@ -23,7 +23,7 @@ All lifecycle events of the workflow are captured in a tamper-evident, hash-chai
 
 **Why not just use Claude Code or Codex?** You can. But today the choice is all-or-nothing: give an agent direct access to your files, shell, and network, or don't use agents. Current is a third option.
 
-- **Safety**: The agent is limited to doing just one thing -- *producing proposals*. It sees only the approved project files it asks for, and can only propose changes from nine typed intents. Nothing touches your project until you approve it, and only allowlisted commands can run.
+- **Safety**: The agent is limited to doing just one thing -- *producing proposals*. It sees only the files it asks for that Current's read policy permits, and can only propose changes from nine typed intents. Nothing touches your project until you approve it, and only allowlisted commands can run.
 - **Verification**: You don’t take the agent’s word for it. You review the exact proposal, or have other agents review it, before anything happens, and Current checks the agent’s claims against what actually ran.
 - **Provenance**: As agents write more of the code, someone will ask *why was this changed, and who approved it?* Current answers from a commit log: the oldest, best-tested idea in systems.
 
@@ -182,10 +182,11 @@ In another terminal, from the repository root:
 ```sh
 export PATH="$PWD:$PATH"   # puts the local `current` CLI on PATH
 current models             # the models your keys give you
+MODEL="openai:gpt-5.6"     # replace with a model listed above
 
 current run "add CSRF protection to this app" \
   --dir examples/nextjs-auth \
-  --model <a-model-from-current-models>
+  --model $MODEL
 ```
 
 `run` stops when the proposal is waiting for review. Output varies between
@@ -603,7 +604,7 @@ These are not substitutes for authentication. See [Security](#security) and the
 | `OPENAI_API_KEY` | runtime | Enables `openai:*` models |
 | `ANTHROPIC_API_KEY` | runtime | Enables `anthropic:*` models |
 | `CURRENT_DATA_DIR` | runtime (prod) | Where the log and artifacts live (default `./_data`) |
-| `CURRENT_ALLOWED_COMMANDS` | runtime (prod) | Comma-separated exact `cmd` values allowed for `run_command`; unset keeps the configured default |
+| `CURRENT_ALLOWED_COMMANDS` | runtime | Comma-separated exact `cmd` values allowed for `run_command`; unset keeps the configured default |
 | `CURRENT_HTTP_PORT` | runtime | Port of the HTTP API (default `4000`) |
 | `CURRENT_HTTP_IP` | runtime | Address the HTTP API binds (default `127.0.0.1`) |
 | `CURRENT_URL` | CLI | Where the CLI finds the runtime (default `http://127.0.0.1:4000`) |
@@ -616,6 +617,7 @@ one is set.
 | Key | Default | Meaning |
 |---|---|---|
 | `data_dir` | `"./_data"` | Log in `consensus/`, artifacts in `artifacts/` |
+| `generate_proposal_files` | `false` (`true` in dev) | Write a Markdown snapshot of each produced proposal under `<data_dir>/proposals/` |
 | `allowed_commands` | `[]` | Executables `run_command` may run; empty denies all. The configured list is included in the model prompt. Not a sandbox |
 | `llm_proposal_timeout_ms` | `240_000` | Bound on one model call |
 | `llm_task_timeout_ms` | `600_000` | Default bound on producing one proposal |
@@ -626,6 +628,15 @@ one is set.
 | `mcp[:allowed_origins]` | `[]` | Exact browser origins allowed on every route in addition to loopback origins |
 | `mcp[:allow_loopback_origins]` | `true` | Whether browser origins on `localhost`, `127.0.0.1`, and `[::1]` are accepted |
 | `model_catalog_clients` | OpenAI, Anthropic | Providers asked for models |
+
+**Proposal snapshots.** When `generate_proposal_files` is `true`, the runtime
+periodically writes a human-readable Markdown snapshot of each produced
+proposal to `<data_dir>/proposals/<timestamp>-<task-slug>-<id>/r<revision>-<id>.md`.
+They are a convenience for reading proposals outside the CLI and are
+regenerated from the log if missing. It is enabled in `config/dev.exs` and
+disabled by default. Snapshots can contain sensitive project content (file
+contents, diffs and commands), so treat them like the rest of the data
+directory.
 
 ---
 
