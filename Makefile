@@ -1,13 +1,15 @@
 DOCS_DIR := docs
 README := README.md
+SECURITY := SECURITY.md
 DOCS_OUTPUT := combined_docs.md
 CODE_AND_TESTS_OUTPUT := combined_code_and_tests.txt
 CODE_OUTPUT := combined_code.txt
 TESTS_OUTPUT := combined_tests.txt
+WEB_OUTPUT := combined_web.txt
 
 .DEFAULT_GOAL := client
 
-.PHONY: all clean code_and_tests code tests client
+.PHONY: docs clean code_and_tests code tests client web
 
 client:
 
@@ -63,12 +65,26 @@ code_and_tests:
 	done
 	@echo "Done."
 
-all:
+web:
+	@echo "Generating $(WEB_OUTPUT)..."
+	@rm -f "$(WEB_OUTPUT)"
+	@find -H web -type d -name '.git' -prune -o -type f -print | LC_ALL=C sort | while IFS= read -r file; do \
+		printf '# %s\n\n' "$$file"; \
+		printf '%s\n' '```'; \
+		cat "$$file"; \
+		printf '\n%s\n\n---\n\n' '```'; \
+	done > "$(WEB_OUTPUT)"
+	@echo "Done."
+
+docs:
 	@echo "Generating $(DOCS_OUTPUT)..."
 	@rm -f $(DOCS_OUTPUT)
 	@echo "# $(README)" >> $(DOCS_OUTPUT)
 	@echo "" >> $(DOCS_OUTPUT)
 	@cat $(README) >> $(DOCS_OUTPUT)
+	@echo "# $(SECURITY)" >> $(DOCS_OUTPUT)
+	@echo "" >> $(DOCS_OUTPUT)
+	@cat $(SECURITY) >> $(DOCS_OUTPUT)
 	@echo "\n\n---\n" >> $(DOCS_OUTPUT)
 	@for file in $$(ls $(DOCS_DIR)/*.md | sort); do \
 		filename=$$(basename $$file); \
@@ -80,5 +96,5 @@ all:
 	@echo "Done."
 
 clean:
-	rm -f $(DOCS_OUTPUT) $(CODE_AND_TESTS_OUTPUT) $(CODE_OUTPUT) $(TESTS_OUTPUT)
+	rm -f $(DOCS_OUTPUT) $(CODE_AND_TESTS_OUTPUT) $(CODE_OUTPUT) $(TESTS_OUTPUT) $(WEB_OUTPUT)
 

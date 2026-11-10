@@ -15,6 +15,7 @@ current-*.tar
 /combined_code.txt
 /combined_tests.txt
 /combined_code_and_tests.txt
+/combined_web.txt
 /examples/nextjs-auth/node_modules/
 /examples/
 /current
