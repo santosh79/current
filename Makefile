@@ -9,13 +9,16 @@ WEB_OUTPUT := combined_web.txt
 
 .DEFAULT_GOAL := client
 
-.PHONY: docs clean code_and_tests code tests client web
+.PHONY: docs clean code_and_tests code tests test client web
 
 client:
 
 	@echo "Building Current CLI..."
 	@mix escript.build
 	@echo "Built ./current"
+
+test:
+	MIX_ENV=test mix test
 
 tests:
 	@echo "Generating $(TESTS_OUTPUT)..."
