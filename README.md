@@ -2,7 +2,7 @@
 
 [![Build Status](https://github.com/santosh79/current/actions/workflows/elixir.yml/badge.svg)](https://github.com/santosh79/current/actions/workflows/elixir.yml)
 
-**Change control for AI agents**
+**A proposal-centric runtime for Agentic workflows**
 
 Agents propose changes. Current validates them, waits for your approval, applies them, and records every step in a tamper-evident log.
 
