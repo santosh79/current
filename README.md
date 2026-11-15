@@ -25,7 +25,7 @@ The requester interacts with tasks and proposals. The model does the reasoning. 
 
 **Why not just use Claude Code or Codex?** You can. But there, the agent acts and you approve step by step as it goes. In Current, the agent can’t act at all. It hands over a complete proposal, and nothing happens until that proposal is approved and applied.
 
-- **Safety**: The agent is limited to doing just one thing -- *producing proposals*. It sees only the files it asks for that Current's read policy permits, and can only propose changes from nine typed intents. Nothing touches your project until you approve it, and only allowlisted commands can run.
+- **Safety**: The agent is limited to doing just one thing -- *producing proposals*. It sees only the files it asks for that Current's read policy permits, and can only propose changes from nine typed intents. Nothing is applied without a recorded approval, and only allowlisted commands can run.
 - **Verification**: You don’t take the agent’s word for it. You review the exact proposal, or have other agents review it, before anything happens, and Current checks the agent’s claims against what actually ran.
 - **Provenance**: As agents write more of the code, someone will ask *why was this changed, and who approved it?* Current answers from a commit log: the oldest, best-tested idea in systems.
 
