@@ -4,8 +4,6 @@
 
 **A proposal-centric runtime for Agentic workflows**
 
-Current is a proposal-centric runtime for agentic workflows.
-
 A task can originate from a human or another agent. Current coordinates with the model to generate a reviewable proposal, which a human or another agent can approve, reject, or send back for revision. The runtime retains control over application and verification.
 
 The requester interacts with tasks and proposals. The model does the reasoning. The runtime controls the effects.
