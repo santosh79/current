@@ -4,7 +4,11 @@
 
 **A proposal-centric runtime for Agentic workflows**
 
-Agents propose changes. Current validates them, waits for your approval, applies them, and records every step in a tamper-evident log.
+Current is a proposal-centric runtime for agentic workflows.
+
+A task can originate from a human or another agent. Current coordinates with the model to generate a reviewable proposal, which a human or another agent can approve, reject, or send back for revision. The runtime retains control over application and verification.
+
+The requester interacts with tasks and proposals. The model does the reasoning. The runtime controls the effects.
 
 [The Elevator Pitch](#the-elevator-pitch) · [See it in action](#see-it-in-action) ·
 [Quickstart](#quickstart) · [How it works](#how-it-works) ·
