@@ -21,7 +21,15 @@ The requester works with tasks and proposals. The model does the reasoning. The 
 
 ## The Elevator Pitch
 
-**Why not just use Claude Code or Codex?** You can. But there, the agent acts and you approve step by step as it goes. In Current, the agent can’t act at all. It hands over a complete proposal, and nothing happens until that proposal is approved and applied.
+**Why not just use Claude Code or Codex?** 
+
+You can. The distinction is where execution authority resides.
+
+In conventional tool-driven workflows, an agent can perform permitted actions as it works, sometimes with approval at individual steps.
+
+In Current, the model produces a complete, reviewable proposal. A separate runtime validates it, records decisions, and performs approved operations.
+
+The proposal, rather than the individual tool call, becomes the unit of change control.
 
 - **Safety**: The agent is limited to doing just one thing -- *producing proposals*. It sees only the files it asks for that Current's read policy permits, and can only propose changes from nine typed intents. Nothing is applied without a recorded approval, and only allowlisted commands can run.
 - **Verification**: You don’t take the agent’s word for it. You review the exact proposal, or have other agents review it, before anything happens, and Current checks the agent’s claims against what actually ran.
