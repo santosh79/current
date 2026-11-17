@@ -20,4 +20,5 @@ current-*.tar
 /examples/
 /current
 /model_feedback/
+/web*
 .env
