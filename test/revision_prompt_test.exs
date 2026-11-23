@@ -1,7 +1,7 @@
 defmodule Current.RevisionPromptTest do
   use ExUnit.Case, async: true
 
-  alias Current.{Intent, LLMProposalBuilder, Proposal}
+  alias Current.{Intent, Proposal, LLMPromptBuilder}
 
   defp proposal(id, intents, extra \\ %{}) do
     struct!(
@@ -20,7 +20,7 @@ defmodule Current.RevisionPromptTest do
   end
 
   test "nothing is added for a first proposal" do
-    assert LLMProposalBuilder.render_revision(nil, "/proj") == ""
+    assert LLMPromptBuilder.render_revision(nil, "/proj") == ""
   end
 
   test "renders every proposal, every round of feedback and the replacement instruction" do
@@ -50,7 +50,7 @@ defmodule Current.RevisionPromptTest do
       )
 
     text =
-      LLMProposalBuilder.render_revision(
+      LLMPromptBuilder.render_revision(
         %{previous: [p1, p2], feedback: ["use mix compile", "keep it smaller"]},
         "/proj"
       )
@@ -73,7 +73,7 @@ defmodule Current.RevisionPromptTest do
 
   test "no observation hints when nothing was looked at" do
     p1 = proposal("p1", [])
-    text = LLMProposalBuilder.render_revision(%{previous: [p1], feedback: ["x"]}, "/proj")
+    text = LLMPromptBuilder.render_revision(%{previous: [p1], feedback: ["x"]}, "/proj")
     refute text =~ "What you looked at before"
     assert text =~ "Proposal 1 (the latest):"
   end

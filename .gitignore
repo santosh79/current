@@ -2,6 +2,10 @@
 ./current
 /_build/
 /_data/
+/_data*/
+/web
+/scripts
+/web*/
 /cover/
 /deps/
 /doc/
